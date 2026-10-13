@@ -7,15 +7,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.labeling.audit_misses import (
+from src.verification.audit_misses import (
     audit_marks,
     format_trace_caption,
     promote_unmatched_to_inspect,
     trace_click,
     unmatched_particle_marks,
 )
-from src.labeling.inspect import MISS_SOURCE
-from src.labeling.store import LabelStore
+from src.verification.inspect import MISS_SOURCE
+from src.verification.store import LabelStore
 from tests.fixtures.synthetic import (
     detector_test_config,
     make_structured_tile,

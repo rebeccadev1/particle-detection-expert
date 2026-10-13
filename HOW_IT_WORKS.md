@@ -2,7 +2,7 @@
 
 This project finds **contaminant particles** on optical microscope images of a **patterned wafer**. The images are a grid of overlapping tiles (TIFF, BMP, PNG, or JPEG). The surface itself is periodic (circuit / lithography structure), so the hard problem is not “find bright spots” — it is **ignore the repeating pattern and keep only blob-like debris**.
 
-This is a **classical image-processing pipeline** with an optional sklearn / CNN post-filter on detector hits. Parameters live in `config.yaml` (and the Streamlit sidebar in `app.py`). Changing wafer pitch, magnification, or lighting usually means retuning those numbers. The ML model only scores blobs DoG already found.
+This is a **classical image-processing pipeline** with an optional sklearn post-filter on detector hits. Parameters live in `config.yaml` (and the Streamlit sidebar in `app.py`). Changing wafer pitch, magnification, or lighting usually means retuning those numbers. The ML model only scores blobs DoG already found.
 
 A second path handles **N/S/E/W directional lighting** of the same field: combine the four angles into a particles-only image, then run the same detector with `nsew_config.yaml` knobs.
 
@@ -30,7 +30,7 @@ A second path handles **N/S/E/W directional lighting** of the same field: combin
 18. [Parameter reference](#parameter-reference)
 19. [Tuning: if the result looks wrong](#tuning-if-the-result-looks-wrong)
 20. [What this does not do](#what-this-does-not-do)
-21. [ML cascade (optional)](#ml-cascade-optional)
+21. [ML filter (optional)](#ml-filter-optional)
 22. [How to run](#how-to-run)
 
 ---
@@ -126,7 +126,7 @@ Image folder
     drop clustered neighbours · drop long axis-aligned rows
             │
             ▼  optional ml.enabled
-    ExtraTrees HOG (± CNN on uncertain band)
+    ExtraTrees HOG
             │
             ▼
     map (x, y, diameter) to global nm · tag source_tile
@@ -139,18 +139,18 @@ Image folder
             └─ downsample thumbnails → stitch → red circles → mosaic_overlay.jpg
 ```
 
-Implemented in `src/pipeline/runner.py`. Modules:
+Implemented in `src/main_pipeline/runner.py`. Modules:
 
 | Step | Module | Role |
 |------|--------|------|
-| Find tiles | `src/io/tile_loader.py` | Regex match, optional run/mag filters, unmatched files, RGB→gray |
-| Place tile | `src/stitching/stitcher.py` | Top-left mosaic origin from `row`/`col` and `overlap_fraction` |
-| Preprocess | `src/preprocessing/corrections.py` | Denoise, flatten, stretch; stay **float32** |
-| Detect | `src/detection/detector.py` | Lattice out, islands, compact high-prominence residual, DoG, filters |
-| ML | `src/ml/infer.py` | Optional ExtraTrees / cascade CNN on detector hits |
-| Measure | `src/measurement/measurer.py` | Local px → global nm; cluster nearby hits; N/S/E/W merge |
-| NSEW combine | `src/nsew.py` | Four lighting angles → combi / particles-only / symmetry maps |
-| Report | `src/report/report_generator.py` | Stats, markers, JPEG from cached thumbnails. UI: `app.py` |
+| Find tiles | `src/overall/io/tile_loader.py` | Regex match, optional run/mag filters, unmatched files, RGB→gray |
+| Place tile | `src/main_pipeline/stitching/stitcher.py` | Top-left mosaic origin from `row`/`col` and `overlap_fraction` |
+| Preprocess | `src/main_pipeline/preprocessing/corrections.py` | Denoise, flatten, stretch; stay **float32** |
+| Detect | `src/main_pipeline/detection/detector.py` | Lattice out, islands, compact high-prominence residual, DoG, filters |
+| ML | `src/main_pipeline/ml/infer.py` | Optional ExtraTrees on detector hits |
+| Measure | `src/main_pipeline/measurement/measurer.py` | Local px → global nm; cluster nearby hits; N/S/E/W merge |
+| NSEW combine | `src/main_pipeline/nsew.py` | Four lighting angles → combi / particles-only / symmetry maps |
+| Report | `src/main_pipeline/report/report_generator.py` | Stats, markers, JPEG from cached thumbnails. UI: `app.py` |
 
 Default order is **gates → structure filters → ML**. Set `ml.score_before_structure: true` to score gated DoG hits first, then cluster/line-filter the ML survivors (can add lattice neighbours that cluster-kill isolated flakes). `config.yaml` keeps this **false**.
 
@@ -629,13 +629,12 @@ If you change magnification, set `pixel_size_nm` first, then recompute sigmas an
 
 ## NSEW directional lighting
 
-Four images of the **same field** named `N`, `S`, `E`, `W` (any common suffix) under a folder. The **NSEW** tab (`src/nsew.py`) does **not** run DoG. It:
+Four images of the **same field** named `N`, `S`, `E`, `W` (any common suffix) under a folder. The **NSEW** tab (`src/main_pipeline/nsew.py`) does **not** run DoG. It:
 
 1. Flatten each angle with a Gaussian (σ **120**, local to this combine step).
 2. For min-count **2, 3, and 4 of 4**, score pixels that are bright in at least that many angles (`symmetry_signal_4way`).
 3. Write, at the same pixel size as the inputs:
    - `Combi/combi_{k}of4.*` — isotropic brightness
-   - `Particles only/particles_only_{k}of4.*` — Otsu + shape-filtered mask of compact blobs
    - `Symmetry/symmetry_map_{k}of4.*` — symmetry score
 
 Outputs go to `Outputs/Output {folder name}/`. 2-of-4 is also written without the `_2of4` suffix.
@@ -736,7 +735,6 @@ Defaults below are from current `config.yaml` unless noted. The Streamlit sideba
 | `ml.model_path` | `models/particle_clf_v5.joblib` | Relative to `particle_detection/`. Versioned; do not overwrite a vN file. |
 | `ml.threshold` | 0.39 | Keep blobs with `P(particle)` ≥ this (v5 on the R4 holdout: P = R = 0.878). NSEW overlay uses **0.55**. |
 | `ml.score_before_structure` | false | true = ML then cluster/line. false = cluster/line then ML. |
-| `ml.band_low` / `band_high` | 0.20 / 0.80 | Fallbacks if a cascade joblib has no stored band. CNN replaces HOG only inside the band. |
 
 ### Measurement / report
 
@@ -816,30 +814,28 @@ Work from the **symptom**, not from every slider at once. After a change, re-run
 - It does **not** detect on the stitched mosaic. Overlap is handled only by the KD-tree merge after per-tile detection.
 - It does **not** keep pad-corner L-junctions. Compact islands on a *single* edge (≥20 µm) or large flakes (≥40 µm) can survive the border band; corners cannot.
 - It does **not** try to split overlapping real particles. DoG overlap pruning keeps the larger scale; the merge step keeps the higher-confidence seed.
-- It does **not** train on the circled label JPEGs. The red marker would leak into any crop CNN. Training reads unmarked TIFF/BMP patches and residual channels.
+- It does **not** train on the circled label JPEGs. The red marker would leak into the crop features. Training reads unmarked TIFF/BMP patches and residual channels.
 - `detection.recall_mode` does **not** switch a looser profile. That overlay was removed; the current YAML *is* the high-recall-ish standard.
 
 ---
 
-## ML cascade (optional)
+## ML filter (optional)
 
 DoG remains the only proposal generator. After cheap geometric gates (and usually after structure filters), each blob is scored.
 
-`python -m src.ml.train` (default `--mode cascade`):
+`python -m src.training` (default `--mode patch`):
 
 1. Joins `labels/labels.csv` to detections (GroupKFold by tile).
 2. Extracts **unmarked** corrected-image + residual patches (circled crops under `labels/crops/` are ignored).
 3. Trains class-weighted ExtraTrees on HOG / layout features.
-4. Trains a tiny CNN on the **uncertain HOG band** (default 0.20–0.80).
-5. Writes the next `models/particle_clf_v{N+1}.joblib` (never overwrites an existing vN).
+4. Writes the next `models/particle_clf_v{N+1}.joblib` (never overwrites an existing vN).
 
-`--mode patch` skips the CNN. `--mode residual` is the old detector-float ExtraTrees on CSV columns only.
+`--mode residual` is the old detector-float ExtraTrees on CSV columns only.
 
 At inference (`apply_ml_filter`):
 
 - Residual models score the ~12-float vector (`size_um`, `confidence`, circularity, support, edges, neighbours, local-peak SNR, radial rings).
-- Patch / cascade models rebuild unmarked patches on the **corrected tile** in the worker.
-- Cascade: keep HOG `P` outside the band; replace with CNN `P` inside it. Band stored in the joblib wins over `ml.band_low` / `band_high`.
+- Patch models rebuild unmarked patches on the **corrected tile** in the worker.
 - Drop blobs with `P(particle) < ml.threshold`.
 
 Scoring a few dozen vectors (or patches) per tile is small next to DoG. `ml.enabled: true` with a missing joblib **raises**; it will not silently run classical-only.

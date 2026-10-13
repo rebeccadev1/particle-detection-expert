@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.io.results_writer import (
+from src.overall.io.results_writer import (
     PARAMETERS_SHEET,
     PARTICLES_SHEET,
     excel_bytes,
@@ -65,6 +65,21 @@ def test_write_xlsx_adds_parameters_sheet(tmp_path: Path) -> None:
     assert params["output_dir"] == "Single v7"
     assert params["detection.min_size_nm"] == 20000.0
     assert params["detection.method"] == "fft"
+
+
+def test_particles_at_least_counts_cumulative_sizes() -> None:
+    from src.main_pipeline.report.report_generator import particles_at_least
+
+    table = pd.DataFrame({"size": [9_000.0, 10_000.0, 20_000.0, 25_000.0, 49_999.0, 75_000.0]})
+    counts = dict(zip(particles_at_least(table)["Size"], particles_at_least(table)["Particles"]))
+    assert int(counts["≥10 µm"]) == 5
+    assert int(counts["≥20 µm"]) == 4
+    assert int(counts["≥25 µm"]) == 3
+    assert int(counts["≥50 µm"]) == 1
+    assert int(counts["≥75 µm"]) == 1
+    empty = particles_at_least(pd.DataFrame())
+    assert list(empty["Size"]) == ["≥10 µm", "≥20 µm", "≥25 µm", "≥50 µm", "≥75 µm"]
+    assert list(empty["Particles"]) == [0, 0, 0, 0, 0]
 
 
 def test_excel_bytes_includes_parameters_sheet() -> None:

@@ -1,6 +1,6 @@
 # Groundup / N/S/E/W standard values.
 # Sidebar toggle: NSEW.
-pixel_size_nm: 3500.0
+pixel_size_nm: 3350.0
 preprocessing:
   denoise: true
   denoise_sigma: 1.5

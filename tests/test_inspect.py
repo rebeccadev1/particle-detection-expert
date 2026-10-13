@@ -6,19 +6,27 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from src.labeling.crops import local_px_to_global_nm
-from src.labeling.inspect import (
+from src.verification.crops import local_px_to_global_nm
+from src.verification.inspect import (
     OverlayView,
     cell_bounds,
+    MISSED_PARTICLE_COLOR,
+    MISS_SOURCE,
+    pointer_miss_rows,
     circles_from_rows,
+    detections_on_this_file,
     detections_on_tile,
     display_xy_to_local,
     expand_direction_tile_names,
+    expand_submap_lighting_names,
     extra_grid_placements,
     unhappiness_score,
     labeled_detections,
     labeled_particle_recovery,
+    crop_metric_cells,
+    crop_metric_std,
     last_run_class_counts,
     last_run_class_counts_by_tile,
     local_xy_on_tile,
@@ -28,13 +36,142 @@ from src.labeling.inspect import (
     tile_names_for_hits,
     undetected_size_floor_nm,
 )
-from src.stitching.stitcher import TilePlacement
+from src.main_pipeline.stitching.stitcher import TilePlacement
 
 
 def test_cell_bounds_splits_tile_into_equal_grid() -> None:
     y0, x0, y1, x1 = cell_bounds(90, 120, 1, 2, grid=3)
     assert (y0, x0) == (30, 80)
     assert (y1, x1) == (60, 120)
+
+
+def test_detections_on_this_file_stays_on_the_source_quad() -> None:
+    table = pd.DataFrame(
+        {
+            "source_tile": ["v4/wafer_shot_0_quad0_exp200000.png"],
+            "size": [4.0],
+            "key": ["v4_LIGHT_4_4"],
+            "nsew_dirs": ["QUAD0,QUAD1"],
+        }
+    )
+    on_quad0 = detections_on_this_file(table, "v4/wafer_shot_0_quad0_exp200000.png")
+    on_quad1 = detections_on_this_file(table, "v4/wafer_shot_1_quad1_exp200000.png")
+    on_quad2 = detections_on_this_file(table, "v4/wafer_shot_2_quad2_exp200000.png")
+    on_other = detections_on_this_file(table, "v5/wafer_shot_1_quad1_exp200000.png")
+    assert list(on_quad0["key"]) == ["v4_LIGHT_4_4"]
+    assert on_quad1.empty
+    assert on_quad2.empty
+    assert on_other.empty
+    both = last_run_class_counts(
+        table,
+        None,
+        tile_names=["v4/wafer_shot_0_quad0_exp200000.png", "v4/wafer_shot_1_quad1_exp200000.png"],
+    )
+    assert both["n_detected"] == 1
+    assert last_run_class_counts(
+        table, None, tile_names=["v4/wafer_shot_1_quad1_exp200000.png"]
+    )["n_detected"] == 0
+
+
+def test_pointer_miss_stays_on_the_tile_it_was_marked() -> None:
+    labels = pd.DataFrame(
+        {
+            "key": ["miss-a", "found", "other-set"],
+            "source_tile": [
+                "v4/wafer_shot_0_quad0_exp200000.png",
+                "v4/wafer_shot_1_quad1_exp200000.png",
+                "v5/wafer_shot_0_quad0_exp200000.png",
+            ],
+            "label": ["particle", "particle", "particle"],
+            "source_csv": [MISS_SOURCE, MISS_SOURCE, MISS_SOURCE],
+            "x_global": [1.0, 2.0, 3.0],
+            "y_global": [1.0, 2.0, 3.0],
+            "size": [20_000.0, 20_000.0, 20_000.0],
+        }
+    )
+    detections = pd.DataFrame(
+        {
+            "source_tile": ["v4/wafer_shot_1_quad1_exp200000.png"],
+            "key": ["found"],
+            "x_global": [2.0],
+            "y_global": [2.0],
+            "size": [20_000.0],
+        }
+    )
+    on_quad0 = pointer_miss_rows(
+        labels, detections, "v4/wafer_shot_0_quad0_exp200000.png"
+    )
+    on_quad1 = pointer_miss_rows(
+        labels, detections, "v4/wafer_shot_1_quad1_exp200000.png"
+    )
+    on_combi = pointer_miss_rows(labels, detections, "v4/combi_2of4.png")
+    on_uniform = pointer_miss_rows(
+        labels, detections, "v4/wafer_shot_4_all_exp200000.png"
+    )
+    assert list(on_quad0["key"]) == ["miss-a"]
+    assert bool(on_quad0["missed"].iloc[0])
+    assert on_quad1.empty
+    assert on_combi.empty
+    assert on_uniform.empty
+
+
+def test_particle_detected_on_combi_and_uniform_is_marked_on_both() -> None:
+    from src.verification.inspect import detections_on_review_picture
+
+    table = pd.DataFrame(
+        {
+            "source_tile": [
+                "v6/combi_2of4.png",
+                "v6/wafer_shot_0_quad0_exp200000.png",
+                "v6/wafer_shot_1_quad1_exp200000.png",
+                "v5/wafer_shot_4_all_exp200000.png",
+            ],
+            "nsew_dirs": ["COMBI", "ALL,QUAD0", "QUAD1", "ALL"],
+            "key": ["combi-hit", "both-uniform", "quad-only", "other-field"],
+            "x_global": [1.0, 2.0, 3.0, 2.0],
+            "y_global": [1.0, 2.0, 3.0, 2.0],
+            "size": [10.0, 10.0, 10.0, 10.0],
+        }
+    )
+    combi = detections_on_review_picture(table, "v6/combi_2of4.png")
+    uniform = detections_on_review_picture(table, "v6/wafer_shot_4_all_exp200000.png")
+    quad = detections_on_review_picture(table, "v6/wafer_shot_1_quad1_exp200000.png")
+    assert set(combi["key"]) == {"combi-hit"}
+    assert set(uniform["key"]) == {"both-uniform"}
+    assert list(quad["key"]) == ["quad-only"]
+
+
+def test_detections_on_this_file_keeps_only_that_quad() -> None:
+    table = pd.DataFrame(
+        {
+            "source_tile": [
+                "v4/wafer_shot_0_quad0_exp200000.png",
+                "v4/wafer_shot_1_quad1_exp200000.png",
+                "v4/combi_2of4.png",
+            ],
+            "size": [1.0, 2.0, 3.0],
+            "key": ["v4_LIGHT_1_1", "v4_LIGHT_2_2", "v4_LIGHT_3_3"],
+        }
+    )
+    quad = detections_on_this_file(table, "v4/wafer_shot_1_quad1_exp200000.png")
+    shared = detections_on_tile(table, "v4/wafer_shot_1_quad1_exp200000.png")
+    assert list(quad["size"]) == [2.0]
+    assert list(shared["size"]) == [1.0, 2.0]
+
+
+def test_expand_submap_lighting_names_includes_combi() -> None:
+    names = expand_submap_lighting_names(
+        ["v4/wafer_shot_0_quad0_exp200000.png"],
+        [
+            "v4/wafer_shot_0_quad0_exp200000.png",
+            "v4/wafer_shot_4_all_exp200000.png",
+            "v4/combi_2of4.png",
+            "v5/combi_2of4.png",
+        ],
+    )
+    assert "v4/combi_2of4.png" in names
+    assert "v4/wafer_shot_4_all_exp200000.png" in names
+    assert "v5/combi_2of4.png" not in names
 
 
 def test_detections_on_tile_matches_basename() -> None:
@@ -229,6 +366,148 @@ def test_last_run_class_counts_splits_real_fake_and_inspect_misses() -> None:
     )
 
 
+def test_last_run_counts_pointer_clicks_on_the_matching_field() -> None:
+    detections = pd.DataFrame(
+        {
+            "id": [1],
+            "x_global": [10.0],
+            "y_global": [11.0],
+            "size": [20000.0],
+            "confidence": [0.9],
+            "source_tile": ["v5_2of4.png"],
+            "key": ["v5_2of4_10_11"],
+        }
+    )
+    labels = pd.DataFrame(
+        {
+            "key": [
+                "v5_NSEW_10_11",
+                "v5_NSEW_80_80",
+                "v5_NSEW_90_90",
+                "v6_NSEW_70_70",
+                "v6_2of4_111_111",
+            ],
+            "label": ["particle", "particle", "particle", "particle", "particle"],
+            "source_tile": ["v5/N.png", "v5/S.png", "v5/E.png", "v6/N.png", "v6_2of4.bmp"],
+            "source_csv": ["tile_inspect"] * 5,
+            "size": [25000.0, 30000.0, 15000.0, 40000.0, 50000.0],
+            "x_global": [10.0, 80.0, 90.0, 70.0, 111.0],
+            "y_global": [11.0, 80.0, 90.0, 70.0, 111.0],
+        }
+    )
+    stats = last_run_class_counts(
+        detections,
+        labels,
+        tile_names=["v5_2of4.png"],
+        min_size_nm=20000.0,
+        folder_tiles=["v5_2of4.png", "v6_2of4.png"],
+    )
+    assert stats["n_real"] == 1
+    assert stats["n_undetected"] == 1
+    assert stats["n_undetected_below"] == 1
+    assert stats["n_real_total"] == 2
+    both = last_run_class_counts(
+        detections,
+        labels,
+        tile_names=["v5_2of4.png", "v6_2of4.png"],
+        min_size_nm=20000.0,
+    )
+    assert both["n_undetected"] == 2
+    assert both["n_real_total"] == 3
+
+
+def test_submap_combi_does_not_inherit_letter_field_misses() -> None:
+    detections = pd.DataFrame(
+        {
+            "id": [1],
+            "x_global": [10.0],
+            "y_global": [11.0],
+            "size": [20000.0],
+            "confidence": [0.9],
+            "source_tile": ["v5/combi_2of4.png"],
+            "key": ["v5_LIGHT_10_11"],
+        }
+    )
+    labels = pd.DataFrame(
+        {
+            "key": ["v5_NSEW_80_80", "v5_2of4_90_90", "v5_LIGHT_400_400"],
+            "label": ["particle", "particle", "particle"],
+            "source_tile": ["v5/N.png", "v5_2of4.png", "v5/combi_2of4.png"],
+            "source_csv": ["tile_inspect", "old.csv", "tile_inspect"],
+            "size": [25000.0, 30000.0, 22000.0],
+            "x_global": [80.0, 90.0, 400.0],
+            "y_global": [80.0, 90.0, 400.0],
+        }
+    )
+    stats = last_run_class_counts(
+        detections,
+        labels,
+        tile_names=["v5/combi_2of4.png", "v5/wafer_shot_4_all_exp200000.png"],
+        min_size_nm=20000.0,
+        folder_tiles=["v5/combi_2of4.png", "v5/wafer_shot_4_all_exp200000.png"],
+    )
+    assert stats["n_undetected"] == 1
+    assert stats["n_real_total"] == 1
+
+
+def test_submap_tiles_are_counted_separately() -> None:
+    """A quad fake is not a fake of the combi, and a quad hit is not a combi miss."""
+    combi = "v6/combi_2of4.png"
+    quad = "v6/wafer_shot_3_quad3_exp200000.png"
+    uniform = "v6/wafer_shot_4_all_exp200000.png"
+    detections = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "x_global": [10.0, 20.0, 30.0],
+            "y_global": [11.0, 21.0, 31.0],
+            "size": [20_000.0, 20_000.0, 20_000.0],
+            "confidence": [0.9, 0.4, 0.8],
+            "source_tile": [combi, quad, quad],
+            "nsew_dirs": ["COMBI", "QUAD3", "QUAD3"],
+            "key": ["v6_LIGHT_10_11", "v6_LIGHT_20_21", "v6_LIGHT_30_31"],
+        }
+    )
+    labels = pd.DataFrame(
+        {
+            "key": [
+                "v6_LIGHT_10_11",
+                "v6_LIGHT_20_21",
+                "v6_LIGHT_30_31",
+                "v6_LIGHT_400_400",
+            ],
+            "label": ["particle", "particle", "not_particle", "particle"],
+            "source_tile": [combi, quad, quad, combi],
+            "source_csv": ["run.csv", "run.csv", "run.csv", "tile_inspect"],
+            "size": [20_000.0, 20_000.0, 20_000.0, 22_000.0],
+            "x_global": [10.0, 20.0, 30.0, 400.0],
+            "y_global": [11.0, 21.0, 31.0, 400.0],
+        }
+    )
+    tiles = [combi, quad, uniform]
+    on_combi = last_run_class_counts(
+        detections,
+        labels,
+        tile_names=[combi],
+        min_size_nm=20_000.0,
+        folder_tiles=tiles,
+    )
+    on_quad = last_run_class_counts(
+        detections,
+        labels,
+        tile_names=[quad],
+        min_size_nm=20_000.0,
+        folder_tiles=tiles,
+    )
+    assert on_combi["n_detected"] == 1
+    assert on_combi["n_real"] == 1
+    assert on_combi["n_fake"] == 0
+    assert on_combi["n_undetected"] == 1
+    assert on_quad["n_detected"] == 2
+    assert on_quad["n_fake"] == 1
+    assert on_quad["n_real"] == 1
+    assert on_quad["n_undetected"] == 0
+
+
 def test_last_run_class_counts_drops_undetected_below_run_size_floor() -> None:
     detections = pd.DataFrame(
         {
@@ -294,6 +573,139 @@ def test_last_run_class_counts_by_tile_splits_folder() -> None:
     assert float(by_tile.loc["b.tif", "precision"]) == 1.0
     assert float(by_tile.loc["b.tif", "recall"]) == 1.0
     assert float(by_tile.loc["b.tif", "unhappiness"]) == unhappiness_score(1.0, 1.0)
+
+
+def test_last_run_class_counts_by_tile_keeps_submap_folder() -> None:
+    detections = pd.DataFrame(
+        {
+            "id": [1, 2],
+            "x_global": [10.0, 20.0],
+            "y_global": [11.0, 21.0],
+            "size": [20000.0, 20000.0],
+            "confidence": [0.9, 0.8],
+            "source_tile": [
+                "v4/wafer_shot_0_quad0_exp200000.png",
+                "v4/wafer_shot_1_quad1_exp200000.png",
+            ],
+            "key": ["quad0", "quad1"],
+        }
+    )
+    table = last_run_class_counts_by_tile(
+        detections,
+        None,
+        [
+            "v4/wafer_shot_0_quad0_exp200000.png",
+            "v4/wafer_shot_1_quad1_exp200000.png",
+        ],
+    )
+    by_tile = table.set_index("tile")
+    assert int(by_tile.loc["v4/wafer_shot_0_quad0_exp200000.png", "n_detected"]) == 1
+    assert int(by_tile.loc["v4/wafer_shot_1_quad1_exp200000.png", "n_detected"]) == 1
+
+
+def test_shared_combi_uniform_hit_counts_on_both_pictures() -> None:
+    combi = "v6/combi_2of4.png"
+    uniform = "v6/wafer_shot_4_all_exp200000.png"
+    detections = pd.DataFrame(
+        {
+            "id": [7, 21],
+            "x_global": [100.0, 2_000.0],
+            "y_global": [200.0, 200.0],
+            "size": [20_000.0, 20_000.0],
+            "confidence": [0.9, 0.8],
+            "source_tile": [combi, uniform],
+            "nsew_dirs": ["ALL,COMBI", "ALL"],
+            "key": ["shared", "uniform-only"],
+        }
+    )
+    both = last_run_class_counts(detections, None, tile_names=[combi, uniform])
+    on_combi = last_run_class_counts(detections, None, tile_names=[combi])
+    on_uniform = last_run_class_counts(detections, None, tile_names=[uniform])
+    assert both["n_detected"] == 2
+    assert on_combi["n_detected"] == 1
+    assert on_uniform["n_detected"] == 2
+
+
+def test_crop_metric_std_uses_defined_cells_only() -> None:
+    placement = TilePlacement(
+        path=Path("a.tif"),
+        name="a.tif",
+        y0=0,
+        x0=0,
+        height=90,
+        width=90,
+    )
+    detections = pd.DataFrame(
+        {
+            "id": [1, 2, 3, 4],
+            "x_global": [10.0, 12.0, 40.0, 70.0],
+            "y_global": [10.0, 12.0, 10.0, 70.0],
+            "size": [20000.0, 20000.0, 20000.0, 20000.0],
+            "confidence": [0.9, 0.8, 0.7, 0.6],
+            "source_tile": ["a.tif", "a.tif", "a.tif", "a.tif"],
+            "key": ["real_a", "fake_a", "real_b", "fake_c"],
+        }
+    )
+    labels = pd.DataFrame(
+        {
+            "key": ["real_a", "fake_a", "real_b", "miss_a", "fake_c"],
+            "label": ["particle", "not_particle", "particle", "particle", "not_particle"],
+            "source_tile": ["a.tif", "a.tif", "a.tif", "a.tif", "a.tif"],
+            "size": [20000.0, 20000.0, 20000.0, 25000.0, 20000.0],
+            "x_global": [10.0, 12.0, 40.0, 15.0, 70.0],
+            "y_global": [10.0, 12.0, 10.0, 15.0, 70.0],
+        }
+    )
+    spread = crop_metric_std(
+        detections,
+        labels,
+        height=90,
+        width=90,
+        placements=[placement],
+        pixel_size_nm=1.0,
+        tile_names=["a.tif"],
+        min_size_nm=20000.0,
+        beta=1.0,
+    )
+    pair = float(pd.Series([0.5, 1.0]).std(ddof=1))
+    three = float(pd.Series([0.5, 1.0, 0.0]).std(ddof=1))
+    assert spread["precision"] == pytest.approx(three)
+    assert spread["recall"] == pytest.approx(pair)
+    assert spread["f_beta"] == pytest.approx(pair)
+    including_empty = float(pd.Series([0.5, 1.0, 0.0, *([0.0] * 6)]).std(ddof=1))
+    assert spread["precision"] != pytest.approx(including_empty)
+
+    one_cell = detections.loc[detections["key"] == "real_b"]
+    one_label = labels.loc[labels["key"] == "real_b"]
+    single = crop_metric_std(
+        one_cell,
+        one_label,
+        height=90,
+        width=90,
+        placements=[placement],
+        pixel_size_nm=1.0,
+        tile_names=["a.tif"],
+        beta=1.0,
+    )
+    assert single == {"precision": None, "recall": None, "f_beta": None}
+    cells = crop_metric_cells(
+        detections,
+        labels,
+        height=90,
+        width=90,
+        placements=[placement],
+        pixel_size_nm=1.0,
+        tile_names=["a.tif"],
+        min_size_nm=20000.0,
+        beta=1.0,
+    )
+    assert len(cells) == 9
+    assert cells[0]["precision"] == pytest.approx(0.5)
+    assert cells[0]["recall"] == pytest.approx(0.5)
+    assert cells[1]["precision"] == pytest.approx(1.0)
+    assert cells[1]["recall"] == pytest.approx(1.0)
+    assert cells[8]["precision"] == pytest.approx(0.0)
+    assert cells[8]["recall"] is None
 
 
 def test_last_run_class_counts_by_tile_splits_particles_only() -> None:
@@ -411,7 +823,7 @@ def test_last_run_particles_only_uses_same_scene_nsew_labels() -> None:
 
 
 def test_last_run_snaps_particles_only_to_nearby_nsew_label() -> None:
-    from src.labeling.queue import snap_detection_keys_to_labels, tag_table
+    from src.verification.queue import snap_detection_keys_to_labels, tag_table
 
     detections = tag_table(
         pd.DataFrame(
@@ -451,7 +863,7 @@ def test_last_run_snaps_particles_only_to_nearby_nsew_label() -> None:
 
 
 def test_related_scene_tile_names_keeps_groundup_v3_suffix(tmp_path: Path) -> None:
-    from src.labeling.inspect import related_scene_tile_names
+    from src.verification.inspect import related_scene_tile_names
 
     v3 = tmp_path / "Groundup v3"
     v3.mkdir()
@@ -551,6 +963,44 @@ def test_circles_from_rows_uses_label_color() -> None:
     circles = circles_from_rows(rows, [1.0, 2.0], [3.0, 4.0], {"a": "particle"})
     assert circles[0]["color"] == (40, 180, 70)
     assert circles[1]["color"] == (255, 140, 40)
+    missed = rows.copy()
+    missed["missed"] = [True, False]
+    missed_circles = circles_from_rows(missed, [1.0, 2.0], [3.0, 4.0], {"a": "particle"})
+    assert missed_circles[0]["color"] == MISSED_PARTICLE_COLOR
+    assert missed_circles[1]["color"] == (255, 140, 40)
+
+
+def test_own_tile_only_keeps_misses_on_that_file() -> None:
+    from src.verification.ui import _label_rows_missing_from_hits
+
+    labels = pd.DataFrame(
+        {
+            "key": ["v4_LIGHT_1_1", "v4_LIGHT_2_2", "v4_LIGHT_9_9", "v4_LIGHT_3_3"],
+            "source_tile": [
+                "v4/wafer_shot_4_all_exp200000.png",
+                "v4/wafer_shot_0_quad0_exp200000.png",
+                "v4/wafer_shot_4_all_exp200000.png",
+                "v4/wafer_shot_4_all_exp200000.png",
+            ],
+            "label": ["particle", "particle", "particle", "not_particle"],
+            "x_global": [1.0, 2.0, 9.0, 3.0],
+            "y_global": [1.0, 2.0, 9.0, 3.0],
+            "size": [20_000.0, 20_000.0, 20_000.0, 20_000.0],
+        }
+    )
+    hits = pd.DataFrame(
+        {
+            "key": ["v4_LIGHT_1_1"],
+            "source_tile": ["v4/wafer_shot_4_all_exp200000.png"],
+        }
+    )
+    tile = "v4/wafer_shot_4_all_exp200000.png"
+    missing = _label_rows_missing_from_hits(labels, tile, hits, own_tile_only=True)
+    assert missing is not None
+    assert list(missing["key"]) == ["v4_LIGHT_9_9"]
+    shared = _label_rows_missing_from_hits(labels, tile, hits, own_tile_only=False)
+    assert shared is not None
+    assert "v4_LIGHT_2_2" in set(shared["key"].astype(str))
 
 
 def test_display_xy_to_local_inverts_overlay_scale() -> None:
@@ -558,6 +1008,106 @@ def test_display_xy_to_local_inverts_overlay_scale() -> None:
     x_local, y_local = display_xy_to_local(15.0, 8.0, view)
     assert x_local == 10.0 + 15.0 / 0.5
     assert y_local == 20.0 + 8.0 / 0.5
+
+
+def test_verify_missed_photo_sizes_replaces_assumed_diameter(tmp_path: Path) -> None:
+    import cv2
+
+    from src.verification.inspect import verify_missed_photo_sizes
+    from src.verification.store import LabelStore
+
+    image = np.zeros((81, 81), dtype=np.uint8)
+    yy, xx = np.ogrid[:81, :81]
+    image[(yy - 40) ** 2 + (xx - 40) ** 2 <= 10.0**2] = 220
+    tile = tmp_path / "v5"
+    tile.mkdir()
+    assert cv2.imwrite(str(tile / "N.png"), image)
+    other = tmp_path / "other.png"
+    assert cv2.imwrite(str(other), image)
+
+    pixel = 1000.0
+    record = missed_particle_record("v5/N.png", 40.0 * pixel, 40.0 * pixel, 15_000.0)
+    elsewhere = missed_particle_record("other.png", 40.0 * pixel, 40.0 * pixel, 15_000.0)
+    store = LabelStore(tmp_path / "labels")
+    store.apply_label(record, "particle", np.zeros((8, 8, 3), dtype=np.uint8))
+    store.apply_label(elsewhere, "particle", np.zeros((8, 8, 3), dtype=np.uint8))
+
+    report = verify_missed_photo_sizes(
+        store.load(),
+        {"v5/N.png": tile / "N.png"},
+        {"detection": {"max_size_nm": 80_000.0, "size_mass_fraction": 0.4, "particles_bright": True}},
+        pixel_size_nm=pixel,
+    )
+    assert len(report) == 1
+    assert report[0]["source_tile"] == "v5/N.png"
+    assert abs(report[0]["photo_um"] - 20.0) < 1.5
+    assert report[0]["note"] == "updated"
+    written = store.update_sizes({report[0]["key"]: report[0]["photo_nm"]})
+    assert written == 1
+    saved = store.load()
+    row = saved.loc[saved["source_tile"].astype(str) == "v5/N.png"].iloc[-1]
+    assert abs(float(row["size"]) / 1000.0 - 20.0) < 1.5
+    other_row = saved.loc[saved["source_tile"].astype(str) == "other.png"].iloc[-1]
+    assert float(other_row["size"]) == 15_000.0
+
+
+def test_verify_drops_a_miss_under_20_um(tmp_path: Path) -> None:
+    import cv2
+
+    from src.verification.inspect import verify_missed_photo_sizes
+    from src.verification.store import LabelStore
+
+    image = np.zeros((81, 81), dtype=np.uint8)
+    yy, xx = np.ogrid[:81, :81]
+    image[(yy - 40) ** 2 + (xx - 40) ** 2 <= 3.0**2] = 220
+    tile = tmp_path / "v5"
+    tile.mkdir()
+    assert cv2.imwrite(str(tile / "combi_2of4.png"), image)
+    pixel = 1000.0
+    record = missed_particle_record(
+        "v5/combi_2of4.png", 40.0 * pixel, 40.0 * pixel, 15_000.0
+    )
+    store = LabelStore(tmp_path / "labels")
+    store.apply_label(record, "particle", np.zeros((8, 8, 3), dtype=np.uint8))
+    report = verify_missed_photo_sizes(
+        store.load(),
+        {"v5/combi_2of4.png": tile / "combi_2of4.png"},
+        {"detection": {"max_size_nm": 80_000.0, "size_mass_fraction": 0.4, "particles_bright": True}},
+        pixel_size_nm=pixel,
+    )
+    assert len(report) == 1
+    assert report[0]["photo_um"] < 20.0
+    assert report[0]["note"] == "removed"
+    assert store.unlabel(report[0]["key"]) is not None
+    assert store.load().empty
+
+
+def test_verify_keeps_a_grown_mark_above_20_um(tmp_path: Path) -> None:
+    import cv2
+
+    from src.verification.inspect import verify_missed_photo_sizes
+    from src.verification.store import LabelStore
+
+    image = np.zeros((81, 81), dtype=np.uint8)
+    yy, xx = np.ogrid[:81, :81]
+    image[(yy - 40) ** 2 + (xx - 40) ** 2 <= 4.0**2] = 220
+    tile = tmp_path / "v5"
+    tile.mkdir()
+    assert cv2.imwrite(str(tile / "combi_2of4.png"), image)
+    pixel = 1000.0
+    record = missed_particle_record(
+        "v5/combi_2of4.png", 40.0 * pixel, 40.0 * pixel, 28_000.0
+    )
+    store = LabelStore(tmp_path / "labels")
+    store.apply_label(record, "particle", np.zeros((8, 8, 3), dtype=np.uint8))
+    report = verify_missed_photo_sizes(
+        store.load(),
+        {"v5/combi_2of4.png": tile / "combi_2of4.png"},
+        {"detection": {"max_size_nm": 80_000.0, "size_mass_fraction": 0.4, "particles_bright": True}},
+        pixel_size_nm=pixel,
+    )
+    assert report[0]["photo_um"] < 20.0
+    assert report[0]["note"] == "kept stored size"
 
 
 def test_missed_particle_record_uses_tile_inspect_source() -> None:
@@ -613,6 +1163,15 @@ def test_extra_grid_placement_maps_last_run_csv_onto_tile() -> None:
     assert 0.0 <= y_local < 2076.0
 
 
+def test_preview_click_crop_zoom_magnifies_the_speck() -> None:
+    image = np.zeros((400, 400), dtype=np.float32)
+    image[198:203, 198:203] = 1.0
+    plain = preview_click_crop(image, 200.0, 200.0, 15_000.0, 3350.0)
+    zoomed = preview_click_crop(image, 200.0, 200.0, 15_000.0, 3350.0, zoom=8.0)
+    assert zoomed.shape[0] > plain.shape[0]
+    assert zoomed.shape[0] <= 720
+
+
 def test_preview_click_crop_keeps_full_circle_near_tile_edge() -> None:
     image = np.full((80, 90), 0.2, dtype=np.float32)
     image[2:10, 2:10] = 1.0
@@ -665,17 +1224,47 @@ def test_local_px_roundtrip_to_global_nm() -> None:
         width=128,
     )
     x_global, y_global = local_px_to_global_nm(5.0, 4.0, placement, pixel_size_nm=2.0)
-    from src.labeling.crops import global_nm_to_local_px
+    from src.verification.crops import global_nm_to_local_px
 
     x_local, y_local = global_nm_to_local_px(x_global, y_global, placement, pixel_size_nm=2.0)
     assert x_local == 5.0
     assert y_local == 4.0
 
 
+def test_pointer_groundup_folder_lists_combi_and_uniform_only(tmp_path: Path) -> None:
+    from src.verification.inspect import combi_uniform_paths
+
+    folder = tmp_path / "v5"
+    folder.mkdir()
+    names = [
+        "wafer_shot_0_quad0_exp200000.png",
+        "wafer_shot_1_quad1_exp200000.png",
+        "wafer_shot_4_all_exp200000.png",
+        "combi_2of4.png",
+        "notes.txt",
+    ]
+    paths = []
+    for name in names:
+        path = folder / name
+        path.write_bytes(b"x")
+        if path.suffix == ".png":
+            paths.append(path)
+    chosen = combi_uniform_paths(paths)
+    assert chosen is not None
+    assert [path.name for path in chosen] == [
+        "combi_2of4.png",
+        "wafer_shot_4_all_exp200000.png",
+    ]
+    letters = [tmp_path / "N.png", tmp_path / "S.png"]
+    for path in letters:
+        path.write_bytes(b"x")
+    assert combi_uniform_paths(letters) is None
+
+
 def test_pointer_uses_directional_photos_and_shares_one_set(tmp_path: Path) -> None:
     import cv2
 
-    from src.labeling.inspect import pointer_direction_tiles, pointer_set_hits
+    from src.verification.inspect import pointer_direction_tiles, pointer_set_hits
 
     staged = tmp_path / "Inputs" / "Groundup v4 ML off"
     staged.mkdir(parents=True)
@@ -731,4 +1320,38 @@ def test_pointer_uses_directional_photos_and_shares_one_set(tmp_path: Path) -> N
     v1 = pointer_set_hits(detections, marks, "v1")
     keys = set(v1["key"].astype(str))
     assert keys == {"v1_2of4_100_200", "v1_NSEW_300_400"}
+    missed = v1.loc[v1["key"].astype(str) == "v1_NSEW_300_400", "missed"]
+    assert bool(missed.iloc[0]) is True
     assert set(pointer_set_hits(detections, marks, "v2")["key"].astype(str)) == {"v2_NSEW_300_400"}
+
+
+def test_growing_the_click_includes_the_dim_edge() -> None:
+    from src.verification.inspect import footprint_grow_mass, photo_particle_edge
+
+    image = np.full((81, 81), 40.0, dtype=np.float32)
+    yy, xx = np.ogrid[:81, :81]
+    radius = np.hypot(yy - 40, xx - 40)
+    image[radius <= 6] = 220.0
+    image[(radius > 6) & (radius <= 14)] = 90.0
+    config = {
+        "detection": {
+            "max_size_nm": 80_000.0,
+            "size_mass_fraction": 0.4,
+            "particles_bright": True,
+        }
+    }
+    tight_nm, _tight = photo_particle_edge(
+        image, 40.0, 40.0, pixel_size_nm=1000.0, config=config, mass_fraction=0.4
+    )
+    wide_nm, _wide = photo_particle_edge(
+        image,
+        40.0,
+        40.0,
+        pixel_size_nm=1000.0,
+        config=config,
+        mass_fraction=footprint_grow_mass(config, 300),
+    )
+    assert footprint_grow_mass(config, 1) == 0.4
+    assert footprint_grow_mass(config, 300) == 0.0
+    assert footprint_grow_mass(config, 1.5) < footprint_grow_mass(config, 1)
+    assert wide_nm > tight_nm + 4_000.0

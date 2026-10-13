@@ -8,3 +8,4 @@ models/*.joblib
 !models/particle_clf_v*.joblib
 .DS_Store
 labels/
+src/capture/captures/

@@ -8,18 +8,18 @@ import numpy as np
 import pandas as pd
 import tifffile
 
-from src.detection.detector import ParticleCandidate
-from src.io.tile_loader import parse_tile_filename
-from src.measurement.measurer import (
+from src.main_pipeline.detection.detector import ParticleCandidate
+from src.overall.io.tile_loader import parse_tile_filename, try_parse_tile_filename
+from src.main_pipeline.measurement.measurer import (
     Particle,
     deduplicate,
     local_to_global,
     measure_and_dedupe,
     measure_candidates,
 )
-from src.pipeline.runner import run_pipeline
-from src.stitching.stitcher import tile_origin_px
-from src.io.tile_loader import Tile
+from src.main_pipeline.runner import run_pipeline
+from src.main_pipeline.stitching.stitcher import tile_origin_px
+from src.overall.io.tile_loader import Tile
 from tests.fixtures.synthetic import detector_test_config, make_structured_tile, write_tile_tiff
 
 
@@ -39,9 +39,15 @@ def test_parse_filename_is_case_insensitive() -> None:
     assert meta["run"] == 3 and meta["row"] == 5 and meta["col"] == 32 and meta["mag"] == 5.0
 
 
+def test_blank_filename_pattern_does_not_match_quad_shots() -> None:
+    name = "wafer_shot_0_quad0_exp200000.png"
+    assert try_parse_tile_filename(name, "") is None
+    assert try_parse_tile_filename(name, r"R(?P<run>\d+)") is None
+
+
 def test_resolve_input_dir_finds_workspace_tile_folder() -> None:
-    from src.config import DEFAULT_INPUT_DIR
-    from src.io.tile_loader import resolve_input_dir
+    from src.overall.config import DEFAULT_INPUT_DIR
+    from src.overall.io.tile_loader import resolve_input_dir
 
     found = resolve_input_dir("R3 04-08")
     assert found.is_dir()
@@ -54,7 +60,7 @@ def test_resolve_input_dir_finds_workspace_tile_folder() -> None:
 
 
 def test_resolve_output_dir_uses_workspace_outputs(tmp_path: Path) -> None:
-    from src.config import DEFAULT_OUTPUT_DIR, WORKSPACE_ROOT, resolve_output_dir
+    from src.overall.config import DEFAULT_OUTPUT_DIR, WORKSPACE_ROOT, resolve_output_dir
 
     assert resolve_output_dir("") == DEFAULT_OUTPUT_DIR
     assert resolve_output_dir("../Outputs") == DEFAULT_OUTPUT_DIR.resolve()
@@ -65,7 +71,7 @@ def test_resolve_output_dir_uses_workspace_outputs(tmp_path: Path) -> None:
 
 
 def test_matching_skips_column_zero(tmp_path: Path) -> None:
-    from src.io.tile_loader import matching_tile_paths
+    from src.overall.io.tile_loader import matching_tile_paths
 
     pattern = r"R(?P<run>\d+)_(?P<row>\d+)_(?P<col>\d+)_(?P<mag>[\d.]+)X\.tiff?"
     write_tile_tiff(tmp_path / "R3_2_0_5X.tif", np.zeros((8, 8)))
@@ -75,7 +81,7 @@ def test_matching_skips_column_zero(tmp_path: Path) -> None:
 
 
 def test_matching_can_include_unmatched_names(tmp_path: Path) -> None:
-    from src.io.tile_loader import matching_tile_paths
+    from src.overall.io.tile_loader import matching_tile_paths
 
     pattern = r"R(?P<run>\d+)_(?P<row>\d+)_(?P<col>\d+)_(?P<mag>[\d.]+)X\.tiff?"
     write_tile_tiff(tmp_path / "R3_2_1_5X.tif", np.zeros((8, 8)))
@@ -212,7 +218,7 @@ def test_nsew_does_not_merge_two_hits_on_the_same_tile() -> None:
     west = Particle(
         id=0, x_global=104.0, y_global=201.0, size=13.0, confidence=0.7, source_tile="W.bmp"
     )
-    from src.measurement.measurer import deduplicate_nsew
+    from src.main_pipeline.measurement.measurer import deduplicate_nsew
 
     merged = deduplicate_nsew(
         [first, second, west],
@@ -227,7 +233,7 @@ def test_nsew_does_not_merge_two_hits_on_the_same_tile() -> None:
 
 
 def test_combine_tables_merges_directional_unplaced_tiles() -> None:
-    from src.pipeline.runner import _combine_particle_tables
+    from src.main_pipeline.runner import _combine_particle_tables
 
     north = Particle(id=0, x_global=10.0, y_global=12.0, size=8.0, confidence=0.9, source_tile="N.tif")
     south = Particle(id=0, x_global=11.0, y_global=12.0, size=30.0, confidence=0.4, source_tile="S.tif")
@@ -247,7 +253,7 @@ def test_combine_tables_merges_directional_unplaced_tiles() -> None:
 
 
 def test_combine_tables_merges_particles_only_versions() -> None:
-    from src.pipeline.runner import _combine_particle_tables
+    from src.main_pipeline.runner import _combine_particle_tables
 
     two = Particle(
         id=0,
@@ -299,7 +305,7 @@ def test_seam_particle_is_not_double_counted() -> None:
 
 
 def test_load_rgb_tile_as_uint8_gray(tmp_path: Path) -> None:
-    from src.io.tile_loader import load_tile_image, peek_tile_hw
+    from src.overall.io.tile_loader import load_tile_image, peek_tile_hw
 
     rgb = np.zeros((12, 10, 3), dtype=np.uint8)
     rgb[..., 0] = 255
@@ -315,7 +321,7 @@ def test_load_rgb_tile_as_uint8_gray(tmp_path: Path) -> None:
 
 def test_load_bmp_bytes_named_as_tiff(tmp_path: Path) -> None:
     import cv2
-    from src.io.tile_loader import load_tile_image, peek_tile_hw
+    from src.overall.io.tile_loader import load_tile_image, peek_tile_hw
 
     gray = np.arange(12 * 10, dtype=np.uint8).reshape(12, 10)
     bmp = tmp_path / "scratch.bmp"
@@ -330,7 +336,7 @@ def test_load_bmp_bytes_named_as_tiff(tmp_path: Path) -> None:
 
 def test_load_jpeg_bytes_named_as_tiff(tmp_path: Path) -> None:
     import cv2
-    from src.io.tile_loader import load_tile_image, peek_tile_hw
+    from src.overall.io.tile_loader import load_tile_image, peek_tile_hw
 
     bgr = np.zeros((16, 14, 3), dtype=np.uint8)
     bgr[..., 2] = 255
@@ -347,7 +353,7 @@ def test_load_jpeg_bytes_named_as_tiff(tmp_path: Path) -> None:
 
 def test_load_and_match_bmp_tiles(tmp_path: Path) -> None:
     import cv2
-    from src.io.tile_loader import (
+    from src.overall.io.tile_loader import (
         DEFAULT_FILENAME_PATTERN,
         list_tile_paths,
         load_tile_image,
@@ -468,7 +474,7 @@ def test_pipeline_seam_on_synthetic_tiffs(tmp_path: Path) -> None:
 
 
 def test_downsample_for_target_caps_mosaic_bytes() -> None:
-    from src.stitching.stitcher import downsample_for_target
+    from src.main_pipeline.stitching.stitcher import downsample_for_target
 
     height, width = 9549, 86464
     target_mb = 20.0
@@ -480,7 +486,7 @@ def test_downsample_for_target_caps_mosaic_bytes() -> None:
 
 
 def test_preview_downsizes_tiles_then_pastes_on_canvas(tmp_path: Path) -> None:
-    from src.stitching.stitcher import LazyMosaic, TilePlacement
+    from src.main_pipeline.stitching.stitcher import LazyMosaic, TilePlacement
 
     height, width, factor = 16, 16, 4
     left_path = tmp_path / "R3_0_0_5X.tif"
@@ -500,8 +506,8 @@ def test_preview_downsizes_tiles_then_pastes_on_canvas(tmp_path: Path) -> None:
 
 
 def test_full_mosaic_preview_downsamples_tiles_before_stitch(tmp_path: Path) -> None:
-    from src.report.report_generator import overlay_downsample, overlay_markers, write_overlay_image
-    from src.stitching.stitcher import LazyMosaic, TilePlacement
+    from src.main_pipeline.report.report_generator import overlay_downsample, overlay_markers, write_overlay_image
+    from src.main_pipeline.stitching.stitcher import LazyMosaic, TilePlacement
 
     height, width = 80, 120
     left = make_structured_tile((height, width), particles=[(20.0, 30.0, 3.0)])
@@ -528,8 +534,8 @@ def test_full_mosaic_preview_downsamples_tiles_before_stitch(tmp_path: Path) -> 
 
 
 def test_pipeline_table_includes_feature_columns(tmp_path: Path) -> None:
-    from src.detection.detector import CANDIDATE_FEATURE_FIELDS
-    from src.io.results_writer import write_csv
+    from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS
+    from src.overall.io.results_writer import write_csv
 
     image = make_structured_tile((64, 64), particles=[(32.0, 30.0, 3.5)])
     write_tile_tiff(tmp_path / "R3_0_1_5X.tif", image)
@@ -545,7 +551,7 @@ def test_pipeline_table_includes_feature_columns(tmp_path: Path) -> None:
         assert column in loaded.columns
 
 
-def test_pipeline_merges_nsew_images_as_one_particle(tmp_path: Path) -> None:
+def test_pipeline_detects_combi_and_the_four_directions(tmp_path: Path) -> None:
     image = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])
     write_tile_tiff(tmp_path / "N.tif", image)
     write_tile_tiff(tmp_path / "S.tif", image)
@@ -555,11 +561,18 @@ def test_pipeline_merges_nsew_images_as_one_particle(tmp_path: Path) -> None:
     config["input_dir"] = str(tmp_path)
     config["output_dir"] = str(tmp_path / "out")
     table, mosaic = run_pipeline(config)
+    assert (tmp_path / "combi_2of4.tif").is_file()
     assert mosaic.placements == []
     assert not table.empty
-    counts = table["nsew_count"].astype(int)
-    assert int(counts.max()) >= 2
-    assert table["nsew_dirs"].astype(str).str.contains("N").any()
+    sources = {Path(name).name for name in table["source_tile"].astype(str)}
+    assert "combi_2of4.tif" in sources
+    dirs = {
+        part.strip()
+        for text in table["nsew_dirs"].fillna("").astype(str)
+        for part in text.split(",")
+        if part.strip()
+    }
+    assert {"N", "S", "E", "W"} <= dirs
 
 
 def test_pipeline_detects_unmatched_names_without_stitching(tmp_path: Path) -> None:
@@ -576,7 +589,7 @@ def test_pipeline_detects_unmatched_names_without_stitching(tmp_path: Path) -> N
 
 
 def test_pipeline_stitches_only_patterned_tiles(tmp_path: Path) -> None:
-    from src.report.report_generator import overlay_markers
+    from src.main_pipeline.report.report_generator import overlay_markers
 
     patterned = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])
     loose = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])

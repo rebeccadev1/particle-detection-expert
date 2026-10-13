@@ -90,7 +90,7 @@ measurement:
   nsew_merge_radius_px: 24.0
 
 # Optional post-filter on DoG hits. Off until a versioned joblib exists.
-# Train with `python -m src.ml.train` (writes models/particle_clf_vN.joblib).
+# Train with `python -m src.training` (writes models/particle_clf_vN.joblib).
 # Switch versions here; do not overwrite an existing vN file.
 ml:
   enabled: true
@@ -101,9 +101,6 @@ ml:
   # to ML survivors. Off: classical cluster/line first (default). On can add
   # lattice neighbors that cluster-kill isolated flakes. Cluster stays on either way.
   score_before_structure: false
-  # Cascade CNN band is stored in the trained joblib. These are fallbacks only.
-  band_low: 0.20
-  band_high: 0.80
 
 # Label tab prefers this particles.csv (under Outputs/) then falls back.
 labeling:

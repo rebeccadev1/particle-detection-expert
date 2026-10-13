@@ -1,4 +1,4 @@
-"""Unmarked crop extraction and patch/cascade FP filter."""
+"""Unmarked crop extraction and patch FP filter."""
 
 from __future__ import annotations
 
@@ -8,25 +8,19 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.detection.detector import ParticleCandidate, compute_tile_residual
-from src.labeling.crops import crop_particle
-from src.ml.cnn import TinyPatchCNN, train_tiny_cnn
-from src.ml.infer import (
-    KIND_CASCADE,
-    apply_ml_filter,
-    combine_cascade_scores,
-    load_artifact,
-)
-from src.ml.patch_features import PATCH_FEATURE_NAMES, patch_feature_vector, patches_to_matrix
-from src.ml.patches import (
+from src.main_pipeline.detection.detector import ParticleCandidate, compute_tile_residual
+from src.verification.crops import crop_particle
+from src.main_pipeline.ml.infer import apply_ml_filter
+from src.main_pipeline.ml.patch_features import PATCH_FEATURE_NAMES, patch_feature_vector
+from src.main_pipeline.ml.patches import (
     PATCH_SIZE,
     collect_unmarked_dataset,
     extract_centered,
     extract_unmarked_channels,
     stack_channels,
 )
-from src.ml.train import save_artifact, train_cascade_classifier, train_patch_classifier
-from src.preprocessing.corrections import apply_corrections
+from src.training.train import save_artifact, train_patch_classifier
+from src.main_pipeline.preprocessing.corrections import apply_corrections
 from tests.fixtures.synthetic import detector_test_config, write_tile_tiff
 from tests.test_labeling import _red_mask
 
@@ -147,24 +141,10 @@ def test_hog_extratrees_separates_letters_from_blobs() -> None:
     assert artifact["n_holdout"] == 0
 
 
-def test_cascade_cnn_on_uncertain_band(tmp_path: Path) -> None:
+def test_patch_filter_uses_threshold(tmp_path: Path) -> None:
     channels, y, groups = _separable_dataset()
-    artifact = train_cascade_classifier(channels, y, groups, cnn_epochs=3)
-    assert artifact["kind"] == KIND_CASCADE
-    assert artifact["cnn"] is not None
-    combined = combine_cascade_scores(
-        np.array([0.05, 0.5, 0.95]),
-        np.array([0.8]),
-        band_low=0.2,
-        band_high=0.8,
-    )
-    assert combined[0] == pytest.approx(0.05)
-    assert combined[1] == pytest.approx(0.8)
-    assert combined[2] == pytest.approx(0.95)
-
-    path = save_artifact(artifact, tmp_path / "cascade.joblib")
-    loaded = load_artifact(path)
-    assert loaded["kind"] == KIND_CASCADE
+    artifact = train_patch_classifier(channels, y, groups)
+    path = save_artifact(artifact, tmp_path / "patch.joblib")
     image = np.zeros((128, 128), dtype=np.float32)
     image[54:74, 54:74] = 1.0
     blob = ParticleCandidate(y_local=64.0, x_local=64.0, size=20.0, confidence=0.9)
@@ -187,25 +167,3 @@ def test_patch_filter_requires_image(tmp_path: Path) -> None:
             config,
         )
 
-
-def test_cascade_band_keeps_hog_when_cnn_is_worse() -> None:
-    from src.ml.train import _select_cascade_band
-
-    y = np.array([1, 1, 1, 1, 0, 0, 0, 0, 0, 0])
-    hog = np.array([0.9, 0.8, 0.7, 0.6, 0.1, 0.1, 0.15, 0.2, 0.05, 0.08])
-    cnn = np.array([0.1, 0.1, 0.1, 0.1, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9])
-    _lo, _hi, combined, _t, metrics, n_uncertain = _select_cascade_band(
-        y, hog, cnn, 0.25
-    )
-    assert metrics["precision"] >= 0.9
-    assert n_uncertain == 0
-    np.testing.assert_allclose(combined, hog)
-
-
-def test_tiny_cnn_learns_separable_patches() -> None:
-    channels, y, _groups = _separable_dataset(n_pos=8, n_neg=8)
-    model = train_tiny_cnn(channels, y, epochs=4, rng=np.random.default_rng(0))
-    assert isinstance(model, TinyPatchCNN)
-    scores = model.predict_proba(channels)
-    assert scores.shape == (16,)
-    assert scores[y == 1].mean() > scores[y == 0].mean()

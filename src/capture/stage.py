@@ -1,0 +1,405 @@
+"""Serpentine stage scan, sent to the printer the same way Pronterface does.
+
+Millimetres, relative moves, a pause at the current point, then a step. Rows
+alternate +X and -X. Between rows the stage steps in -Y. Nothing is homed; the
+scan starts from the current position.
+
+The standard grid covers a 40 by 60 mm area. Each picture sees 6.86 mm, and
+neighbouring pictures overlap by 10 percent, so the stage steps 6.174 mm.
+"""
+
+from __future__ import annotations
+
+import builtins
+import math
+import sys
+import time
+import warnings
+from pathlib import Path
+
+from src.capture.camera_automation_v2 import (
+    MOTION_PAUSE_S,
+    NSEW_GAP_S,
+    RING_SIDES,
+    SETTLE_S,
+    shutter_ms,
+)
+
+def _load_printer_link() -> dict:
+    """Keep the open printer across a script reload.
+
+    A reload otherwise forgets the connection and the port stays open in the
+    old thread. The next connect opens it again, and macOS then returns no data.
+    """
+    shared = getattr(builtins, "_asml_printer_link", None)
+    if isinstance(shared, dict) and "core" in shared:
+        return shared
+    shared = {"core": None, "port": None, "baud": None, "error": ""}
+    builtins._asml_printer_link = shared
+    return shared
+
+
+_LINK = _load_printer_link()
+
+FOV_MM = 6.86
+OVERLAP = 0.10
+SCAN_WIDTH_MM = 40.0
+SCAN_HEIGHT_MM = 60.0
+DEFAULT_STEP_MM = FOV_MM * (1.0 - OVERLAP)
+DEFAULT_FEED = 1000
+DEFAULT_DWELL_MS = 1000
+DEFAULT_BAUD = 115200
+# Extra time after the light settle and the shutter, for trigger, readout, and save.
+PAUSE_MARGIN_MS = 500
+
+
+def grid_stops(span_mm: float, fov_mm: float = FOV_MM, step_mm: float = DEFAULT_STEP_MM) -> int:
+    """Stops needed so the pictures cover ``span_mm``.
+
+    The first stop already covers one field of view. Each further stop advances
+    by ``step_mm``.
+    """
+    span_mm = float(span_mm)
+    fov_mm = float(fov_mm)
+    step_mm = float(step_mm)
+    if step_mm <= 0:
+        raise ValueError("step must be greater than 0")
+    if span_mm <= fov_mm:
+        return 1
+    moves = math.ceil((span_mm - fov_mm) / step_mm - 1e-9)
+    return int(moves) + 1
+
+
+DEFAULT_COLUMNS = grid_stops(SCAN_WIDTH_MM)
+DEFAULT_ROWS = grid_stops(SCAN_HEIGHT_MM)
+
+
+def _num(value: float) -> str:
+    rounded = round(float(value), 4)
+    if abs(rounded - round(rounded)) < 1e-9:
+        return str(int(round(rounded)))
+    return f"{rounded:.4f}".rstrip("0").rstrip(".")
+
+
+def build_scan_gcode(
+    step_mm: float = DEFAULT_STEP_MM,
+    columns: int = DEFAULT_COLUMNS,
+    rows: int = DEFAULT_ROWS,
+    feed: float = DEFAULT_FEED,
+    dwell_ms: float = DEFAULT_DWELL_MS,
+) -> str:
+    """G-code for one serpentine scan. Defaults cover 40 by 60 mm at 10 percent overlap.
+
+    ``columns`` and ``rows`` are the number of stops. The stage makes one
+    fewer move than that along each axis.
+    """
+    step_mm = float(step_mm)
+    columns = int(columns)
+    rows = int(rows)
+    feed = float(feed)
+    dwell_ms = int(round(float(dwell_ms)))
+    if step_mm <= 0:
+        raise ValueError("step must be greater than 0")
+    if columns < 1 or rows < 1:
+        raise ValueError("the scan needs at least one column and one row")
+    if feed <= 0:
+        raise ValueError("feed must be greater than 0")
+    if dwell_ms < 0:
+        raise ValueError("pause cannot be negative")
+
+    step = _num(step_mm)
+    feed_text = _num(feed)
+    lines = ["G21", "G91", "", "; Start at top-left position"]
+
+    def pause() -> None:
+        lines.append(f"G4 P{dwell_ms}")
+
+    def move(token: str) -> None:
+        pause()
+        lines.append(f"G1 {token} F{feed_text}")
+
+    for row in range(rows):
+        sign = "" if row % 2 == 0 else "-"
+        for _ in range(columns - 1):
+            move(f"X{sign}{step}")
+        if row < rows - 1:
+            move(f"Y-{step}")
+    pause()
+    lines.extend(["", "G90", ""])
+    return "\n".join(lines)
+
+
+def pause_plan(total_exposure_ms: float, mode: str) -> dict:
+    """How long the stage holds still so the pictures at one stop can finish.
+
+    Uniform takes one frame. The shutter is the total exposure divided by the
+    four sides, because they are on together. NSEW takes four frames, and each
+    shutter is the full total exposure. Every frame also waits for the lights
+    to settle, plus a fixed margin. Automatic NSEW waits ``NSEW_GAP_S`` between
+    sides. Each stop also waits ``MOTION_PAUSE_S`` after the move.
+    """
+    uniform = mode != "NSEW"
+    frames = 1 if uniform else RING_SIDES
+    gaps = 0 if uniform else frames - 1
+    sides_on = RING_SIDES if uniform else 1
+    shutter = shutter_ms(total_exposure_ms, sides_on)
+    settle_ms = SETTLE_S * 1000.0
+    gap_ms = 0.0 if uniform else NSEW_GAP_S * 1000.0
+    motion_ms = MOTION_PAUSE_S * 1000.0
+    per_frame = settle_ms + shutter + PAUSE_MARGIN_MS
+    return {
+        "dwell_ms": int(math.ceil(motion_ms + frames * per_frame + gaps * gap_ms)),
+        "frames": frames,
+        "gaps": gaps,
+        "gap_ms": gap_ms,
+        "motion_ms": motion_ms,
+        "shutter_ms": shutter,
+        "settle_ms": settle_ms,
+        "margin_ms": PAUSE_MARGIN_MS,
+        "mode": "Uniform" if uniform else "NSEW",
+    }
+
+
+def build_relative_move_gcode(axis: str, delta_mm: float, feed: float) -> str:
+    """One relative step, then wait until the printer has finished moving.
+
+    ``G91`` steps from the current position. ``M400`` is the handshake that the
+    move is done. ``G90`` puts the printer back in the absolute mode a scan
+    leaves behind.
+    """
+    axis = str(axis).upper()
+    if axis not in {"X", "Y", "Z"}:
+        raise ValueError("axis must be X, Y, or Z")
+    delta_mm = float(delta_mm)
+    feed = float(feed)
+    if not math.isfinite(delta_mm):
+        raise ValueError(f"{axis} move must be a finite distance")
+    if feed <= 0:
+        raise ValueError("feed must be greater than 0")
+    return "\n".join(
+        [
+            "G21",
+            "G91",
+            f"G1 {axis}{_num(delta_mm)} F{_num(feed)}",
+            "M400",
+            "G90",
+            "",
+        ]
+    )
+
+
+def build_z_move_gcode(delta_mm: float, feed: float) -> str:
+    """One relative Z step, then wait until the printer has finished moving."""
+    return build_relative_move_gcode("Z", delta_mm, feed)
+
+
+def move_axis(axis: str, delta_mm: float, feed: float) -> None:
+    """Step one axis and block until that short program has finished."""
+    text = build_relative_move_gcode(axis, delta_mm, feed)
+    axis = str(axis).upper()
+    status = printer_status()
+    if not status["connected"]:
+        raise RuntimeError("Connect the printer first.")
+    if not status["online"]:
+        raise RuntimeError("The printer has not answered yet. Wait a moment and try again.")
+    if status["printing"]:
+        raise RuntimeError("A scan is already running.")
+    start_gcode(text)
+    timeout_s = abs(float(delta_mm)) / float(feed) * 60.0 + 5.0
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        info = printer_status()
+        if not info["printing"]:
+            if not info["connected"]:
+                raise RuntimeError(info["error"] or "The printer disconnected.")
+            return
+        time.sleep(0.05)
+    stop_scan()
+    raise TimeoutError(f"The {axis} move did not finish.")
+
+
+def move_z(delta_mm: float, feed: float) -> None:
+    """Step Z and block until that short program has finished."""
+    move_axis("Z", delta_mm, feed)
+
+
+def scan_stops(columns: int, rows: int, step_mm: float) -> list[tuple[int, int, str | None, float]]:
+    """Visit order for one serpentine, starting at the current position.
+
+    Each item is ``(row, col, axis, delta_mm)``. Row and column are 1-based
+    grid positions, with column 1 on the side where the scan starts. The first
+    stop is already under the camera, so its axis is ``None``. Later stops
+    step +X along odd rows, -X along even rows, and -Y to the next row.
+    """
+    columns = int(columns)
+    rows = int(rows)
+    step_mm = float(step_mm)
+    if columns < 1 or rows < 1:
+        raise ValueError("the scan needs at least one column and one row")
+    if step_mm <= 0:
+        raise ValueError("step must be greater than 0")
+    stops: list[tuple[int, int, str | None, float]] = []
+    for row_index in range(rows):
+        going_right = row_index % 2 == 0
+        col_indexes = range(columns) if going_right else range(columns - 1, -1, -1)
+        for col_index in col_indexes:
+            if not stops:
+                stops.append((row_index + 1, col_index + 1, None, 0.0))
+                continue
+            previous_col = stops[-1][1]
+            col = col_index + 1
+            if col == previous_col:
+                stops.append((row_index + 1, col, "Y", -step_mm))
+            else:
+                direction = 1.0 if going_right else -1.0
+                stops.append((row_index + 1, col, "X", direction * step_mm))
+    return stops
+
+
+def next_scan_row(existing: list[tuple[int, int]]) -> int:
+    """First grid row of a new scan, below every captures/(row,col) folder."""
+    if not existing:
+        return 1
+    return max(row for row, _col in existing) + 1
+
+
+def scan_summary(step_mm: float, columns: int, rows: int) -> dict:
+    """Travel and stop counts for the controls."""
+    step_mm = float(step_mm)
+    columns = int(columns)
+    rows = int(rows)
+    return {
+        "x_mm": (columns - 1) * step_mm,
+        "y_mm": (rows - 1) * step_mm,
+        "stops": columns * rows,
+        "columns": columns,
+        "rows": rows,
+    }
+
+
+def _pipx_printrun_site() -> Path | None:
+    root = Path.home() / "Library/Application Support/pipx/venvs/printrun/lib"
+    found = sorted(root.glob("python*/site-packages/printrun/printcore.py"))
+    if not found:
+        return None
+    return found[-1].parents[1]
+
+
+def load_printcore():
+    """printcore from this environment, or from the pipx Pronterface install."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        try:
+            from printrun.gcoder import GCode
+            from printrun.printcore import printcore
+        except ImportError:
+            site = _pipx_printrun_site()
+            if site is None:
+                raise ImportError(
+                    "Printrun is not available. Install it in the project "
+                    "environment with: .venv/bin/pip install Printrun"
+                ) from None
+            site_text = str(site)
+            if site_text not in sys.path:
+                sys.path.insert(0, site_text)
+            from printrun.gcoder import GCode
+            from printrun.printcore import printcore
+        return printcore, GCode
+
+
+def _remember_errors(core) -> None:
+    original = core.logError
+
+    def log_error(error) -> None:
+        _LINK["error"] = str(error)
+        original(error)
+
+    core.logError = log_error
+
+
+def connect_printer(port: str, baud: int = DEFAULT_BAUD):
+    """Open the printer port. Returns once the port is open, before the firmware answers."""
+    printcore, _gcode = load_printcore()
+    disconnect_printer()
+    _LINK["error"] = ""
+    core = printcore()
+    _remember_errors(core)
+    core.connect(port, int(baud))
+    if core.printer is None:
+        message = _LINK["error"] or f"Could not open {port}."
+        raise RuntimeError(message)
+    _LINK["core"] = core
+    _LINK["port"] = port
+    _LINK["baud"] = int(baud)
+    return core
+
+
+def disconnect_printer() -> None:
+    core = _LINK.get("core")
+    _LINK["core"] = None
+    _LINK["port"] = None
+    _LINK["baud"] = None
+    if core is None:
+        return
+    try:
+        if getattr(core, "printing", False) or getattr(core, "paused", False):
+            core.cancelprint()
+        core.disconnect()
+    except Exception as exc:
+        _LINK["error"] = str(exc)
+
+
+def _read_thread_alive(core) -> bool:
+    thread = getattr(core, "read_thread", None)
+    return thread is not None and thread.is_alive()
+
+
+def printer_status() -> dict:
+    core = _LINK.get("core")
+    if core is None or getattr(core, "printer", None) is None:
+        return {
+            "connected": False,
+            "online": False,
+            "printing": False,
+            "port": None,
+            "index": 0,
+            "total": 0,
+            "error": _LINK.get("error") or "",
+        }
+    queue = getattr(core, "mainqueue", None)
+    lines = getattr(queue, "lines", None) or []
+    return {
+        "connected": True,
+        "online": bool(getattr(core, "online", False)) and _read_thread_alive(core),
+        "printing": bool(getattr(core, "printing", False)),
+        "port": _LINK.get("port"),
+        "index": int(getattr(core, "queueindex", 0) or 0),
+        "total": len(lines),
+        "error": _LINK.get("error") or "",
+    }
+
+
+def start_gcode(text: str) -> None:
+    core = _LINK.get("core")
+    if core is None or getattr(core, "printer", None) is None:
+        raise RuntimeError("Connect the printer first.")
+    if not getattr(core, "online", False):
+        raise RuntimeError("The printer has not answered yet. Wait a moment and try again.")
+    if getattr(core, "printing", False):
+        raise RuntimeError("A scan is already running.")
+    _printcore, GCode = load_printcore()
+    gcode = GCode(text.splitlines())
+    if not gcode.lines:
+        raise RuntimeError("The scan has no moves.")
+    if not core.startprint(gcode):
+        raise RuntimeError("The printer did not start the scan.")
+    _LINK["error"] = ""
+
+
+def stop_scan() -> None:
+    """Drop the rest of the queue. The move already in progress still finishes."""
+    core = _LINK.get("core")
+    if core is None:
+        return
+    if getattr(core, "printing", False) or getattr(core, "paused", False):
+        core.cancelprint()

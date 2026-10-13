@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.detection.detector import detect_particles
-from src.preprocessing.corrections import apply_corrections
+from src.main_pipeline.detection.detector import detect_particles
+from src.main_pipeline.preprocessing.corrections import apply_corrections
 from tests.fixtures.synthetic import (
     detector_test_config,
     make_dark_field_flake,
@@ -23,7 +23,7 @@ def _nearest_distance(detected: list[tuple[float, float]], truth: tuple[float, f
 
 
 def test_equivalent_diameter_matches_disk_area() -> None:
-    from src.detection.detector import blob_equivalent_diameter
+    from src.main_pipeline.detection.detector import blob_equivalent_diameter
 
     image = np.zeros((81, 81), dtype=np.float32)
     yy, xx = np.ogrid[:81, :81]
@@ -35,9 +35,25 @@ def test_equivalent_diameter_matches_disk_area() -> None:
     assert abs(diameter - 20.0) < 1.0
 
 
+def test_footprint_edge_encloses_the_disk() -> None:
+    from src.main_pipeline.detection.detector import blob_equivalent_diameter, blob_footprint
+
+    image = np.zeros((81, 81), dtype=np.float32)
+    yy, xx = np.ogrid[:81, :81]
+    disk = (yy - 40) ** 2 + (xx - 40) ** 2 <= 10.0**2
+    image[disk] = 1.0
+    diameter, edge = blob_footprint(image, 40.0, 40.0, radius=10.0)
+    assert abs(diameter - blob_equivalent_diameter(image, 40.0, 40.0, radius=10.0)) < 1e-6
+    assert edge
+    pts = np.concatenate([np.asarray(contour).reshape(-1, 2) for contour in edge])
+    radii = np.hypot(pts[:, 1] - 40.0, pts[:, 0] - 40.0)
+    assert radii.min() > 8.0
+    assert radii.max() < 12.0
+
+
 def test_equivalent_diameter_uses_photo_not_floor() -> None:
     """A bright disk on a non-zero photo floor still measures ~disk width."""
-    from src.detection.detector import blob_equivalent_diameter
+    from src.main_pipeline.detection.detector import blob_equivalent_diameter
 
     image = np.full((81, 81), 0.4, dtype=np.float32)
     yy, xx = np.ogrid[:81, :81]
@@ -102,7 +118,7 @@ def test_fft_suppression_finds_blob_not_lattice() -> None:
 
 
 def test_fft_mask_reuse_matches_per_tile_mask() -> None:
-    from src.detection.detector import build_fft_notch_mask, suppress_periodic_fft
+    from src.main_pipeline.detection.detector import build_fft_notch_mask, suppress_periodic_fft
 
     image = make_structured_tile(shape=(128, 128), lattice_period=16, particles=[(64.0, 48.0, 4.0)])
     mask = build_fft_notch_mask(image, peak_threshold=0.3, notch_radius=2)
@@ -116,7 +132,7 @@ def test_fft_mask_reuse_matches_per_tile_mask() -> None:
 def test_shared_fft_mask_not_built_for_per_tile() -> None:
     from pathlib import Path
 
-    from src.pipeline.runner import _prepare_fft_mask
+    from src.main_pipeline.runner import _prepare_fft_mask
 
     config = detector_test_config(detection={"method": "fft", "fft_mask": "per_tile"})
     assert _prepare_fft_mask([Path("unused.tif")], config) is None
@@ -166,7 +182,7 @@ def test_two_region_tile_keeps_blob_rejects_step() -> None:
 
 
 def test_clustered_border_beads_are_dropped() -> None:
-    from src.detection.detector import ParticleCandidate, reject_clustered_candidates
+    from src.main_pipeline.detection.detector import ParticleCandidate, reject_clustered_candidates
 
     chain = [
         ParticleCandidate(y_local=10.0, x_local=float(20 + 12 * i), size=10.0, confidence=0.9)
@@ -179,7 +195,7 @@ def test_clustered_border_beads_are_dropped() -> None:
 
 
 def test_cluster_keeps_large_flake_among_small_neighbors() -> None:
-    from src.detection.detector import ParticleCandidate, reject_clustered_candidates
+    from src.main_pipeline.detection.detector import ParticleCandidate, reject_clustered_candidates
 
     beads = [
         ParticleCandidate(
@@ -201,7 +217,7 @@ def test_cluster_keeps_large_flake_among_small_neighbors() -> None:
 
 def test_cluster_keeps_modestly_larger_flake() -> None:
     """~20 µm flake in a 13 µm lattice is ~1.3× median, not 1.6×."""
-    from src.detection.detector import ParticleCandidate, reject_clustered_candidates
+    from src.main_pipeline.detection.detector import ParticleCandidate, reject_clustered_candidates
 
     beads = [
         ParticleCandidate(y_local=10.0, x_local=float(20 + 12 * i), size=13.0, confidence=0.9)
@@ -214,7 +230,7 @@ def test_cluster_keeps_modestly_larger_flake() -> None:
 
 
 def test_structure_filters_can_be_deferred() -> None:
-    from src.detection.detector import apply_structure_filters, detect_particles
+    from src.main_pipeline.detection.detector import apply_structure_filters, detect_particles
 
     image = make_structured_tile(particles=[(40.0, 42.0, 3.0)])
     config = detector_test_config(
@@ -229,7 +245,7 @@ def test_structure_filters_can_be_deferred() -> None:
 
 
 def test_axis_aligned_box_frame_is_dropped() -> None:
-    from src.detection.detector import ParticleCandidate, reject_axis_aligned_chains
+    from src.main_pipeline.detection.detector import ParticleCandidate, reject_axis_aligned_chains
 
     frame = [
         ParticleCandidate(y_local=20.0, x_local=float(30 + 20 * i), size=10.0, confidence=0.9)
@@ -242,7 +258,7 @@ def test_axis_aligned_box_frame_is_dropped() -> None:
 
 
 def test_axis_chain_keeps_large_outlier_in_a_row() -> None:
-    from src.detection.detector import ParticleCandidate, reject_axis_aligned_chains
+    from src.main_pipeline.detection.detector import ParticleCandidate, reject_axis_aligned_chains
 
     frame = [
         ParticleCandidate(y_local=20.0, x_local=float(30 + 20 * i), size=10.0, confidence=0.9)
@@ -256,7 +272,7 @@ def test_axis_chain_keeps_large_outlier_in_a_row() -> None:
 
 def test_axis_chain_ignores_sparse_same_row() -> None:
     """Two distant flakes in the same 10 px band are not a box frame."""
-    from src.detection.detector import ParticleCandidate, reject_axis_aligned_chains
+    from src.main_pipeline.detection.detector import ParticleCandidate, reject_axis_aligned_chains
 
     sparse = [
         ParticleCandidate(y_local=20.0, x_local=40.0, size=17.3, confidence=1.0),
@@ -268,7 +284,7 @@ def test_axis_chain_ignores_sparse_same_row() -> None:
 
 
 def test_fft_without_lattice_falls_back_to_tophat() -> None:
-    from src.detection.detector import _background_residual
+    from src.main_pipeline.detection.detector import _background_residual
 
     yy, xx = np.mgrid[0:64, 0:64]
     image = np.full((64, 64), 0.2, dtype=np.float32)
@@ -283,7 +299,7 @@ def test_fft_without_lattice_falls_back_to_tophat() -> None:
 
 
 def test_coarse_edge_distance_is_to_thin_ridge() -> None:
-    from src.detection.detector import coarse_edge_distance
+    from src.main_pipeline.detection.detector import coarse_edge_distance
 
     image = make_two_region_tile(step_x=96, particle=(64.0, 48.0, 4.0))
     dist = coarse_edge_distance(image, sigma=6.0, min_length=40.0)
@@ -314,7 +330,7 @@ def _large_debris_config(**detection: object) -> dict:
 
 
 def test_dark_residual_peak_is_not_a_particle() -> None:
-    from src.detection.detector import blob_is_local_peak
+    from src.main_pipeline.detection.detector import blob_is_local_peak
 
     image = np.full((64, 64), 0.1, dtype=np.float32)
     image[20:28, 20:28] = 0.9
@@ -453,7 +469,7 @@ def test_bright_blob_near_region_edge_is_kept() -> None:
 
 
 def test_radial_means_peak_is_highest_in_inner_ring() -> None:
-    from src.detection.detector import blob_radial_means
+    from src.main_pipeline.detection.detector import blob_radial_means
 
     image = np.zeros((81, 81), dtype=np.float32)
     yy, xx = np.ogrid[:81, :81]
@@ -528,7 +544,7 @@ def test_pad_corner_stays_dropped_with_island_protect() -> None:
 
 
 def test_recall_profile_is_identity() -> None:
-    from src.config import with_recall_profile
+    from src.overall.config import with_recall_profile
 
     config = detector_test_config(
         detection={
@@ -541,7 +557,7 @@ def test_recall_profile_is_identity() -> None:
 
 
 def test_trace_locations_marks_kept_and_empty() -> None:
-    from src.detection.detector import detect_particles, trace_locations
+    from src.main_pipeline.detection.detector import detect_particles, trace_locations
 
     image = make_structured_tile(particles=[(40.0, 42.0, 3.0)])
     config = detector_test_config()

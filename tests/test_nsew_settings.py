@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from src.config import (
+from src.overall.config import (
     PACKAGE_ROOT,
     apply_nsew_settings,
     deep_update,
@@ -76,9 +76,9 @@ def test_apply_knob_writes_nsew_preprocess_and_detect() -> None:
 
 def test_score_table_matches_groundup_v3_particles_only_last_run() -> None:
     sweep = _load_sweep()
-    from src.config import WORKSPACE_ROOT, load_config
-    from src.labeling.queue import load_particles_csv
-    from src.labeling.store import LabelStore
+    from src.overall.config import WORKSPACE_ROOT, load_config
+    from src.verification.queue import load_particles_csv
+    from src.verification.store import LabelStore
 
     csv_path = WORKSPACE_ROOT / "Outputs" / "Groundup v3 Particles only" / "particles.csv"
     if not csv_path.is_file():
@@ -128,6 +128,13 @@ def test_app_sidebar_has_nsew_toggle() -> None:
     assert "Uniform" in text
     assert "ui_settings_nsew" in text
     assert "apply_nsew_settings" in text
+    assert '["Loading", "Preprocessing", "Detection", "Output"]' in text
+    assert '["Main Pipeline", "Verification", "Training", "Shadow", "Redirector", "Capture"]' in text
+    assert '["Tinder", "Pointer", "Database"]' in text
+    assert "Last run" in text
+    assert "Summary of last run" in text
+    assert "_nsew_config(base)" in text
+    assert 'if st.session_state.get("ui_settings_nsew"):' in text.split("def _on_reset_standard")[1].split("def ")[0]
 
 
 def test_trial_rank_prefers_high_nsew_recall_then_low_unhappiness() -> None:

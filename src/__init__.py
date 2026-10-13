@@ -1,1 +1,0 @@
-"""Particle detection package."""

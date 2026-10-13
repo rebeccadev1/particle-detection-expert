@@ -8,10 +8,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
-from src.ml.features import FEATURE_COLUMNS, dataframe_feature_matrix
-from src.ml.infer import apply_ml_filter, load_artifact, next_versioned_model_path
-from src.ml.train import save_artifact, train_classifier
+from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
+from src.main_pipeline.ml.features import FEATURE_COLUMNS, dataframe_feature_matrix
+from src.main_pipeline.ml.infer import apply_ml_filter, load_artifact, next_versioned_model_path
+from src.training.train import save_artifact, train_classifier
 
 
 def _feature_table(n_pos: int = 12, n_neg: int = 24) -> pd.DataFrame:
@@ -91,7 +91,7 @@ def test_apply_ml_filter_errors_when_enabled_without_model(tmp_path: Path) -> No
 
 
 def test_keep_all_threshold_is_min_positive_score() -> None:
-    from src.ml.train import keep_all_threshold, hard_negative_weights
+    from src.training.train import keep_all_threshold, hard_negative_weights
 
     y = np.array([1, 1, 0, 0])
     proba = np.array([0.4, 0.9, 0.3, 0.8])
