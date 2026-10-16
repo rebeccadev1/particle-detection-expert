@@ -37,6 +37,8 @@ _JOB: dict = {
     "best_sharpness": 0.0,
     "error": "",
     "stopped": False,
+    "steps": [],
+    "run_id": 0,
 }
 
 
@@ -93,9 +95,10 @@ def focus_search(
 
     ``measure()`` returns a sharpness score at the current height. ``move(delta_mm)``
     steps Z and returns when that step has finished. Positive delta is printer +Z.
-    The first probe is upward. If that step is not sharper, the search steps back
-    and climbs downward. A step counts as sharper only when the score rises by
-    ``min_gain``. The same climb then repeats with ``fine_mm``. No step is
+    The first probe is upward. A step counts as sharper only when the score rises by
+    ``min_gain``. A miss is scored again on the next frame at the same height. If
+    that still misses, one more step in the same direction is taken before the
+    search turns around. The same climb then repeats with ``fine_mm``. No step is
     commanded past ``max_travel_mm`` from the start. On the way out, including
     when ``should_stop`` is set, the stage returns to the best height measured.
     """
@@ -136,56 +139,97 @@ def focus_search(
             return True
         return False
 
-    def report(score: float, best_offset: float, best_score: float) -> None:
+    def report(
+        score: float,
+        best_offset: float,
+        best_score: float,
+        *,
+        phase: str,
+        decision: str,
+    ) -> None:
         if on_sample is not None:
-            on_sample(offset, score, best_offset, best_score)
+            on_sample(
+                offset,
+                score,
+                best_offset,
+                best_score,
+                phase=phase,
+                decision=decision,
+            )
 
     score = float(measure())
     best_offset = 0.0
     best_score = score
-    report(score, best_offset, best_score)
+    report(score, best_offset, best_score, phase="start", decision="start")
 
-    def climb(step: float) -> None:
-        nonlocal score, best_offset, best_score, stopped
+    def sample(phase: str) -> bool | None:
+        """Score this height. A miss gets a second frame before it counts."""
+        nonlocal score, best_offset, best_score
+        score = float(measure())
+        if _better(score, best_score, min_gain):
+            best_score = score
+            best_offset = offset
+            report(score, best_offset, best_score, phase=phase, decision="sharper")
+            return True
+        report(score, best_offset, best_score, phase=phase, decision="not sharper")
+        if halt():
+            return None
+        score = float(measure())
+        if _better(score, best_score, min_gain):
+            best_score = score
+            best_offset = offset
+            report(score, best_offset, best_score, phase=phase, decision="sharper")
+            return True
+        report(score, best_offset, best_score, phase=phase, decision="again")
+        return False
+
+    def retreat(phase: str) -> None:
+        nonlocal score
+        go(best_offset)
+        score = best_score
+        report(score, best_offset, best_score, phase=phase, decision="back")
+
+    def climb(step: float, phase: str) -> None:
         for direction in (1.0, -1.0):
             if halt():
                 return
-            target = offset + direction * step
-            if not within(target):
-                continue
-            go(target)
-            score = float(measure())
-            if _better(score, best_score, min_gain):
-                best_score = score
-                best_offset = offset
-                report(score, best_offset, best_score)
-                while True:
-                    if halt():
-                        return
-                    target = offset + direction * step
-                    if not within(target):
-                        return
-                    go(target)
-                    score = float(measure())
-                    if _better(score, best_score, min_gain):
-                        best_score = score
-                        best_offset = offset
-                        report(score, best_offset, best_score)
-                        continue
-                    go(best_offset)
-                    score = best_score
-                    report(score, best_offset, best_score)
+            improved = False
+            extra_used = False
+            while True:
+                if halt():
                     return
-            go(best_offset)
-            score = best_score
-            report(score, best_offset, best_score)
+                target = offset + direction * step
+                if not within(target):
+                    if extra_used:
+                        retreat(phase)
+                        if improved:
+                            return
+                        break
+                    if improved:
+                        return
+                    break
+                go(target)
+                found = sample(phase)
+                if found is None:
+                    return
+                if found:
+                    improved = True
+                    extra_used = False
+                    continue
+                if not extra_used:
+                    extra_used = True
+                    continue
+                retreat(phase)
+                if improved:
+                    return
+                break
 
-    climb(coarse_mm)
+    climb(coarse_mm, "coarse")
     if not stopped:
-        climb(fine_mm)
+        climb(fine_mm, "fine")
     if abs(offset - best_offset) > _LIMIT_EPS_MM:
         go(best_offset)
-        report(best_score, best_offset, best_score)
+        report(best_score, best_offset, best_score, phase="return", decision="back")
     return FocusResult(
         offset_mm=best_offset,
         sharpness=best_score,
@@ -235,6 +279,8 @@ def autofocus_status() -> dict:
             "best_sharpness": float(_JOB["best_sharpness"]),
             "error": _JOB["error"],
             "stopped": bool(_JOB["stopped"]),
+            "steps": [dict(step) for step in _JOB["steps"]],
+            "run_id": int(_JOB["run_id"]),
         }
 
 
@@ -327,6 +373,8 @@ def start_autofocus(
         _JOB["best_sharpness"] = 0.0
         _JOB["error"] = ""
         _JOB["stopped"] = False
+        _JOB["steps"] = []
+        _JOB["run_id"] = int(_JOB["run_id"]) + 1
     worker.start()
 
 
@@ -349,12 +397,28 @@ def _autofocus_thread(
     def move(delta_mm: float) -> None:
         move_z(delta_mm, feed)
 
-    def on_sample(offset_mm: float, score: float, best_offset_mm: float, best_score: float) -> None:
+    def on_sample(
+        offset_mm: float,
+        score: float,
+        best_offset_mm: float,
+        best_score: float,
+        *,
+        phase: str,
+        decision: str,
+    ) -> None:
         with _JOB_LOCK:
             _JOB["offset_mm"] = offset_mm
             _JOB["sharpness"] = score
             _JOB["best_offset_mm"] = best_offset_mm
             _JOB["best_sharpness"] = best_score
+            _JOB["steps"].append(
+                {
+                    "phase": phase,
+                    "offset_mm": float(offset_mm),
+                    "sharpness": float(score),
+                    "decision": decision,
+                }
+            )
 
     try:
         result = focus_search(

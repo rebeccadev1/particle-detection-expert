@@ -1193,8 +1193,13 @@ def _draw_footprint_edge(
     crop_x0: float = 0.0,
     crop_y0: float = 0.0,
     scale: float = 1.0,
+    color: tuple[int, int, int] = FOOTPRINT_EDGE_COLOR,
+    thickness: int = cv2.FILLED,
 ) -> None:
-    """Fill the footprint. Contours are full-image ``(x, y)`` pixels."""
+    """Draw the footprint. Contours are full-image ``(x, y)`` pixels.
+
+    The default fills the area. A positive ``thickness`` strokes the outline.
+    """
     if rgb.size == 0 or not edge:
         return
     drawn: list[np.ndarray] = []
@@ -1208,12 +1213,122 @@ def _draw_footprint_edge(
         drawn.append(np.round(pts).astype(np.int32))
     if not drawn:
         return
+    stroke = {"lineType": cv2.LINE_AA} if thickness != cv2.FILLED else {}
     cv2.drawContours(
         rgb,
         drawn,
         contourIdx=-1,
-        color=FOOTPRINT_EDGE_COLOR,
-        thickness=cv2.FILLED,
+        color=color,
+        thickness=thickness,
+        **stroke,
+    )
+
+
+# Thin outline of the measured footprint on database particle crops.
+AREA_LINE_COLOR = (255, 0, 0)
+AREA_LINE_THICKNESS = 2
+
+
+def _saved_marker_mask(rgb: np.ndarray) -> np.ndarray:
+    """Pixels of the saved marker circle, orange or green, allowing JPEG rounding."""
+    red = rgb[:, :, 0].astype(np.int16)
+    green = rgb[:, :, 1].astype(np.int16)
+    blue = rgb[:, :, 2].astype(np.int16)
+    orange = (red > 190) & (green > 70) & (green < 200) & (blue < 100) & (red > green + 30)
+    marked_green = (green > 140) & (green > red + 40) & (green > blue + 20) & (red < 140) & (
+        blue < 140
+    )
+    if int(orange.sum()) >= int(marked_green.sum()):
+        return orange
+    return marked_green
+
+
+def outline_particle_area(
+    rgb: np.ndarray,
+    *,
+    size_nm: float,
+    pixel_size_nm: float,
+    config: Mapping[str, Any] | None = None,
+) -> np.ndarray:
+    """Copy of a saved crop with a thin red line around the measured area.
+
+    The saved marker circle is left in place and is not part of the area. The line
+    follows the same contrast footprint as the equivalent diameter: pixels
+    that stand out by ``size_mass_fraction`` of the peak contrast.
+    """
+    image = np.asarray(rgb)
+    if image.ndim != 3 or image.shape[2] < 3 or image.size == 0:
+        return image
+    shown = np.ascontiguousarray(image[:, :, :3])
+    if shown.dtype != np.uint8:
+        shown = np.clip(shown, 0, 255).astype(np.uint8)
+    else:
+        shown = shown.copy()
+    marker = _saved_marker_mask(shown)
+    gray = shown.astype(np.float64).mean(axis=2)
+    height, width = gray.shape
+    if int(marker.sum()) >= 12:
+        ys, xs = np.where(marker)
+        cy = float(np.median(ys))
+        cx = float(np.median(xs))
+        ring = float(np.median(np.hypot(ys.astype(np.float64) - cy, xs.astype(np.float64) - cx)))
+        # The saved circle is drawn 10 px outside the equivalent radius.
+        radius = max(ring - 10.0, 2.0)
+        keep = ~marker
+        fill = float(np.median(gray[keep])) if np.any(keep) else float(np.median(gray))
+        gray = gray.copy()
+        gray[marker] = fill
+    else:
+        cy = 0.5 * float(height - 1)
+        cx = 0.5 * float(width - 1)
+        scale = float(pixel_size_nm) if float(pixel_size_nm) > 0 else 1.0
+        radius = max(float(size_nm) / scale / 2.0, 2.0)
+    cfg = dict(config or {})
+    mass = float(cfg_get(cfg, "detection.size_mass_fraction", 0.4) or 0.4)
+    bright = bool(cfg_get(cfg, "detection.particles_bright", True))
+    _diameter, edge = blob_footprint(
+        gray,
+        cy,
+        cx,
+        radius,
+        mass_fraction=mass,
+        bright=bright,
+        half=max(height, width),
+    )
+    if not edge or _diameter <= 0:
+        return shown
+    area = np.pi * (0.5 * _diameter) ** 2
+    if area > 0.45 * float(height * width):
+        return shown
+    _draw_footprint_edge(
+        shown,
+        edge,
+        color=AREA_LINE_COLOR,
+        thickness=AREA_LINE_THICKNESS,
+    )
+    return shown
+
+
+def outline_particle_crop_file(
+    path: str | Path,
+    *,
+    size_nm: float,
+    pixel_size_nm: float,
+    config: Mapping[str, Any] | None = None,
+) -> np.ndarray | None:
+    """Load a database JPEG and draw the measured-area outline."""
+    file_path = Path(path)
+    if not file_path.is_file():
+        return None
+    bgr = cv2.imread(str(file_path), cv2.IMREAD_COLOR)
+    if bgr is None:
+        return None
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    return outline_particle_area(
+        rgb,
+        size_nm=size_nm,
+        pixel_size_nm=pixel_size_nm,
+        config=config,
     )
 
 

@@ -639,7 +639,7 @@ Four images of the **same field** named `N`, `S`, `E`, `W` (any common suffix) u
 
 Outputs go to `Outputs/Output {folder name}/`. 2-of-4 is also written without the `_2of4` suffix.
 
-Detection of those combined images (and of the four raw angles) uses the main pipeline. The sidebar **NSEW** toggle merges `nsew_config.yaml` on top of `config.yaml`: 3.5 µm/px, denoise σ 0.5, `blob_min_sigma` 9, `blob_threshold` 0.3, ML threshold **0.55**, same v5 model. Off restores `config.yaml`, whose v5 threshold is **0.39**.
+Detection of those combined images (and of the four raw angles) uses the main pipeline. The sidebar **NSEW** toggle merges `nsew_config.yaml` on top of `config.yaml` (ML off in that overlay). Off restores `config.yaml`: v4 at threshold **0.23**.
 
 ---
 
@@ -732,8 +732,8 @@ Defaults below are from current `config.yaml` unless noted. The Streamlit sideba
 | Key | Default | Notes |
 |-----|---------|--------|
 | `ml.enabled` | true | Score proposals. Raises if the joblib is missing. |
-| `ml.model_path` | `models/particle_clf_v5.joblib` | Relative to `particle_detection/`. Versioned; do not overwrite a vN file. |
-| `ml.threshold` | 0.39 | Keep blobs with `P(particle)` ≥ this (v5 on the R4 holdout: P = R = 0.878). NSEW overlay uses **0.55**. |
+| `ml.model_path` | `models/particle_clf_v4_residual.joblib` | Relative to `particle_detection/`. Versioned; do not overwrite a vN file. |
+| `ml.threshold` | 0.23 | Keep blobs with `P(particle)` ≥ this (v4 on Groundup v7 v5+v7, beta 1: P 95.4%, R 76.2%). |
 | `ml.score_before_structure` | false | true = ML then cluster/line. false = cluster/line then ML. |
 
 ### Measurement / report
@@ -840,7 +840,7 @@ At inference (`apply_ml_filter`):
 
 Scoring a few dozen vectors (or patches) per tile is small next to DoG. `ml.enabled: true` with a missing joblib **raises**; it will not silently run classical-only.
 
-v5 at threshold **0.39** is the R4 holdout operating point (36 real, 5 fake, 5 missed; P = R = 0.878). NSEW uses a higher threshold (**0.55**) from the 2-of-4 sweep.
+v4 at threshold **0.23** is the beta-1 standard on Groundup v7 (06-10) v5 and v7 labels (P 95.4%, R 76.2%).
 
 Typical loop:
 

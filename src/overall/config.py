@@ -103,6 +103,67 @@ def apply_nsew_settings(
     return deep_update(config, profile)
 
 
+def beta_preset_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalized ``report.beta_presets`` rows: beta, model_path, threshold.
+
+    Raises ``ValueError`` when the list is missing, a row is incomplete, or
+    the same beta appears twice.
+    """
+    raw = cfg_get(config, "report.beta_presets", None)
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(
+            "report.beta_presets is empty. Add a beta, model_path, and threshold."
+        )
+    rows: list[dict[str, Any]] = []
+    seen: set[float] = set()
+    for row in raw:
+        if not isinstance(row, dict):
+            raise ValueError("Each report.beta_presets entry must be a mapping.")
+        try:
+            beta = round(float(row["beta"]), 2)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("A beta preset is missing a numeric beta.") from exc
+        path = row.get("model_path")
+        threshold = row.get("threshold")
+        if path is None or str(path).strip() == "" or threshold is None:
+            raise ValueError(f"Beta {beta:.2f} is missing model_path or threshold.")
+        try:
+            threshold_value = float(threshold)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Beta {beta:.2f} has a non-numeric threshold.") from exc
+        if beta in seen:
+            raise ValueError(f"Beta {beta:.2f} is listed more than once.")
+        seen.add(beta)
+        rows.append(
+            {
+                "beta": beta,
+                "model_path": str(path),
+                "threshold": threshold_value,
+            }
+        )
+    return rows
+
+
+def preset_for_beta(presets: list[dict[str, Any]], beta: float) -> dict[str, Any]:
+    """Return the model path and threshold for ``beta``.
+
+    Unknown betas raise ``ValueError`` instead of falling back to another model.
+    """
+    try:
+        target = round(float(beta), 2)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Beta must be a number, got {beta!r}.") from exc
+    for row in presets:
+        if round(float(row["beta"]), 2) == target:
+            return {
+                "beta": target,
+                "model_path": str(row["model_path"]),
+                "threshold": float(row["threshold"]),
+            }
+    known = ", ".join(f"{float(row['beta']):.2f}" for row in presets) or "(none)"
+    raise ValueError(f"No ML preset for beta {target:.2f}. Known betas: {known}.")
+
+
 def save_nsew_overlay(overlay: dict[str, Any], path: str | Path | None = None) -> Path:
     """Write N/S/E/W standard values for the sidebar NSEW toggle."""
     destination = nsew_config_path(path)

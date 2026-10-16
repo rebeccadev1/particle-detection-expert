@@ -633,6 +633,116 @@ def prepare_image(image: np.ndarray, config: dict[str, Any], mode: str) -> np.nd
     return denoise(to_float(image), 1.0)
 
 
+def _edge_scales(
+    x_nm: float,
+    y_nm: float,
+    border: float,
+    width: int,
+    height: int,
+    origin_x: float,
+    origin_y: float,
+) -> list[float]:
+    """Pixel sizes that put this hit ``border`` px from one image edge."""
+    scales: list[float] = []
+    for numerator, denominator in (
+        (x_nm, border + origin_x),
+        (y_nm, border + origin_y),
+        (x_nm, (float(width) - 1.0 - border) + origin_x),
+        (y_nm, (float(height) - 1.0 - border) + origin_y),
+    ):
+        if denominator <= 1e-6:
+            continue
+        scale = numerator / denominator
+        if np.isfinite(scale) and scale > 0:
+            scales.append(float(scale))
+    return scales
+
+
+def scale_from_borders(
+    hits: list[tuple[float, float, float]],
+    width: int,
+    height: int,
+    x0: float = 0.0,
+    y0: float = 0.0,
+) -> float | None:
+    """Pixel size (nm) that reproduces each hit's saved distance to the image edge.
+
+    One hit can fit more than one size. Every detection on the same photo has
+    to land inside and match its own border, which leaves the size the run used.
+    """
+    usable = [
+        (float(x_nm), float(y_nm), float(border))
+        for x_nm, y_nm, border in hits
+        if np.isfinite(border) and border >= 0
+    ]
+    if not usable:
+        return None
+    origin_x, origin_y = float(x0), float(y0)
+    candidates: list[float] = []
+    for x_nm, y_nm, border in usable:
+        candidates.extend(
+            _edge_scales(x_nm, y_nm, border, width, height, origin_x, origin_y)
+        )
+    best: tuple[float, float] | None = None
+    for scale in candidates:
+        errors: list[float] = []
+        for x_nm, y_nm, border in usable:
+            x = x_nm / scale - origin_x
+            y = y_nm / scale - origin_y
+            if not (0.0 <= x < float(width) and 0.0 <= y < float(height)):
+                errors = []
+                break
+            predicted = min(x, y, float(width) - 1.0 - x, float(height) - 1.0 - y)
+            errors.append(abs(predicted - border))
+        if not errors or max(errors) > 1.0:
+            continue
+        error = float(np.median(errors))
+        if best is None or error < best[0]:
+            best = (error, float(scale))
+    return None if best is None else best[1]
+
+
+def detection_borders(
+    source_csv: object,
+    source_tile: object,
+    cache: dict[str, pd.DataFrame | None],
+) -> list[tuple[float, float, float]]:
+    """``(x_global, y_global, tile_border_dist_px)`` from the CSV that labeled this tile."""
+    path = Path(str(source_csv or ""))
+    key = str(path)
+    if key not in cache:
+        table: pd.DataFrame | None = None
+        if path.is_file():
+            try:
+                loaded = pd.read_csv(path)
+            except (OSError, ValueError, pd.errors.ParserError):
+                loaded = None
+            if (
+                loaded is not None
+                and {"x_global", "y_global", "tile_border_dist_px"}.issubset(loaded.columns)
+            ):
+                table = loaded
+        cache[key] = table
+    table = cache[key]
+    if table is None or table.empty:
+        return []
+    rows = table
+    if "source_tile" in table.columns:
+        wanted = Path(str(source_tile or "")).name
+        named = table["source_tile"].astype(str).map(lambda name: Path(name).name)
+        same = table.loc[named == wanted]
+        if not same.empty:
+            rows = same
+    xs = pd.to_numeric(rows["x_global"], errors="coerce")
+    ys = pd.to_numeric(rows["y_global"], errors="coerce")
+    borders = pd.to_numeric(rows["tile_border_dist_px"], errors="coerce")
+    hits: list[tuple[float, float, float]] = []
+    for x_nm, y_nm, border in zip(xs, ys, borders):
+        if pd.notna(x_nm) and pd.notna(y_nm) and pd.notna(border):
+            hits.append((float(x_nm), float(y_nm), float(border)))
+    return hits
+
+
 def run_shadow_check(
     table: pd.DataFrame,
     config: dict[str, Any],
@@ -663,10 +773,10 @@ def run_shadow_check(
     if rows.empty:
         return result
     id_col = id_column(rows)
-    um = pixel_nm / 1000.0
     records: list[dict[str, Any]] = []
     cache: dict[Path, np.ndarray] = {}
     run_configs: dict[str, dict[str, Any]] = {}
+    border_cache: dict[str, pd.DataFrame | None] = {}
 
     for _, row in rows.iterrows():
         pid = row[id_col]
@@ -708,18 +818,37 @@ def run_shadow_check(
         # (folder grid, full wafer, or tile origin); keep the first that lands on the tile.
         placements = [placement_for_tile(label_path, run_configs[run_key])]
         placements += candidate_placements(label_path, run_configs[run_key])
+        scale_nm = pixel_nm
+        x = y = 0.0
+        landed = False
         for placement in placements:
             x, y = global_nm_to_local_px(float(row["x_global"]), float(row["y_global"]),
-                                         placement, pixel_nm)
+                                         placement, scale_nm)
             if 0 <= x < image.shape[1] and 0 <= y < image.shape[0]:
+                landed = True
                 break
-        else:
+        if not landed:
+            hits = detection_borders(source_csv, tile_name, border_cache)
+            for placement in placements:
+                recovered = scale_from_borders(
+                    hits, image.shape[1], image.shape[0], placement.x0, placement.y0
+                )
+                if recovered is None:
+                    continue
+                x, y = global_nm_to_local_px(
+                    float(row["x_global"]), float(row["y_global"]), placement, recovered
+                )
+                if 0 <= x < image.shape[1] and 0 <= y < image.shape[0]:
+                    scale_nm = recovered
+                    landed = True
+                    break
+        if not landed:
             x, y = global_nm_to_local_px(float(row["x_global"]), float(row["y_global"]),
                                          placements[0], pixel_nm)
-        if not (0 <= x < image.shape[1] and 0 <= y < image.shape[0]):
             messages.append(f"{name}: ({x:.0f}, {y:.0f}) px is outside {path.name}.")
             continue
-        diameter_px = float(row["size"]) / pixel_nm
+        um = scale_nm / 1000.0
+        diameter_px = float(row["size"]) / scale_nm
         shadow, debug = measure_shadow(image, x, y, diameter_px, light, k_mad=k_mad,
                                        max_length_factor=max_length_factor)
         length_um = shadow.length_px * um

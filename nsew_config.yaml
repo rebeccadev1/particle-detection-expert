@@ -25,5 +25,5 @@ detection:
   tophat_radius: 50
 ml:
   enabled: false
-  model_path: models/particle_clf_v5.joblib
-  threshold: 0.39
+  model_path: models/particle_clf_v4_residual.joblib
+  threshold: 0.23

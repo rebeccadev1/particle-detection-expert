@@ -157,7 +157,8 @@ def render_capture_tab() -> None:
     cap = _capture_module()
 
     st.caption(
-        "Talks to the Uno over USB using the uploaded arduino_camera_v2 sketch. "
+        "Capture and scan use the light already on. Connect the Arduino only to change the ring. "
+        "NSEW still needs it, because each frame switches sides. "
         "Close the Arduino Serial Monitor before connecting."
     )
 
@@ -204,7 +205,7 @@ def render_capture_tab() -> None:
     connect_col, disconnect_col, status_col = st.columns([1, 1, 2])
     arduino_port = st.session_state.get("arduino_port")
     if connect_col.button(
-        "Connect Camera",
+        "Connect to Arduino",
         type="primary",
         disabled=not arduino_port or ser is not None,
     ):
@@ -279,7 +280,7 @@ def render_capture_tab() -> None:
             _run_serial(cap.light_all)
         if off_col.button("All off", disabled=ser is None, width="stretch"):
             _run_serial(cap.lights_off)
-        if st.button("Capture", type="primary", disabled=ser is None or focusing):
+        if st.button("Capture", type="primary", disabled=focusing):
             _capture_run(cap, mode, shutter)
     elif nsew_style == "Automatic":
         st.caption(
@@ -301,25 +302,31 @@ def render_capture_tab() -> None:
                 _capture_one_side(cap, index, shutter)
         if st.button("New set", disabled=ser is None):
             st.session_state.pop("capture_manual_folder", None)
+            st.session_state.pop("capture_manual_row", None)
+            st.session_state.pop("capture_manual_col", None)
             st.rerun()
 
-    _show_last_run()
     st.divider()
     _render_stage(cap)
+    st.divider()
+    _show_last_run()
 
 
 def _stage_columns() -> int:
     return int(st.session_state.get("stage_columns", STAGE_WIDGET_DEFAULTS["stage_columns"]))
 
 
-def _manual_folder(cap) -> Path:
+def _manual_target(cap) -> tuple[Path, int, int]:
     current = st.session_state.get("capture_manual_folder")
-    if current and Path(current).is_dir():
-        return Path(current)
+    row = st.session_state.get("capture_manual_row")
+    col = st.session_state.get("capture_manual_col")
+    if current and Path(current).is_dir() and row and col:
+        return Path(current), int(row), int(col)
     run = cap.allocate_run_folder(cap.CAPTURES_DIR)
-    folder = cap.allocate_capture_folder(run, _stage_columns())
-    st.session_state["capture_manual_folder"] = str(folder)
-    return folder
+    st.session_state["capture_manual_folder"] = str(run)
+    st.session_state["capture_manual_row"] = 1
+    st.session_state["capture_manual_col"] = 1
+    return run, 1, 1
 
 
 def _capture_one_side(cap, index: int, shutter_ms: float) -> None:
@@ -334,9 +341,30 @@ def _capture_one_side(cap, index: int, shutter_ms: float) -> None:
         with st.spinner(f"Capturing {direction}…"):
             stop_preview()
             camera, converter = cap.open_camera(exposure_us)
-            folder = _manual_folder(cap)
+            folder, row, col = _manual_target(cap)
             filename = cap.capture_side(
-                camera, converter, ser, folder, index, cap.grab_timeout_ms(exposure_us)
+                camera,
+                converter,
+                ser,
+                folder,
+                index,
+                cap.grab_timeout_ms(exposure_us),
+                row,
+                col,
+            )
+            cap.write_manifest(
+                folder,
+                {
+                    "mode": "nsew",
+                    "row": row,
+                    "col": col,
+                    "total_exposure_ms": float(st.session_state["capture_total_ms"]),
+                    "shutter_ms": shutter_ms,
+                    "exposure_us": exposure_us,
+                    "sides_on": 1,
+                    "port": _LINK.get("port"),
+                    "files": [filename],
+                },
             )
     except Exception as exc:
         st.error(str(exc))
@@ -346,7 +374,7 @@ def _capture_one_side(cap, index: int, shutter_ms: float) -> None:
         start_preview(cap, exposure_us)
     st.session_state["capture_last_run"] = {
         "folder": str(folder),
-        "files": [f"{name}.png" for name in cap.DIRECTIONS],
+        "files": [cap.image_filename(row, col, name) for name in cap.DIRECTIONS],
         "mode": "NSEW manual",
     }
     _LINK["ack"] = f"OK {index}"
@@ -355,8 +383,8 @@ def _capture_one_side(cap, index: int, shutter_ms: float) -> None:
 
 def _capture_run(cap, mode: str, shutter_ms: float) -> None:
     ser = _serial()
-    if ser is None:
-        st.error("Connect the Arduino first.")
+    if mode != "Uniform" and ser is None:
+        st.error("NSEW capture needs the Arduino to switch sides.")
         return
     exposure_us = shutter_ms * 1000.0
     timeout_ms = cap.grab_timeout_ms(exposure_us)
@@ -368,13 +396,12 @@ def _capture_run(cap, mode: str, shutter_ms: float) -> None:
         with st.spinner("Capturing…" if mode == "Uniform" else "Capturing N, E, S, W…"):
             stop_preview()
             camera, converter = cap.open_camera(exposure_us)
-            run = cap.allocate_run_folder(cap.CAPTURES_DIR)
-            folder = cap.allocate_capture_folder(run, _stage_columns())
-            row, col = cap.folder_location(folder)
+            folder = cap.allocate_run_folder(cap.CAPTURES_DIR)
+            row, col = 1, 1
             if mode == "Uniform":
-                saved = [cap.capture_uniform(camera, converter, ser, folder, timeout_ms)]
+                saved = [cap.capture_uniform(camera, converter, ser, folder, timeout_ms, row, col)]
             else:
-                saved = cap.capture_nsew(camera, converter, ser, folder, timeout_ms)
+                saved = cap.capture_nsew(camera, converter, ser, folder, timeout_ms, row, col)
             cap.write_manifest(
                 folder,
                 {
@@ -484,8 +511,8 @@ def _render_focus(locked: bool) -> None:
     st.subheader("Focus")
     st.caption(
         "Steps printer Z from the current height and keeps the direction that makes "
-        "the live image sharper. It stops at the best height inside the travel limit. "
-        "The first step is +Z."
+        "the live image sharper. A soft reading is scored again, then one more step "
+        "is taken before turning around. The first step is +Z."
     )
     travel_col, coarse_col, fine_col, feed_col = st.columns(4)
     travel_col.number_input(
@@ -508,7 +535,7 @@ def _render_focus(locked: bool) -> None:
         format="%.3f",
         key="focus_coarse_mm",
         disabled=locked,
-        help="First pass. The search reverses if this step makes the image blurrier.",
+        help="First pass. A soft frame is scored again, and one more step is taken before reversing.",
     )
     fine_col.number_input(
         "Fine step (mm)",
@@ -542,6 +569,33 @@ def _format_score(value: float) -> str:
     return f"{value:.2f}"
 
 
+def _format_focus_step(index: int, step: dict) -> str:
+    place = f"{step['offset_mm']:+.3f} mm"
+    score = _format_score(float(step["sharpness"]))
+    decision = step["decision"]
+    if decision == "start":
+        return f"{index:>2}. Start      {place}   {score}"
+    if decision == "back":
+        return f"{index:>2}. Back to    {place}   {score}"
+    phase = {"coarse": "Coarse", "fine": "Fine"}.get(step["phase"], str(step["phase"]))
+    verdict = {"sharper": "sharper", "again": "again"}.get(decision, "not sharper")
+    return f"{index:>2}. {phase:<10} {place}   {score}   {verdict}"
+
+
+def _focus_steps(info: dict) -> None:
+    """Expandable log of each height autofocus has scored."""
+    steps = info["steps"]
+    run_id = info["run_id"]
+    if run_id and st.session_state.get("_focus_steps_seen") != run_id:
+        st.session_state["focus_steps_open"] = True
+        st.session_state["_focus_steps_seen"] = run_id
+    with st.expander("Focus steps", expanded=False, key="focus_steps_open", on_change="rerun"):
+        if not steps:
+            st.caption("Each height that autofocus tries shows up here.")
+            return
+        st.code("\n".join(_format_focus_step(index, step) for index, step in enumerate(steps, start=1)))
+
+
 @st.fragment(run_every=0.5)
 def _focus_progress() -> None:
     info = autofocus_status()
@@ -558,12 +612,9 @@ def _focus_progress() -> None:
                 f"Best {info['best_offset_mm']:+.3f} mm "
                 f"({_format_score(info['best_sharpness'])})."
             )
-        if st.button("Stop focus", type="primary"):
-            stop_autofocus()
-        return
-    if st.session_state.pop("_focus_was_running", False):
+    elif st.session_state.pop("_focus_was_running", False):
         st.rerun(scope="app")
-    if info["phase"] == "error" and info["error"]:
+    elif info["phase"] == "error" and info["error"]:
         st.error(info["error"])
     elif info["phase"] == "done":
         height = f"{info['best_offset_mm']:+.3f} mm from the start"
@@ -573,6 +624,11 @@ def _focus_progress() -> None:
             st.success(
                 f"Focused at {height}. Sharpness {_format_score(info['best_sharpness'])}."
             )
+    _focus_steps(info)
+    if info["running"]:
+        if st.button("Stop focus", type="primary"):
+            stop_autofocus()
+        return
     ready = (
         printer["online"]
         and not printer["printing"]
@@ -606,6 +662,19 @@ def _stage_progress() -> None:
         label = f"({capture['row']},{capture['col']})" if capture["row"] else "starting"
         if capture["stopping"]:
             st.caption(f"Stopping after this stop. Last picture is {label}.")
+        elif capture["focusing"]:
+            st.progress(
+                min(capture["index"], total) / total,
+                text=(
+                    f"Autofocus after step {capture['steps']}"
+                    + (
+                        f", attempt {capture['focus_attempt']}"
+                        if capture.get("focus_attempt", 1) > 1
+                        else ""
+                    )
+                    + f". Sharpness {_format_score(capture['sharpness'])}."
+                ),
+            )
         else:
             st.progress(
                 min(capture["index"], total) / total,
@@ -638,8 +707,10 @@ def _stage_progress() -> None:
     if info["error"]:
         st.caption(info["error"])
     st.caption(
-        "Scan and capture uses the lighting mode above. "
-        "NSEW takes N, E, S, and W before the stage moves again."
+        "Scan and capture uses the lighting mode above and leaves the ring as it is "
+        "unless the Arduino is connected. NSEW takes N, E, S, and W before the stage moves again. "
+        "After every 7 stage steps it refocuses with the Focus settings. "
+        "If sharpness is still below 900, it autofocuses again."
     )
     move_col, both_col = st.columns(2)
     if move_col.button("Start scan", type="primary", disabled=not info["online"] or focusing):
@@ -651,7 +722,12 @@ def _stage_progress() -> None:
             st.rerun(scope="app")
     if both_col.button(
         "Scan and capture",
-        disabled=not info["online"] or focusing or _serial() is None,
+        disabled=(
+            not info["online"]
+            or focusing
+            or _focus_limits() is not None
+            or (_selected_mode() == "NSEW" and _serial() is None)
+        ),
     ):
         try:
             start_scan_capture(
@@ -662,11 +738,19 @@ def _stage_progress() -> None:
                 columns=int(st.session_state["stage_columns"]),
                 rows=int(st.session_state["stage_rows"]),
                 feed=float(st.session_state["stage_feed"]),
+                focus_max_travel_mm=float(st.session_state.get("focus_max_travel_mm", 1.0)),
+                focus_coarse_mm=float(st.session_state.get("focus_coarse_mm", 0.05)),
+                focus_fine_mm=float(st.session_state.get("focus_fine_mm", 0.01)),
+                focus_feed=float(st.session_state.get("focus_feed", 300)),
             )
         except Exception as exc:
             st.error(str(exc))
         else:
             st.rerun(scope="app")
+
+
+def _format_jog_mm(delta_mm: float) -> str:
+    return f"{delta_mm:+.3f}".rstrip("0").rstrip(".")
 
 
 def _jog_stage(axis: str, delta_mm: float) -> None:
@@ -676,12 +760,15 @@ def _jog_stage(axis: str, delta_mm: float) -> None:
     except Exception as exc:
         st.error(str(exc))
     else:
-        st.success(f"Moved {axis} {delta_mm:+.0f} mm.")
+        st.success(f"Moved {axis} {_format_jog_mm(delta_mm)} mm.")
 
 
 def _render_stage_jog(locked: bool) -> None:
-    """1 mm steps so a connected printer can be checked without starting a scan."""
-    st.caption("Jog 1 mm from the current position. Uses the moving speed below.")
+    """Short steps so a connected printer can be checked without starting a scan."""
+    st.caption(
+        "Jog X and Y by 1 mm, or Z by 0.1 mm or 1 mm, from the current position. "
+        "Uses the moving speed below. Positive Z is up."
+    )
     info = printer_status()
     ready = info["online"] and not locked
     x_minus, x_plus, y_minus, y_plus = st.columns(4)
@@ -693,6 +780,15 @@ def _render_stage_jog(locked: bool) -> None:
         _jog_stage("Y", -1)
     if y_plus.button("Y +1 mm", disabled=not ready, width="stretch"):
         _jog_stage("Y", 1)
+    z_minus, z_down, z_up, z_plus = st.columns(4)
+    if z_minus.button("Z −1 mm", disabled=not ready, width="stretch"):
+        _jog_stage("Z", -1)
+    if z_down.button("Z −0.1 mm", disabled=not ready, width="stretch"):
+        _jog_stage("Z", -0.1)
+    if z_up.button("Z +0.1 mm", disabled=not ready, width="stretch"):
+        _jog_stage("Z", 0.1)
+    if z_plus.button("Z +1 mm", disabled=not ready, width="stretch"):
+        _jog_stage("Z", 1)
 
 
 def _render_stage(cap) -> None:

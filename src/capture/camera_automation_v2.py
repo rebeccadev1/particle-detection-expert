@@ -11,12 +11,14 @@ lighting has all four sides on, so the camera shutter is that value divided
 by 4. NSEW lights one side, so the shutter equals the total. Side 0 is N,
 then E, S, W clockwise.
 
-Each capture and each scan gets src/capture/captures/vN YYYY-MM-DD. N is how
-many runs already exist for that date, starting at 1. Stops inside the run
-are still (row,col). Odd rows run left to right. Even rows start at the right
-edge and walk back, matching the stage: with 7 columns the 8th folder is
-(2,7), then (2,6). The folder is created only after the Arduino and the
-camera have both accepted setup.
+Each capture and each scan gets ASML SE/captures/vN YYYY-MM-DD, next to
+Inputs and Outputs. N is how many runs already exist for that date, starting
+at 1. Pictures in that folder are named by grid position, such as (1,1).png,
+or (1,1)_N.png for one ring side. One capture.json in the run folder records
+every stop. Odd rows run left to right. Even rows start at the right edge
+and walk back. The folder is created only after the camera has accepted
+setup. Pass --no-ring to leave the lights as they are. NSEW still needs the
+Arduino, because each frame has to switch sides.
 """
 
 from __future__ import annotations
@@ -46,7 +48,8 @@ READY_TIMEOUT_S = 5.0
 ACK_TIMEOUT_S = 2.0
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-CAPTURES_DIR = SCRIPT_DIR / "captures"
+# particle_detection/src/capture -> ASML SE, beside Inputs and Outputs.
+CAPTURES_DIR = SCRIPT_DIR.parents[2] / "captures"
 # Default stage width. The Capture tab passes the Columns control instead.
 DEFAULT_COLUMNS = 7
 LOCATION_DIR_RE = re.compile(r"^\((\d+),(\d+)\)$")
@@ -79,6 +82,14 @@ def next_capture_location(existing: list[tuple[int, int]], columns: int) -> tupl
     if col <= 1:
         return (row + 1, 1)
     return (row, col - 1)
+
+
+def image_filename(row: int, col: int, label: str | None = None) -> str:
+    """Picture name inside a run folder. A side label is N, E, S, or W."""
+    stem = f"({int(row)},{int(col)})"
+    if label:
+        return f"{stem}_{label}.png"
+    return f"{stem}.png"
 
 
 def folder_location(folder: Path) -> tuple[int, int]:
@@ -394,6 +405,13 @@ def open_live_camera(exposure_us: float):
     return camera, _make_converter()
 
 
+def orient_frame(image):
+    """Turn the sensor image 90 degrees left so saved frames match the live view."""
+    import numpy as np
+
+    return np.ascontiguousarray(np.rot90(image, k=1))
+
+
 def read_live_frame(camera, converter, timeout_ms: int):
     """Latest free-running frame, BGR or gray. The camera must already be grabbing."""
     from pypylon import pylon
@@ -403,13 +421,12 @@ def read_live_frame(camera, converter, timeout_ms: int):
         if not grab.GrabSucceeded():
             detail = grab.ErrorDescription
             raise RuntimeError(f"grab failed: {detail}")
-        return converter.Convert(grab).GetArray()
+        return orient_frame(converter.Convert(grab).GetArray())
     finally:
         grab.Release()
 
 
 def grab_frame(camera, converter, timeout_ms: int):
-    import cv2
     from pypylon import pylon
 
     camera.ExecuteSoftwareTrigger()
@@ -418,7 +435,7 @@ def grab_frame(camera, converter, timeout_ms: int):
         if not grab.GrabSucceeded():
             detail = grab.ErrorDescription
             raise RuntimeError(f"grab failed: {detail}")
-        return converter.Convert(grab).GetArray()
+        return orient_frame(converter.Convert(grab).GetArray())
     finally:
         grab.Release()
 
@@ -430,28 +447,44 @@ def save_frame(image, path: Path) -> None:
         raise RuntimeError(f"failed to write {path}")
 
 
-def capture_uniform(camera, converter, ser, folder: Path, timeout_ms: int) -> str:
-    """Light N, S, E, and W together, then save one frame."""
+def capture_uniform(
+    camera, converter, ser, folder: Path, timeout_ms: int, row: int = 1, col: int = 1
+) -> str:
+    """Save ``(row,col).png``. With an open Arduino, light all four sides first."""
     from pypylon import pylon
 
-    ack = light_all(ser)
-    print(f"ring: {ack}")
-    time.sleep(SETTLE_S)
+    if ser is not None:
+        ack = light_all(ser)
+        print(f"ring: {ack}")
+        time.sleep(SETTLE_S)
+    else:
+        print("ring left as it is")
     if not camera.IsGrabbing():
         camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
     image = grab_frame(camera, converter, timeout_ms)
-    filename = "uniform.png"
+    filename = image_filename(row, col)
     save_frame(image, folder / filename)
     print(f"saved {folder / filename}")
     return filename
 
 
-def capture_side(camera, converter, ser, folder: Path, index: int, timeout_ms: int) -> str:
-    """Light one side and save ``N.png``, ``E.png``, ``S.png``, or ``W.png``."""
+def capture_side(
+    camera,
+    converter,
+    ser,
+    folder: Path,
+    index: int,
+    timeout_ms: int,
+    row: int = 1,
+    col: int = 1,
+) -> str:
+    """Light one side and save ``(row,col)_N.png`` and the other sides the same way."""
     from pypylon import pylon
 
     if index < 0 or index >= len(DIRECTIONS):
         raise ValueError(f"side index {index} is outside 0..{len(DIRECTIONS) - 1}")
+    if ser is None:
+        raise RuntimeError("NSEW capture needs the Arduino to switch sides.")
     direction = DIRECTIONS[index]
     ack = set_segment(ser, index)
     print(f"segment {index} ({direction}): {ack}")
@@ -459,16 +492,20 @@ def capture_side(camera, converter, ser, folder: Path, index: int, timeout_ms: i
     if not camera.IsGrabbing():
         camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
     image = grab_frame(camera, converter, timeout_ms)
-    filename = f"{direction}.png"
+    filename = image_filename(row, col, direction)
     save_frame(image, folder / filename)
     print(f"saved {folder / filename}")
     return filename
 
 
-def capture_nsew(camera, converter, ser, folder: Path, timeout_ms: int) -> list[str]:
-    """Light one side at a time and save N.png, E.png, S.png, W.png."""
+def capture_nsew(
+    camera, converter, ser, folder: Path, timeout_ms: int, row: int = 1, col: int = 1
+) -> list[str]:
+    """Light one side at a time and save ``(row,col)_N.png`` through ``_W.png``."""
     from pypylon import pylon
 
+    if ser is None:
+        raise RuntimeError("NSEW capture needs the Arduino to switch sides.")
     if not camera.IsGrabbing():
         camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
     saved: list[str] = []
@@ -479,7 +516,7 @@ def capture_nsew(camera, converter, ser, folder: Path, timeout_ms: int) -> list[
         print(f"segment {index} ({direction}): {ack}")
         time.sleep(SETTLE_S)
         image = grab_frame(camera, converter, timeout_ms)
-        filename = f"{direction}.png"
+        filename = image_filename(row, col, direction)
         save_frame(image, folder / filename)
         saved.append(filename)
         print(f"saved {folder / filename}")
@@ -487,7 +524,32 @@ def capture_nsew(camera, converter, ser, folder: Path, timeout_ms: int) -> list[
 
 
 def write_manifest(folder: Path, payload: dict) -> None:
-    (folder / "capture.json").write_text(json.dumps(payload, indent=2) + "\n")
+    """Write or extend ``capture.json`` in the run folder, one entry per stop."""
+    path = folder / "capture.json"
+    stop = {
+        "row": payload["row"],
+        "col": payload["col"],
+        "files": list(payload["files"]),
+    }
+    if path.is_file():
+        data = json.loads(path.read_text())
+    else:
+        data = {}
+    for key in ("mode", "total_exposure_ms", "shutter_ms", "exposure_us", "sides_on", "port"):
+        if key in payload:
+            data[key] = payload[key]
+    stops = data.setdefault("stops", [])
+    for existing in stops:
+        if existing.get("row") == stop["row"] and existing.get("col") == stop["col"]:
+            names = list(existing.get("files") or [])
+            for name in stop["files"]:
+                if name not in names:
+                    names.append(name)
+            existing["files"] = names
+            break
+    else:
+        stops.append(stop)
+    path.write_text(json.dumps(data, indent=2) + "\n")
 
 
 def shutdown(camera, ser) -> None:
@@ -522,6 +584,11 @@ def shutdown(camera, ser) -> None:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Capture with uniform or N/S/E/W ring light.")
     parser.add_argument("--port", help="serial port, for example /dev/cu.usbmodem1101")
+    parser.add_argument(
+        "--no-ring",
+        action="store_true",
+        help="Do not open the Arduino. Leave the ring as it is. Uniform only.",
+    )
     parser.add_argument("--mode", choices=("uniform", "nsew"), default="uniform")
     parser.add_argument("--total-exposure-ms", type=float, default=TOTAL_EXPOSURE_MS)
     parser.add_argument(
@@ -542,19 +609,26 @@ def main(argv: list[str] | None = None) -> int:
     camera = None
     ser = None
     try:
-        port = args.port or find_arduino_port()
-        print(f"Arduino port: {port}")
+        if args.no_ring and args.mode != "uniform":
+            raise RuntimeError("NSEW capture needs the Arduino to switch sides.")
+        port = None
+        if args.no_ring:
+            print("ring left as it is")
+        else:
+            port = args.port or find_arduino_port()
+            print(f"Arduino port: {port}")
         print(f"{args.mode}: shutter {exposure_ms:.1f} ms from total {args.total_exposure_ms:.1f} ms")
-        ser = open_arduino(port)
+        if port is not None:
+            ser = open_arduino(port)
         camera, converter = open_camera(exposure_us)
-        folder = allocate_capture_folder(allocate_run_folder(CAPTURES_DIR), args.columns)
-        row, col = folder_location(folder)
+        folder = allocate_run_folder(CAPTURES_DIR)
+        row, col = 1, 1
         print(f"saving to {folder}")
         timeout_ms = grab_timeout_ms(exposure_us)
         if args.mode == "uniform":
-            saved = [capture_uniform(camera, converter, ser, folder, timeout_ms)]
+            saved = [capture_uniform(camera, converter, ser, folder, timeout_ms, row, col)]
         else:
-            saved = capture_nsew(camera, converter, ser, folder, timeout_ms)
+            saved = capture_nsew(camera, converter, ser, folder, timeout_ms, row, col)
         write_manifest(
             folder,
             {

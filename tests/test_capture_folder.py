@@ -2,11 +2,16 @@
 
 from datetime import date
 
+import json
+
 from src.capture.camera_automation_v2 import (
+    CAPTURES_DIR,
     allocate_capture_folder,
     allocate_run_folder,
     folder_location,
+    image_filename,
     next_capture_location,
+    write_manifest,
 )
 
 
@@ -44,6 +49,44 @@ def test_old_run_folders_are_not_locations(tmp_path) -> None:
     (tmp_path / "run_001").mkdir()
     folder = allocate_capture_folder(tmp_path, columns=7)
     assert folder.name == "(1,1)"
+
+
+def test_picture_names_are_the_grid_position() -> None:
+    assert image_filename(1, 1) == "(1,1).png"
+    assert image_filename(2, 7, "N") == "(2,7)_N.png"
+
+
+def test_manifest_lives_in_the_run_folder(tmp_path) -> None:
+    write_manifest(
+        tmp_path,
+        {"mode": "uniform", "row": 1, "col": 1, "files": ["(1,1).png"], "shutter_ms": 25.0},
+    )
+    write_manifest(
+        tmp_path,
+        {
+            "mode": "nsew",
+            "row": 1,
+            "col": 2,
+            "files": ["(1,2)_N.png"],
+            "shutter_ms": 100.0,
+        },
+    )
+    write_manifest(
+        tmp_path,
+        {"mode": "nsew", "row": 1, "col": 2, "files": ["(1,2)_E.png"], "shutter_ms": 100.0},
+    )
+    data = json.loads((tmp_path / "capture.json").read_text())
+    assert data["stops"] == [
+        {"row": 1, "col": 1, "files": ["(1,1).png"]},
+        {"row": 1, "col": 2, "files": ["(1,2)_N.png", "(1,2)_E.png"]},
+    ]
+    assert data["shutter_ms"] == 100.0
+
+
+def test_captures_sit_beside_inputs(tmp_path) -> None:
+    assert CAPTURES_DIR.name == "captures"
+    assert (CAPTURES_DIR.parent / "Inputs").is_dir()
+    assert (CAPTURES_DIR.parent / "Outputs").is_dir()
 
 
 def test_run_folders_count_only_that_day(tmp_path) -> None:

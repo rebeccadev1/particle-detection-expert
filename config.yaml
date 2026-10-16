@@ -94,9 +94,9 @@ measurement:
 # Switch versions here; do not overwrite an existing vN file.
 ml:
   enabled: true
-  model_path: models/particle_clf_v5.joblib
-  # v5 on the R4 holdout: 0.39 is P = R = 0.878 (36 real, 5 fake, 5 missed).
-  threshold: 0.39
+  model_path: models/particle_clf_v4_residual.joblib
+  # v4 on Groundup v7 (06-10) v5+v7 labels, beta 1: 0.23 is P 95.4%, R 76.2%.
+  threshold: 0.23
   # Score gated DoG hits before cluster/line filters, then apply those filters
   # to ML survivors. Off: classical cluster/line first (default). On can add
   # lattice neighbors that cluster-kill isolated flakes. Cluster stays on either way.
@@ -110,3 +110,10 @@ report:
   # 0 = pick a factor so the full RGB stitch is about target_mb.
   downsample: 0
   target_mb: 20.0
+  # Sidebar Beta. Must be one of beta_presets. 1 is F1.
+  f_beta: 1.0
+  # Each beta scores Fβ and selects the ML model and its starting threshold.
+  beta_presets:
+    - beta: 1.0
+      model_path: models/particle_clf_v4_residual.joblib
+      threshold: 0.23

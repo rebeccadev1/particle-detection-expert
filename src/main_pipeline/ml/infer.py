@@ -18,7 +18,7 @@ from src.main_pipeline.ml.patches import PATCH_SIZE, extract_unmarked_channels
 KIND_RESIDUAL = "residual"
 KIND_PATCH = "patch"
 
-DEFAULT_MODEL_PATH = "models/particle_clf_v5.joblib"
+DEFAULT_MODEL_PATH = "models/particle_clf_v4_residual.joblib"
 _VERSIONED_NAME = re.compile(r"^particle_clf_v(\d+)\.joblib$")
 
 _WORKER_MODEL: dict[str, Any] = {"path": None, "artifact": None}

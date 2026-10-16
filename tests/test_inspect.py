@@ -931,6 +931,47 @@ def test_labeled_particle_recovery_ignores_non_particle_labels() -> None:
     assert stats == {"n_labeled": 0, "n_found": 0, "pct": 0.0}
 
 
+def test_outline_particle_area_follows_a_green_marker() -> None:
+    import cv2
+
+    from src.verification.inspect import outline_particle_area
+
+    image = np.full((200, 200), 20, dtype=np.uint8)
+    cv2.circle(image, (60, 70), 16, 220, thickness=-1)
+    rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    cv2.circle(rgb, (60, 70), 26, (40, 180, 70), thickness=3)
+    out = outline_particle_area(rgb, size_nm=32.0, pixel_size_nm=1.0, config={})
+    red = (out[:, :, 0] > 200) & (out[:, :, 1] < 40) & (out[:, :, 2] < 40)
+    ys, xs = np.where(red)
+    assert ys.size > 30
+    assert abs(float(np.median(ys)) - 70.0) < 10.0
+    assert abs(float(np.median(xs)) - 60.0) < 10.0
+
+
+def test_outline_particle_area_is_a_thin_red_line() -> None:
+    import cv2
+
+    from src.verification.inspect import outline_particle_area
+
+    image = np.full((200, 200), 20, dtype=np.uint8)
+    cv2.circle(image, (100, 100), 18, 220, thickness=-1)
+    rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    cv2.circle(rgb, (100, 100), 28, (255, 140, 40), thickness=3)
+    out = outline_particle_area(
+        rgb,
+        size_nm=36.0,
+        pixel_size_nm=1.0,
+        config={"detection": {"size_mass_fraction": 0.4, "particles_bright": True}},
+    )
+    red = (out[:, :, 0] > 200) & (out[:, :, 1] < 40) & (out[:, :, 2] < 40)
+    assert 40 < int(red.sum()) < 500
+    ys, xs = np.where(red)
+    dist = np.hypot(ys - 100.0, xs - 100.0)
+    assert 14.0 < float(np.median(dist)) < 24.0
+    orange = (out[:, :, 0] > 200) & (out[:, :, 1] > 80) & (out[:, :, 2] < 80)
+    assert int(orange.sum()) > 20
+
+
 def test_overlay_draws_labeled_circle_in_crop() -> None:
     image = np.full((80, 90), 0.2, dtype=np.float32)
     image[20:28, 30:38] = 1.0

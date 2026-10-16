@@ -6,8 +6,11 @@ import numpy as np
 
 from pathlib import Path
 
+import pandas as pd
+
 from src.shadow.shadow import (
     _parse_keys,
+    detection_borders,
     direction_image,
     image_choice_labels,
     resolve_named_image,
@@ -18,6 +21,8 @@ from src.shadow.shadow import (
     measure_shadow,
     paint_kept_mask,
     parse_light_from,
+    run_shadow_check,
+    scale_from_borders,
     shadow_direction,
     zoom_preview,
 )
@@ -188,6 +193,60 @@ def test_paint_kept_mask_tints_only_saved_pixels() -> None:
     painted = paint_kept_mask(preview, mask, (0, 0, 4, 6))
     assert painted[1, 2, 1] > painted[0, 0, 1]
     assert np.all(painted[0, 0] == 0)
+
+
+def test_scale_from_borders_recovers_groundup_pixel_size() -> None:
+    hits = [
+        (20 * 3500.0, 80 * 3500.0, 20.0),
+        (150 * 3500.0, 40 * 3500.0, 40.0),
+    ]
+    scale = scale_from_borders(hits, 200, 200)
+    assert scale is not None
+    assert abs(scale - 3500.0) < 1e-6
+
+
+def test_crop_key_uses_detection_pixel_size_when_sidebar_scale_misses(tmp_path: Path) -> None:
+    image = np.full((200, 200), 0.5, dtype=np.float32)
+    cv2 = __import__("cv2")
+    tile = tmp_path / "angles_v1_exp200000_3of6.png"
+    cv2.imwrite(str(tile), (image * 255).astype(np.uint8))
+    hits = [
+        (20 * 3500.0, 80 * 3500.0, 20.0),
+        (150 * 3500.0, 40 * 3500.0, 40.0),
+    ]
+    particles = tmp_path / "particles.csv"
+    pd.DataFrame(
+        {
+            "x_global": [hit[0] for hit in hits],
+            "y_global": [hit[1] for hit in hits],
+            "tile_border_dist_px": [hit[2] for hit in hits],
+            "source_tile": [tile.name, tile.name],
+        }
+    ).to_csv(particles, index=False)
+    x_nm, y_nm = hits[0][0], hits[0][1]
+    labels = pd.DataFrame(
+        [{
+            "key": "angles_v1_exp200000_3of6_70000_280000",
+            "particle_id": 1,
+            "source_tile": tile.name,
+            "x_global": x_nm,
+            "y_global": y_nm,
+            "size": 20 * 3500.0,
+            "source_csv": str(particles),
+        }]
+    )
+    result = run_shadow_check(
+        labels,
+        {"pixel_size_nm": 960.0},
+        keys=["angles_v1_exp200000_3of6_70000_280000"],
+        input_dir=str(tmp_path),
+        light_from="N",
+        out=None,
+    )
+    assert result.messages == []
+    assert abs(float(result.table.iloc[0]["x_px"]) - 20.0) < 0.2
+    assert abs(float(result.table.iloc[0]["y_px"]) - 80.0) < 0.2
+    assert len(detection_borders(particles, tile.name, {})) == 2
 
 
 def test_parse_keys_splits_on_commas_and_spaces() -> None:

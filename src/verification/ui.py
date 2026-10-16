@@ -55,6 +55,7 @@ from src.verification.inspect import (
     local_xy_on_tile,
     missed_particle_record,
     footprint_grow_mass,
+    outline_particle_crop_file,
     photo_particle_edge,
     verify_missed_photo_sizes,
     overlay_view,
@@ -2061,6 +2062,8 @@ def render_collection_tab(
     title: str,
     n_columns: int = 4,
     campaign: str | None = None,
+    config: dict[str, Any] | None = None,
+    show_area_line: bool = False,
 ) -> None:
     """Thumbnail gallery for one label bucket, optionally one campaign."""
     store = labels_store(project_root)
@@ -2110,7 +2113,14 @@ def render_collection_tab(
                 + (f" · {folder}" if folder else "")
             )
             if path.is_file():
-                st.image(str(path), caption=caption, width=GALLERY_IMAGE_WIDTH)
+                shown = _collection_image(
+                    path, record, label, config, show_area_line=show_area_line
+                )
+                st.image(
+                    shown if shown is not None else str(path),
+                    caption=caption,
+                    width=GALLERY_IMAGE_WIDTH,
+                )
             else:
                 st.caption(f"Missing file: {path.name}")
             if st.button(
@@ -2121,6 +2131,32 @@ def render_collection_tab(
                 store.unlabel(str(record["key"]))
                 st.session_state["label_front_key"] = str(record["key"])
                 st.rerun()
+
+
+def _collection_image(
+    path: Path,
+    record: dict[str, Any],
+    label: str,
+    config: dict[str, Any] | None,
+    show_area_line: bool = False,
+) -> np.ndarray | None:
+    """Particle crops gain a thin red outline of the measured area."""
+    if not show_area_line or label != "particle" or config is None:
+        return None
+    try:
+        size_nm = float(record.get("size") or 0.0)
+    except (TypeError, ValueError):
+        size_nm = 0.0
+    pixel_size = float(cfg_get(config, "pixel_size_nm", 960.0) or 960.0)
+    try:
+        return outline_particle_crop_file(
+            path,
+            size_nm=size_nm,
+            pixel_size_nm=pixel_size,
+            config=config,
+        )
+    except (OSError, ValueError):
+        return None
 
 
 def _source_caption(path: Path | None, *, last_pipeline: bool) -> str:

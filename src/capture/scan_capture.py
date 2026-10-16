@@ -1,7 +1,9 @@
 """Move the serpentine and take a picture at every stop.
 
 Uniform saves one all-sides frame per stop. NSEW keeps the stage still until
-N, E, S, and W have each been saved. Start scan still only moves the printer.
+N, E, S, and W have each been saved. After every seventh stage step the scan
+refocuses on Z, and starts another search whenever sharpness is still below 900.
+Start scan still only moves the printer.
 """
 
 from __future__ import annotations
@@ -17,12 +19,26 @@ from src.capture.camera_automation_v2 import (
     allocate_run_folder,
     capture_nsew,
     capture_uniform,
+    grab_frame,
     grab_timeout_ms,
     open_camera,
     shutter_ms,
     write_manifest,
 )
-from src.capture.stage import move_axis, printer_status, scan_stops
+from src.capture.focus import (
+    DEFAULT_COARSE_MM,
+    DEFAULT_FINE_MM,
+    DEFAULT_MAX_TRAVEL_MM,
+    DEFAULT_MIN_GAIN,
+    DEFAULT_SETTLE_S,
+    _check_focus_settings,
+    focus_search,
+    sharpness,
+)
+from src.capture.stage import move_axis, move_z, printer_status, scan_stops
+
+FOCUS_EVERY_STEPS = 7
+MIN_SCAN_SHARPNESS = 900.0
 
 _JOB_LOCK = threading.Lock()
 _JOB: dict = {
@@ -38,7 +54,30 @@ _JOB: dict = {
     "error": "",
     "mode": "",
     "folder": "",
+    "steps": 0,
+    "focusing": False,
+    "sharpness": 0.0,
+    "best_sharpness": 0.0,
+    "focus_attempt": 0,
 }
+
+
+def refocus_due(steps_taken: int, every: int = FOCUS_EVERY_STEPS) -> bool:
+    """True after the 7th, 14th, and later stage steps."""
+    steps_taken = int(steps_taken)
+    every = int(every)
+    return every > 0 and steps_taken > 0 and steps_taken % every == 0
+
+
+def needs_another_focus(
+    score: float,
+    stopped: bool = False,
+    minimum: float = MIN_SCAN_SHARPNESS,
+) -> bool:
+    """Run autofocus again when the search finished softer than 900."""
+    if stopped:
+        return False
+    return float(score) < float(minimum)
 
 
 def scan_capture_status() -> dict:
@@ -60,6 +99,11 @@ def scan_capture_status() -> dict:
             "error": _JOB["error"],
             "mode": _JOB["mode"],
             "folder": _JOB["folder"],
+            "steps": int(_JOB["steps"]),
+            "focusing": bool(_JOB["focusing"]),
+            "sharpness": float(_JOB["sharpness"]),
+            "best_sharpness": float(_JOB["best_sharpness"]),
+            "focus_attempt": int(_JOB["focus_attempt"]),
         }
 
 
@@ -82,12 +126,19 @@ def start_scan_capture(
     rows: int,
     feed: float,
     captures_dir: Path = CAPTURES_DIR,
+    focus_max_travel_mm: float = DEFAULT_MAX_TRAVEL_MM,
+    focus_coarse_mm: float = DEFAULT_COARSE_MM,
+    focus_fine_mm: float = DEFAULT_FINE_MM,
+    focus_feed: float = 300,
 ) -> None:
     """Start the combined scan on a background thread."""
     if mode not in ("Uniform", "NSEW"):
         raise ValueError("mode must be Uniform or NSEW")
-    if ser is None or not getattr(ser, "is_open", False):
-        raise RuntimeError("Connect the Arduino first.")
+    ring_open = ser is not None and getattr(ser, "is_open", False)
+    if mode == "NSEW" and not ring_open:
+        raise RuntimeError("NSEW capture needs the Arduino to switch sides.")
+    if ser is not None and not ring_open:
+        raise RuntimeError("The Arduino port is closed.")
     status = printer_status()
     if not status["connected"]:
         raise RuntimeError("Connect the printer first.")
@@ -96,6 +147,11 @@ def start_scan_capture(
     if status["printing"]:
         raise RuntimeError("A scan is already running.")
     stops = scan_stops(columns, rows, step_mm)
+    focus_max_travel_mm = float(focus_max_travel_mm)
+    focus_coarse_mm = float(focus_coarse_mm)
+    focus_fine_mm = float(focus_fine_mm)
+    focus_feed = float(focus_feed)
+    _check_focus_settings(focus_max_travel_mm, focus_coarse_mm, focus_fine_mm, focus_feed)
     with _JOB_LOCK:
         thread = _JOB.get("thread")
         if thread is not None and thread.is_alive():
@@ -112,6 +168,11 @@ def start_scan_capture(
         _JOB["error"] = ""
         _JOB["mode"] = mode
         _JOB["folder"] = ""
+        _JOB["steps"] = 0
+        _JOB["focusing"] = False
+        _JOB["sharpness"] = 0.0
+        _JOB["best_sharpness"] = 0.0
+        _JOB["focus_attempt"] = 0
     worker = threading.Thread(
         target=_scan_thread,
         kwargs={
@@ -122,6 +183,10 @@ def start_scan_capture(
             "stops": stops,
             "captures_dir": Path(captures_dir),
             "stop": stop,
+            "focus_max_travel_mm": focus_max_travel_mm,
+            "focus_coarse_mm": focus_coarse_mm,
+            "focus_fine_mm": focus_fine_mm,
+            "focus_feed": focus_feed,
         },
         name="scan-capture",
         daemon=True,
@@ -140,12 +205,17 @@ def _scan_thread(
     stops: list[tuple[int, int, str | None, float]],
     captures_dir: Path,
     stop: threading.Event,
+    focus_max_travel_mm: float,
+    focus_coarse_mm: float,
+    focus_fine_mm: float,
+    focus_feed: float,
 ) -> None:
     from src.capture.camera_automation_v2 import shutdown
     from src.capture.preview import stop_preview
 
     camera = None
     saved = 0
+    steps_taken = 0
     try:
         sides_on = RING_SIDES if mode == "Uniform" else 1
         shutter = shutter_ms(total_exposure_ms, sides_on)
@@ -166,14 +236,26 @@ def _scan_thread(
             if axis is not None:
                 move_axis(axis, delta, feed)
                 time.sleep(MOTION_PAUSE_S)
-            folder = run_dir / f"({row},{col})"
-            folder.mkdir()
+                steps_taken += 1
+                with _JOB_LOCK:
+                    _JOB["steps"] = steps_taken
+                if refocus_due(steps_taken):
+                    _focus_here(
+                        camera,
+                        converter,
+                        timeout_ms,
+                        stop,
+                        max_travel_mm=focus_max_travel_mm,
+                        coarse_mm=focus_coarse_mm,
+                        fine_mm=focus_fine_mm,
+                        feed=focus_feed,
+                    )
             if mode == "Uniform":
-                files = [capture_uniform(camera, converter, ser, folder, timeout_ms)]
+                files = [capture_uniform(camera, converter, ser, run_dir, timeout_ms, row, col)]
             else:
-                files = capture_nsew(camera, converter, ser, folder, timeout_ms)
+                files = capture_nsew(camera, converter, ser, run_dir, timeout_ms, row, col)
             write_manifest(
-                folder,
+                run_dir,
                 {
                     "mode": "uniform" if mode == "Uniform" else "nsew",
                     "row": row,
@@ -201,4 +283,84 @@ def _scan_thread(
         with _JOB_LOCK:
             _JOB["running"] = False
             _JOB["stopping"] = False
+            _JOB["focusing"] = False
             _JOB["saved"] = saved
+
+
+def _score_triggered_frame(camera, converter, timeout_ms: int, settle_s: float) -> float:
+    """Wait out the Z step, then score one new software-triggered frame."""
+    import cv2
+    from pypylon import pylon
+
+    if settle_s > 0:
+        time.sleep(settle_s)
+    if not camera.IsGrabbing():
+        camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
+    image = grab_frame(camera, converter, timeout_ms)
+    if getattr(image, "ndim", 0) == 3 and image.shape[2] == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    return sharpness(image)
+
+
+def _focus_here(
+    camera,
+    converter,
+    timeout_ms: int,
+    stop: threading.Event,
+    *,
+    max_travel_mm: float,
+    coarse_mm: float,
+    fine_mm: float,
+    feed: float,
+) -> None:
+    """Hill-climb Z, and start again from that height while sharpness is below 900."""
+
+    def measure() -> float:
+        return _score_triggered_frame(camera, converter, timeout_ms, DEFAULT_SETTLE_S)
+
+    def move(delta_mm: float) -> None:
+        move_z(delta_mm, feed)
+
+    def on_sample(
+        _offset_mm: float,
+        score: float,
+        _best_offset_mm: float,
+        best_score: float,
+        *,
+        phase: str,
+        decision: str,
+    ) -> None:
+        del phase, decision
+        with _JOB_LOCK:
+            _JOB["sharpness"] = float(score)
+            _JOB["best_sharpness"] = float(best_score)
+
+    attempt = 0
+    while True:
+        if stop.is_set():
+            return
+        attempt += 1
+        with _JOB_LOCK:
+            _JOB["focusing"] = True
+            _JOB["focus_attempt"] = attempt
+            _JOB["sharpness"] = 0.0
+            _JOB["best_sharpness"] = 0.0
+        try:
+            result = focus_search(
+                measure,
+                move,
+                max_travel_mm=max_travel_mm,
+                coarse_mm=coarse_mm,
+                fine_mm=fine_mm,
+                min_gain=DEFAULT_MIN_GAIN,
+                should_stop=stop.is_set,
+                on_sample=on_sample,
+            )
+        finally:
+            with _JOB_LOCK:
+                _JOB["focusing"] = False
+        with _JOB_LOCK:
+            _JOB["sharpness"] = float(result.sharpness)
+            _JOB["best_sharpness"] = float(result.best_sharpness)
+        if not needs_another_focus(result.best_sharpness, result.stopped):
+            return

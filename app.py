@@ -17,7 +17,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.capture.capture_ui import keep_capture_inputs, keep_stage_inputs, render_capture_tab, suspend_live_view  # noqa: E402
-from src.overall.config import apply_nsew_settings, load_config, resolve_output_dir  # noqa: E402
+from src.overall.config import (  # noqa: E402
+    apply_nsew_settings,
+    beta_preset_rows,
+    load_config,
+    preset_for_beta,
+    resolve_output_dir,
+)
 from src.overall.io.results_writer import excel_bytes, write_csv, write_xlsx  # noqa: E402
 from src.overall.io.tile_loader import input_folder_labels  # noqa: E402
 from src.verification.ui import (  # noqa: E402
@@ -44,7 +50,7 @@ st.set_page_config(page_title="Particle Detection Software", layout="wide")
 st.title("Particle Detection Software")
 
 NM_PER_UM = 1000.0
-UI_SCHEMA = "mixed_layout_v20"
+UI_SCHEMA = "mixed_layout_v22"
 
 
 def _nm_to_um(nm: float) -> float:
@@ -111,7 +117,10 @@ def _widget_defaults(base: dict) -> dict:
         "ui_size_aggregation": size_agg,
         "ui_target_mb": float(report.get("target_mb", 20.0)),
         "ui_downsample": int(report.get("downsample", 0) or 0),
-        "ui_f_beta": float(1.0 if report.get("f_beta") is None else report.get("f_beta")),
+        "ui_f_beta": preset_for_beta(
+            beta_preset_rows(base),
+            1.0 if report.get("f_beta") is None else report.get("f_beta"),
+        )["beta"],
     }
 
 
@@ -232,18 +241,67 @@ def _selected_profile(base: dict) -> dict:
     return base
 
 
-def _apply_standard_settings(base: dict, folder: str | None = None) -> None:
+def _assign_widget(key: str, value, *, previous_epoch: int | None = None) -> None:
+    """Write a sidebar value onto the current epoch key and the held copy.
+
+    The bare key is the widget key when the epoch is still 0. Writing it
+    after that widget exists raises, so callers that just bumped the epoch
+    pass the epoch from before the bump and skip the bare key in that case.
+    """
+    st.session_state[_live_key(key)] = value
+    st.session_state[_hold_key(key)] = value
+    if previous_epoch is None or previous_epoch > 0:
+        st.session_state[key] = value
+
+
+def _apply_beta_preset(base: dict, *, previous_epoch: int | None = None, clear_trained: bool = False) -> None:
+    """Point the ML model and threshold slider at the selected beta's preset."""
+    beta = float(
+        st.session_state.get(_live_key("ui_f_beta"), st.session_state.get("ui_f_beta", 1.0))
+    )
+    preset = preset_for_beta(beta_preset_rows(base), beta)
+    _assign_widget("ui_ml_threshold", float(preset["threshold"]), previous_epoch=previous_epoch)
+    st.session_state["ui_beta_model_path"] = str(preset["model_path"])
+    if clear_trained:
+        st.session_state.pop("ui_trained_model", None)
+
+
+def _on_beta_change(base: dict) -> None:
+    """Keep every other sidebar edit, then load this beta's model and threshold."""
+    previous_epoch = _epoch()
+    captured: dict[str, object] = {}
+    for keys in _SIDEBAR_SECTIONS.values():
+        for key in keys:
+            live = _live_key(key)
+            if live in st.session_state:
+                captured[key] = st.session_state[live]
+            elif key in st.session_state:
+                captured[key] = st.session_state[key]
+            elif _hold_key(key) in st.session_state:
+                captured[key] = st.session_state[_hold_key(key)]
+    st.session_state["ui_settings_epoch"] = previous_epoch + 1
+    for key, value in captured.items():
+        _assign_widget(key, value, previous_epoch=previous_epoch)
+    _apply_beta_preset(base, previous_epoch=previous_epoch, clear_trained=True)
+
+
+def _apply_standard_settings(
+    base: dict, folder: str | None = None, *, clear_trained: bool = False
+) -> None:
     """Load Uniform or NSEW standard values. Keep the tile folder just chosen."""
     previous = _live_key("ui_input_dir")
     chosen = folder if folder is not None else str(
         st.session_state.get(previous) or st.session_state.get("ui_input_dir") or ""
     )
-    st.session_state["ui_settings_epoch"] = _epoch() + 1
+    previous_epoch = _epoch()
+    st.session_state["ui_settings_epoch"] = previous_epoch + 1
     _apply_widget_defaults(_selected_profile(base))
     live = _live_key("ui_input_dir")
     st.session_state[live] = chosen
-    st.session_state["ui_input_dir"] = chosen
+    if previous_epoch > 0:
+        st.session_state["ui_input_dir"] = chosen
     st.session_state[_hold_key("ui_input_dir")] = chosen
+    _apply_beta_preset(base, previous_epoch=previous_epoch, clear_trained=clear_trained)
 
 
 def _on_input_folder(base: dict) -> None:
@@ -281,12 +339,11 @@ def _nsew_config(base: dict) -> dict:
 
 
 def _on_reset_standard(base: dict) -> None:
-    st.session_state.pop("ui_trained_model", None)
-    _apply_standard_settings(base)
+    _apply_standard_settings(base, clear_trained=True)
 
 
 def _on_settings_profile(base: dict) -> None:
-    _apply_standard_settings(base)
+    _apply_standard_settings(base, clear_trained=True)
 
 
 def _sidebar(base: dict) -> dict:
@@ -294,7 +351,7 @@ def _sidebar(base: dict) -> dict:
     if st.session_state.get("ui_schema") != UI_SCHEMA:
         if not isinstance(st.session_state.get("ui_settings_nsew"), bool):
             st.session_state["ui_settings_nsew"] = False
-        _apply_standard_settings(base)
+        _apply_standard_settings(base, clear_trained=True)
         st.session_state["ui_schema"] = UI_SCHEMA
         st.session_state["ui_initialized"] = True
         st.session_state["ui_sidebar_frontend_seeded"] = True
@@ -343,7 +400,7 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
         key="ui_settings_nsew",
         on_change=_on_settings_profile,
         args=(base,),
-        help="Off is Uniform (config.yaml, v5 threshold 0.39). "
+        help="Off is Uniform (config.yaml, v4 threshold 0.23). "
         "On loads NSEW pixel size, preprocess, detection, and ML threshold "
         "from nsew_config.yaml.",
     )
@@ -622,13 +679,22 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
             key=_live_key("ui_downsample"),
             help="0 chooses a factor from the target size. A value > 0 forces that integer factor.",
         )
-        st.number_input(
+        beta_rows = beta_preset_rows(base)
+        beta_options = [float(row["beta"]) for row in beta_rows]
+        st.selectbox(
             "Beta",
-            min_value=0.0,
-            step=0.1,
-            format="%.2f",
+            options=beta_options,
+            format_func=lambda value: f"{float(value):.2f}",
             key=_live_key("ui_f_beta"),
-            help="Beta for Fβ on the previous-results summary. 1 is F1.",
+            on_change=_on_beta_change,
+            args=(base,),
+            help="Chooses the Fβ score and the ML model and starting threshold "
+            "for the next detection run. 1 is F1. A later threshold edit stays "
+            "until you pick another beta.",
+        )
+        selected = preset_for_beta(beta_rows, float(_widget_value("ui_f_beta")))
+        st.caption(
+            f"{Path(selected['model_path']).name} · threshold {float(selected['threshold']):.2f}"
         )
     st.session_state["ui_sidebar_frontend_seeded"] = True
 
@@ -671,13 +737,16 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
     ml["enabled"] = bool(_widget_value("ui_ml_enabled"))
     ml_min, ml_max = 0.0, 1.0
     ml["threshold"] = min(ml_max, max(ml_min, float(_widget_value("ui_ml_threshold"))))
-    if not ml.get("model_path"):
-        ml["model_path"] = (base.get("ml") or {}).get(
-            "model_path", "models/particle_clf_v5.joblib"
-        )
+    beta_choice = preset_for_beta(beta_preset_rows(base), float(_widget_value("ui_f_beta")))
+    if not st.session_state.get("ui_beta_model_path"):
+        st.session_state["ui_beta_model_path"] = str(beta_choice["model_path"])
     trained_model = st.session_state.get("ui_trained_model")
     if trained_model:
         ml["model_path"] = str(trained_model)
+    else:
+        ml["model_path"] = str(
+            st.session_state.get("ui_beta_model_path") or beta_choice["model_path"]
+        )
 
     meas = config.setdefault("measurement", {})
     meas["merge_radius_px"] = float(_widget_value("ui_merge_radius_px"))
@@ -839,7 +908,7 @@ def _render_training(config: dict) -> None:
             if code == 0:
                 st.session_state["ui_trained_model"] = str(destination)
                 st.success(
-                    f"Wrote {destination}. Detection will use this model until you reset standard values."
+                    f"Wrote {destination}. Detection will use this model until you change beta or reset standard values."
                 )
             else:
                 st.error(f"Training exited with code {code}.")
@@ -1149,6 +1218,12 @@ if verification_tab.open:
                 )
         if database_tab.open:
             with database_tab:
+                show_area_line = st.toggle(
+                    "Red area line",
+                    value=True,
+                    key="database_red_area_line",
+                    help="Outline the measured particle area on the particle crops.",
+                )
                 groundup_tab, glovebox_tab = st.tabs(
                     ["Groundup", "Glovebox"],
                     on_change="rerun",
@@ -1169,6 +1244,8 @@ if verification_tab.open:
                                 "Particles",
                                 n_columns=2,
                                 campaign=campaign,
+                                config=config,
+                                show_area_line=show_area_line,
                             )
                         with not_particle_col:
                             render_collection_tab(
