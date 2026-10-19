@@ -1619,15 +1619,16 @@ def render_shadow_tab(config: dict[str, Any]) -> None:
     if mode is None:
         return
 
-    (
-        light_from,
-        light_height,
-        ring_edge,
-        ring_centre,
-        k_mad,
-        max_len,
-        preprocess,
-    ) = _light_controls()
+    with st.container(border=True, key="block-shadow-light"):
+        (
+            light_from,
+            light_height,
+            ring_edge,
+            ring_centre,
+            k_mad,
+            max_len,
+            preprocess,
+        ) = _light_controls()
     params = dict(
         light_from=light_from,
         light_height=light_height,
@@ -1637,7 +1638,8 @@ def render_shadow_tab(config: dict[str, Any]) -> None:
         max_len=max_len,
         preprocess=preprocess,
     )
-    if mode == "database":
-        _render_database_shadow(config, **params)
-    else:
-        _render_upload_shadow(config, **params)
+    with st.container(border=True, key="block-shadow-measure"):
+        if mode == "database":
+            _render_database_shadow(config, **params)
+        else:
+            _render_upload_shadow(config, **params)

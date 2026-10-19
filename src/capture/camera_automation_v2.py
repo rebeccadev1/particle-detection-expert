@@ -51,7 +51,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 # particle_detection/src/capture -> ASML SE/Inputs/Groundup.
 CAPTURES_DIR = SCRIPT_DIR.parents[2] / "Inputs" / "Groundup"
 # Default stage width. The Capture tab passes the Columns control instead.
-DEFAULT_COLUMNS = 7
+DEFAULT_COLUMNS = 10
 LOCATION_DIR_RE = re.compile(r"^\((\d+),(\d+)\)$")
 RUN_DIR_RE = re.compile(r"^v(\d+) (\d{4}-\d{2}-\d{2})$")
 ARDUINO_VIDS = {0x2341, 0x2A03, 0x1A86}  # Arduino, Arduino.org, CH340

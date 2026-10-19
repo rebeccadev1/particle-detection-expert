@@ -1,4 +1,3 @@
-"""Streamlit controls for the ring light and Basler capture script."""
 
 from __future__ import annotations
 
@@ -55,6 +54,7 @@ STAGE_WIDGET_DEFAULTS: dict = {
 }
 
 FOCUS_WIDGET_DEFAULTS: dict = {
+    "focus_during_scan": True,
     "focus_max_travel_mm": 1.0,
     "focus_coarse_mm": 0.05,
     "focus_fine_mm": 0.01,
@@ -152,164 +152,227 @@ def _apply_mode_light(cap, mode: str):
     return _run_serial(cap.lights_off)
 
 
-def render_capture_tab() -> None:
-    """Uniform lighting, or one side at a time. One total-exposure control."""
-    cap = _capture_module()
+def _failure(action: str, next_step: str, exc: BaseException) -> None:
+    """Operator-facing failure. The exception text stays behind a disclosure."""
+    detail = str(exc).strip() or type(exc).__name__
+    first = detail.splitlines()[0]
+    if len(first) > 160 or "Traceback" in detail:
+        st.error(f"{action} {next_step}")
+    else:
+        st.error(f"{action} {first} {next_step}")
+    with st.expander("Error detail"):
+        st.code(detail)
 
-    st.caption(
-        "Capture and scan use the light already on. Connect the Arduino only to change the ring. "
-        "NSEW still needs it, because each frame switches sides. "
-        "Close the Arduino Serial Monitor before connecting."
-    )
 
-    mode = st.radio(
-        "Lighting",
-        ("Uniform", "NSEW"),
-        horizontal=True,
-        key="capture_mode",
-    )
-    nsew_style = "Automatic"
-    if mode == "NSEW":
-        nsew_style = st.radio(
-            "NSEW capture",
-            ("Automatic", "Manual"),
-            horizontal=True,
-            key="capture_nsew_style",
-        )
+def _port_roles() -> dict[str, str]:
+    roles: dict[str, str] = {}
+    printer = printer_status()
+    if printer["connected"] and printer.get("port"):
+        roles[str(printer["port"])] = "the printer"
+    if _serial() is not None and _LINK.get("port"):
+        roles[str(_LINK["port"])] = "the Arduino"
+    return roles
 
+
+def _marked_port(device: str, labels: dict[str, str], roles: dict[str, str]) -> str:
+    name = labels.get(device, device)
+    role = roles.get(device)
+    if role:
+        return f"{name} — in use by {role}"
+    return name
+
+
+def _render_port_select(cap, *, label: str, state_key: str, disabled: bool) -> bool:
+    """Port list with taken ports marked. False when pyserial is missing."""
     try:
         ports = cap.list_serial_ports()
     except ImportError:
         st.error("pyserial is not installed. From the project folder: pip install pyserial")
-        return
-
-    devices = [device for device, _label in ports]
-    labels = {device: label for device, label in ports}
-    ser = _serial()
-
+        return False
+    devices = [device for device, _name in ports]
+    labels = {device: name for device, name in ports}
+    roles = _port_roles()
     if devices:
-        if st.session_state.get("arduino_port") not in devices:
-            st.session_state.pop("arduino_port", None)
+        if st.session_state.get(state_key) not in devices:
+            st.session_state.pop(state_key, None)
         st.selectbox(
-            "Arduino port",
+            label,
             devices,
             index=None,
             placeholder="Select a port",
-            key="arduino_port",
-            format_func=lambda device: labels.get(device, device),
-            disabled=ser is not None,
+            key=state_key,
+            format_func=lambda device: _marked_port(device, labels, roles),
+            disabled=disabled,
         )
     else:
-        st.info("No serial ports found. Plug in the Uno and reopen this tab.")
+        st.caption("No serial ports found. Plug in the device, then refresh.")
+    return True
 
-    connect_col, disconnect_col, status_col = st.columns([1, 1, 2])
-    arduino_port = st.session_state.get("arduino_port")
-    if connect_col.button(
-        "Connect to Arduino",
-        type="primary",
-        disabled=not arduino_port or ser is not None,
-    ):
-        port = arduino_port
-        printer = printer_status()
-        if printer["connected"] and port == printer["port"]:
-            st.error("That port is already the printer. Choose the other port for the Arduino.")
-        else:
-            opened = None
-            try:
-                opened = cap.open_arduino(port)
-                if _selected_mode() == "Uniform":
-                    cap.light_all(opened)
-                    ack = "OK ALL"
-                else:
-                    cap.lights_off(opened)
-                    ack = "OK OFF"
-            except Exception as exc:
-                if opened is not None:
-                    try:
-                        opened.close()
-                    except Exception:
-                        pass
-                st.error(str(exc))
-            else:
-                _LINK["ser"] = opened
-                _LINK["port"] = port
-                _LINK["ack"] = ack
-                st.session_state["capture_lit_mode"] = _selected_mode()
+
+def _hardware_strip() -> None:
+    """One line for Arduino, printer, and camera. Not a banner per device."""
+    printer = printer_status()
+    snap = preview_snapshot()
+    capture = scan_capture_status()
+    if _serial() is not None:
+        arduino = f"connected ({_LINK['port']})"
+    else:
+        arduino = "not connected"
+    if not printer["connected"]:
+        printer_state = "not connected"
+    elif not printer["online"]:
+        printer_state = "waiting for an answer"
+    elif printer["printing"] or capture["running"]:
+        printer_state = "moving"
+    elif autofocus_status()["running"]:
+        printer_state = "autofocus"
+    else:
+        printer_state = f"ready ({printer['port']})"
+    if capture["running"]:
+        camera = "in a scan"
+    elif snap["frame"] is not None:
+        camera = "live"
+    elif snap["error"]:
+        camera = "not connected"
+    else:
+        camera = "opening"
+    st.caption(f"Arduino {arduino} · Printer {printer_state} · Camera {camera}")
+
+
+def render_capture_tab() -> None:
+    """Uniform lighting, or one side at a time. One total-exposure control."""
+    cap = _capture_module()
+    _hardware_strip()
+    live_col, control_col = st.columns([1.15, 1], vertical_alignment="top")
+    with control_col:
+        with st.container(border=True, key="block-capture"):
+            st.subheader("Capture")
+            mode = st.radio(
+                "Lighting",
+                ("Uniform", "NSEW"),
+                horizontal=True,
+                key="capture_mode",
+            )
+            nsew_style = "Automatic"
+            if mode == "NSEW":
+                nsew_style = st.radio(
+                    "NSEW capture",
+                    ("Automatic", "Manual"),
+                    horizontal=True,
+                    key="capture_nsew_style",
+                )
+
+            ser = _serial()
+            if not _render_port_select(
+                cap,
+                label="Arduino port",
+                state_key="arduino_port",
+                disabled=ser is not None,
+            ):
+                return
+
+            refresh_col, connect_col, disconnect_col = st.columns(3)
+            if refresh_col.button("Refresh ports", key="refresh_arduino_port", width="stretch"):
                 st.rerun()
-
-    if disconnect_col.button("Disconnect Camera", disabled=ser is None):
-        live = _serial()
-        if live is not None:
-            try:
-                cap.lights_off(live)
-            except Exception as exc:
-                st.warning(f"LEDs may still be on: {exc}")
-        _forget_port()
-        _LINK["ack"] = ""
-        st.session_state.pop("capture_lit_mode", None)
-        st.rerun()
-
-    if ser is not None:
-        status_col.success(f"Connected to {_LINK['port']}")
-        if _LINK["ack"]:
-            status_col.caption(f"Last reply: {_LINK['ack']}")
-    else:
-        status_col.info("Not connected")
-
-    if ser is not None and st.session_state.get("capture_lit_mode") != mode:
-        if _apply_mode_light(cap, mode):
-            st.session_state["capture_lit_mode"] = mode
-
-    total_ms = st.number_input(
-        "Total exposure (ms)",
-        min_value=4.0,
-        max_value=4000.0,
-        value=float(CAPTURE_WIDGET_DEFAULTS["capture_total_ms"]),
-        step=1.0,
-        key="capture_total_ms",
-        help="Dose from a single side. The camera time is calculated from this and the lighting mode.",
-    )
-    sides_on = cap.RING_SIDES if mode == "Uniform" else 1
-    shutter = cap.shutter_ms(float(total_ms), sides_on)
-    _render_live(cap, shutter)
-
-    focusing = autofocus_status()["running"] or scan_capture_status()["running"]
-    if mode == "Uniform":
-        on_col, off_col = st.columns(2)
-        if on_col.button("All sides on", disabled=ser is None, width="stretch"):
-            _run_serial(cap.light_all)
-        if off_col.button("All off", disabled=ser is None, width="stretch"):
-            _run_serial(cap.lights_off)
-        if st.button("Capture", type="primary", disabled=focusing):
-            _capture_run(cap, mode, shutter)
-    elif nsew_style == "Automatic":
-        st.caption(
-            "One click lights N, then E, then S, then W, and saves each frame. "
-            "It waits 0.5 seconds between sides."
-        )
-        if st.button("Capture N, E, S, W", type="primary", disabled=ser is None or focusing):
-            _capture_run(cap, mode, shutter)
-    else:
-        st.caption("Each button lights that side and takes its picture.")
-        side_cols = st.columns(len(cap.DIRECTIONS))
-        for index, direction in enumerate(cap.DIRECTIONS):
-            if side_cols[index].button(
-                direction,
-                key=f"capture_side_{direction}",
-                disabled=ser is None or focusing,
+            arduino_port = st.session_state.get("arduino_port")
+            if connect_col.button(
+                "Connect Arduino",
+                disabled=not arduino_port or ser is not None,
                 width="stretch",
             ):
-                _capture_one_side(cap, index, shutter)
-        if st.button("New set", disabled=ser is None):
-            st.session_state.pop("capture_manual_folder", None)
-            st.session_state.pop("capture_manual_row", None)
-            st.session_state.pop("capture_manual_col", None)
-            st.rerun()
+                port = arduino_port
+                printer = printer_status()
+                if printer["connected"] and port == printer["port"]:
+                    st.error("That port is already the printer. Choose the other port for the Arduino.")
+                else:
+                    opened = None
+                    try:
+                        opened = cap.open_arduino(port)
+                        if _selected_mode() == "Uniform":
+                            cap.light_all(opened)
+                            ack = "OK ALL"
+                        else:
+                            cap.lights_off(opened)
+                            ack = "OK OFF"
+                    except Exception as exc:
+                        if opened is not None:
+                            try:
+                                opened.close()
+                            except Exception:
+                                pass
+                        _failure(
+                            "Could not open the Arduino.",
+                            "Pick another port, or unplug it and refresh ports.",
+                            exc,
+                        )
+                    else:
+                        _LINK["ser"] = opened
+                        _LINK["port"] = port
+                        _LINK["ack"] = ack
+                        st.session_state["capture_lit_mode"] = _selected_mode()
+                        st.rerun()
 
-    st.divider()
+            if disconnect_col.button("Disconnect Arduino", disabled=ser is None, width="stretch"):
+                live = _serial()
+                if live is not None:
+                    try:
+                        cap.lights_off(live)
+                    except Exception as exc:
+                        _failure(
+                            "The Arduino closed, and the lights may still be on.",
+                            "Disconnect power if they stay lit.",
+                            exc,
+                        )
+                _forget_port()
+                _LINK["ack"] = ""
+                st.session_state.pop("capture_lit_mode", None)
+                st.rerun()
+
+            if ser is not None and _LINK.get("ack"):
+                st.caption(f"Last reply: {_LINK['ack']}")
+
+            if ser is not None and st.session_state.get("capture_lit_mode") != mode:
+                if _apply_mode_light(cap, mode):
+                    st.session_state["capture_lit_mode"] = mode
+
+            total_ms = st.number_input(
+                "Total exposure (ms)",
+                min_value=4.0,
+                max_value=4000.0,
+                value=float(CAPTURE_WIDGET_DEFAULTS["capture_total_ms"]),
+                step=1.0,
+                key="capture_total_ms",
+                help="Dose from a single side. The camera time is calculated from this and the lighting mode.",
+            )
+            sides_on = cap.RING_SIDES if mode == "Uniform" else 1
+            shutter = cap.shutter_ms(float(total_ms), sides_on)
+
+            if mode == "Uniform":
+                on_col, off_col = st.columns(2)
+                if on_col.button("All lights on", disabled=ser is None, width="stretch"):
+                    _run_serial(cap.light_all)
+                if off_col.button("All lights off", disabled=ser is None, width="stretch"):
+                    _run_serial(cap.lights_off)
+                blocked = _still_capture_block_reason(needs_arduino=False)
+                if st.button("Capture", type="primary", disabled=blocked is not None):
+                    _capture_run(cap, mode, shutter)
+                _caption_when_blocked("Capture", blocked)
+            elif nsew_style == "Automatic":
+                st.caption(
+                    "One click lights N, then E, then S, then W, and saves each frame. "
+                    "It waits 0.5 seconds between sides."
+                )
+                blocked = _still_capture_block_reason(needs_arduino=True)
+                if st.button("Capture N, E, S, W", type="primary", disabled=blocked is not None):
+                    _capture_run(cap, mode, shutter)
+                _caption_when_blocked("Capture", blocked)
+            else:
+                _render_manual_sides(cap, shutter)
+
+        _show_last_run()
+    with live_col:
+        _render_live(cap, shutter)
     _render_stage(cap)
-    st.divider()
-    _show_last_run()
 
 
 def _stage_columns() -> int:
@@ -367,7 +430,7 @@ def _capture_one_side(cap, index: int, shutter_ms: float) -> None:
                 },
             )
     except Exception as exc:
-        st.error(str(exc))
+        _failure("The picture was not saved.", "The camera is free again. Take the shot again.", exc)
         return
     finally:
         cap.shutdown(camera, None)
@@ -378,7 +441,7 @@ def _capture_one_side(cap, index: int, shutter_ms: float) -> None:
         "mode": "NSEW manual",
     }
     _LINK["ack"] = f"OK {index}"
-    st.success(f"Saved {filename} to {folder}")
+    st.caption(f"Saved {filename} to {folder}")
 
 
 def _capture_run(cap, mode: str, shutter_ms: float) -> None:
@@ -418,7 +481,7 @@ def _capture_run(cap, mode: str, shutter_ms: float) -> None:
             )
     except Exception as exc:
         failed = True
-        st.error(str(exc))
+        _failure("The picture was not saved.", "The camera is free again. Take the shot again.", exc)
     finally:
         cap.shutdown(camera, None)
         start_preview(cap, exposure_us)
@@ -430,25 +493,106 @@ def _capture_run(cap, mode: str, shutter_ms: float) -> None:
         }
         _LINK["ack"] = "OK ALL" if mode == "Uniform" else f"OK {len(saved) - 1}"
     if not failed and saved:
-        st.success(f"Saved {', '.join(saved)} to {folder}")
+        st.caption(f"Saved {', '.join(saved)} to {folder}")
+
+
+def _camera_busy_reason() -> str | None:
+    if scan_capture_status()["running"]:
+        return "Scan and capture has the camera."
+    if autofocus_status()["running"]:
+        return "Autofocus is running."
+    return None
+
+
+def _still_capture_block_reason(*, needs_arduino: bool) -> str | None:
+    busy = _camera_busy_reason()
+    if busy:
+        return busy
+    if needs_arduino and _serial() is None:
+        return "NSEW capture needs the Arduino."
+    return None
+
+
+def _caption_when_blocked(action: str, reason: str | None) -> None:
+    if reason:
+        st.caption(f"{action} is off: {reason}")
+
+
+def _manual_set(cap) -> tuple[Path | None, int, int, list[str]]:
+    """Folder and sides already saved for the open manual set. Does not create one."""
+    current = st.session_state.get("capture_manual_folder")
+    row = st.session_state.get("capture_manual_row")
+    col = st.session_state.get("capture_manual_col")
+    if not current or not row or not col:
+        return None, 0, 0, []
+    folder = Path(current)
+    if not folder.is_dir():
+        return None, 0, 0, []
+    row_i, col_i = int(row), int(col)
+    saved = [
+        direction
+        for direction in cap.DIRECTIONS
+        if (folder / cap.image_filename(row_i, col_i, direction)).is_file()
+    ]
+    return folder, row_i, col_i, saved
+
+
+def _render_manual_sides(cap, shutter_ms: float) -> None:
+    """One button per side, with the open set listed beside them."""
+    blocked = _still_capture_block_reason(needs_arduino=True)
+    folder, row, col, saved = _manual_set(cap)
+    st.caption("Each button lights that side and adds it to this set.")
+    side_cols = st.columns(len(cap.DIRECTIONS))
+    for index, direction in enumerate(cap.DIRECTIONS):
+        if side_cols[index].button(
+            direction,
+            key=f"capture_side_{direction}",
+            disabled=blocked is not None,
+            width="stretch",
+        ):
+            _capture_one_side(cap, index, shutter_ms)
+    if folder is None:
+        st.caption("No set yet. The first side starts a folder.")
+    else:
+        marks = " · ".join(
+            f"{direction} saved" if direction in saved else f"{direction} not taken"
+            for direction in cap.DIRECTIONS
+        )
+        st.caption(f"This set is `{folder.name}`, stop ({row},{col}). {marks}.")
+    if st.button(
+        "New set",
+        disabled=folder is None or blocked is not None,
+        help="Pictures already saved stay on disk. The next side starts a new folder.",
+    ):
+        st.session_state.pop("capture_manual_folder", None)
+        st.session_state.pop("capture_manual_row", None)
+        st.session_state.pop("capture_manual_col", None)
+        st.rerun()
+    if folder is not None:
+        st.caption("New set keeps these files and starts the next side in a new folder.")
+    _caption_when_blocked("Side capture", blocked)
 
 
 def _show_last_run() -> None:
     last = st.session_state.get("capture_last_run")
     if not last:
         return
-    folder = Path(last["folder"])
-    files = last.get("files") or ([last["file"]] if last.get("file") else [])
-    st.subheader("Last capture")
-    label = last.get("mode") or "Capture"
-    st.write(f"{label} — `{folder}`")
-    cols = st.columns(max(len(files), 1))
-    for column, name in zip(cols, files):
-        path = folder / name
-        if path.is_file():
-            column.image(str(path), caption=path.stem, width="stretch")
-        else:
-            column.warning(f"Missing {name}")
+    with st.container(border=True, key="block-last-capture"):
+        folder = Path(last["folder"])
+        files = last.get("files") or ([last["file"]] if last.get("file") else [])
+        manual = last.get("mode") == "NSEW manual"
+        st.subheader("Last capture")
+        label = last.get("mode") or "Capture"
+        st.write(f"{label} — `{folder}`")
+        existing = [name for name in files if (folder / name).is_file()]
+        missing = [name for name in files if name not in existing]
+        if existing:
+            cols = st.columns(len(existing))
+            for column, name in zip(cols, existing):
+                column.image(str(folder / name), caption=Path(name).stem, width="stretch")
+        if missing and not manual:
+            for name in missing:
+                st.warning(f"Missing {name}")
 
 
 def suspend_live_view() -> None:
@@ -466,19 +610,21 @@ def _live_feed() -> None:
         else:
             st.info("Opening the camera…")
         return
-    st.image(frame, width=480)
+    shutter_ms = float(st.session_state.get("_capture_shutter_ms", 0.0))
+    st.image(frame, caption=f"{shutter_ms:.1f} ms", width="stretch")
     if snap["error"]:
         st.caption(snap["error"])
 
 
 def _render_live(cap, shutter_ms: float) -> None:
-    st.subheader("Live view")
-    if scan_capture_status()["running"]:
-        st.caption("The scan has the camera. The live view returns when it finishes.")
-        return
-    st.caption(f"Same shutter as the capture, {shutter_ms:.1f} ms. The feed pauses while a picture is saved.")
-    start_preview(cap, shutter_ms * 1000.0)
-    _live_feed()
+    with st.container(border=True, key="block-live"):
+        st.subheader("Live view")
+        st.session_state["_capture_shutter_ms"] = float(shutter_ms)
+        if scan_capture_status()["running"]:
+            st.caption("The scan has the camera. The live view returns when it finishes.")
+            return
+        start_preview(cap, shutter_ms * 1000.0)
+        _live_feed()
 
 
 def _stage_pause() -> dict:
@@ -497,6 +643,10 @@ def _stage_program() -> str:
     )
 
 
+def _focus_during_scan() -> bool:
+    return bool(st.session_state.get("focus_during_scan", True))
+
+
 def _focus_limits() -> str | None:
     travel = float(st.session_state["focus_max_travel_mm"])
     coarse = float(st.session_state["focus_coarse_mm"])
@@ -508,12 +658,28 @@ def _focus_limits() -> str | None:
 
 def _render_focus(locked: bool) -> None:
     """Hill-climb Z from the current height using the live image."""
-    st.subheader("Focus")
-    st.caption(
-        "Steps printer Z from the current height and keeps the direction that makes "
-        "the live image sharper. A soft reading is scored again, then one more step "
-        "is taken before turning around. The first step is +Z."
-    )
+    with st.container(border=True, key="block-focus"):
+        st.subheader("Focus")
+        st.checkbox(
+            "Check and correct focus during the scan",
+            value=bool(FOCUS_WIDGET_DEFAULTS["focus_during_scan"]),
+            key="focus_during_scan",
+            disabled=locked,
+            help=(
+                "After every seventh stage step, score the frame and run autofocus. "
+                "If the best score stays at or below 80% of the sharpness at the start of that search, "
+                "autofocus runs again. Leave this off to keep the current Z for the whole scan."
+            ),
+        )
+        with st.expander("Focus travel and steps"):
+            _focus_settings(locked)
+        limit_error = _focus_limits()
+        if limit_error:
+            st.error(limit_error)
+        _focus_progress()
+
+
+def _focus_settings(locked: bool) -> None:
     travel_col, coarse_col, fine_col, feed_col = st.columns(4)
     travel_col.number_input(
         "Max travel (mm)",
@@ -557,10 +723,6 @@ def _render_focus(locked: bool) -> None:
         key="focus_feed",
         disabled=locked,
     )
-    limit_error = _focus_limits()
-    if limit_error:
-        st.error(limit_error)
-    _focus_progress()
 
 
 def _format_score(value: float) -> str:
@@ -626,16 +788,11 @@ def _focus_progress() -> None:
             )
     _focus_steps(info)
     if info["running"]:
-        if st.button("Stop focus", type="primary"):
+        if st.button("Stop focus"):
             stop_autofocus()
         return
-    ready = (
-        printer["online"]
-        and not printer["printing"]
-        and snap["frame"] is not None
-        and _focus_limits() is None
-    )
-    if st.button("Autofocus", type="primary", disabled=not ready):
+    blocked = _autofocus_block_reason(printer, snap)
+    if st.button("Autofocus", type="primary", disabled=blocked is not None):
         try:
             start_autofocus(
                 max_travel_mm=float(st.session_state["focus_max_travel_mm"]),
@@ -644,9 +801,43 @@ def _focus_progress() -> None:
                 feed=float(st.session_state["focus_feed"]),
             )
         except Exception as exc:
-            st.error(str(exc))
+            _failure("Autofocus did not start.", "Check the printer and the live view, then try again.", exc)
         else:
             st.rerun(scope="app")
+    _caption_when_blocked("Autofocus", blocked)
+
+
+def _autofocus_block_reason(printer: dict, snap: dict) -> str | None:
+    if not printer["connected"]:
+        return "Printer is not connected."
+    if not printer["online"]:
+        return "Waiting for the printer to answer."
+    if printer["printing"]:
+        return "The printer is moving."
+    if snap["frame"] is None:
+        return "The live view is not ready."
+    if _focus_limits() is not None:
+        return "Coarse and fine steps have to fit inside the max travel."
+    return None
+
+
+def _scan_capture_block_note(info: dict, focusing: bool) -> str | None:
+    """Why Start scan, Scan and capture, or only Scan and capture cannot run."""
+    if not info["connected"]:
+        shared = "Printer is not connected."
+    elif not info["online"]:
+        shared = "Waiting for the printer to answer."
+    elif focusing:
+        shared = "Autofocus is running."
+    else:
+        shared = None
+    if shared:
+        return f"Start scan and Scan and capture are off: {shared}"
+    if _focus_during_scan() and _focus_limits() is not None:
+        return "Scan and capture is off: coarse and fine steps have to fit inside the max travel."
+    if _selected_mode() == "NSEW" and _serial() is None:
+        return "Scan and capture is off: NSEW capture needs the Arduino."
+    return None
 
 
 @st.fragment(run_every=1)
@@ -680,7 +871,7 @@ def _stage_progress() -> None:
                 min(capture["index"], total) / total,
                 text=f"Stop {capture['index']} of {capture['total']} — {label}",
             )
-        if st.button("Stop scan and capture", type="primary"):
+        if st.button("Stop scan and capture"):
             stop_scan_capture()
         return
     if st.session_state.pop("_scan_capture_was_running", False):
@@ -688,46 +879,29 @@ def _stage_progress() -> None:
     if capture["saved"] and not capture["error"]:
         where = f" to {capture['folder']}" if capture.get("folder") else ""
         st.success(f"Saved {capture['saved']} stops{where}.")
-    if not info["connected"]:
-        st.info("Printer not connected")
-    elif focusing:
-        st.caption("Autofocus is using the printer.")
-    elif info["printing"]:
+    if info["printing"]:
         total = max(info["total"], 1)
         index = min(info["index"], total)
         st.progress(index / total, text=f"Moving — command {index} of {info['total']}")
-        if st.button("Stop scan", type="primary"):
+        if st.button("Stop scan"):
             stop_scan()
             st.rerun(scope="app")
         return
-    elif info["online"]:
-        st.success(f"Printer ready on {info['port']}")
-    else:
-        st.warning(f"Port {info['port']} is open. Waiting for the printer to answer.")
     if info["error"]:
         st.caption(info["error"])
-    st.caption(
-        "Scan and capture uses the lighting mode above and leaves the ring as it is "
-        "unless the Arduino is connected. NSEW takes N, E, S, and W before the stage moves again. "
-        "After every 7 stage steps it refocuses with the Focus settings. "
-        "If sharpness is not above 80% of the score autofocus started with, it autofocuses again."
-    )
     move_col, both_col = st.columns(2)
-    if move_col.button("Start scan", type="primary", disabled=not info["online"] or focusing):
+    if move_col.button("Start scan", disabled=not info["online"] or focusing):
         try:
             start_gcode(_stage_program())
         except Exception as exc:
-            st.error(str(exc))
+            _failure("The scan did not start.", "Wait until the printer answers, then try again.", exc)
         else:
             st.rerun(scope="app")
+    scan_note = _scan_capture_block_note(info, focusing)
     if both_col.button(
         "Scan and capture",
-        disabled=(
-            not info["online"]
-            or focusing
-            or _focus_limits() is not None
-            or (_selected_mode() == "NSEW" and _serial() is None)
-        ),
+        type="primary",
+        disabled=scan_note is not None,
     ):
         try:
             start_scan_capture(
@@ -742,11 +916,18 @@ def _stage_progress() -> None:
                 focus_coarse_mm=float(st.session_state.get("focus_coarse_mm", 0.05)),
                 focus_fine_mm=float(st.session_state.get("focus_fine_mm", 0.01)),
                 focus_feed=float(st.session_state.get("focus_feed", 300)),
+                focus_during_scan=_focus_during_scan(),
             )
         except Exception as exc:
-            st.error(str(exc))
+            _failure(
+                "Scan and capture did not start.",
+                "Check the printer, the camera, and the lighting mode, then try again.",
+                exc,
+            )
         else:
             st.rerun(scope="app")
+    if scan_note:
+        st.caption(scan_note)
 
 
 def _format_jog_mm(delta_mm: float) -> str:
@@ -758,17 +939,13 @@ def _jog_stage(axis: str, delta_mm: float) -> None:
     try:
         move_axis(axis, delta_mm, feed)
     except Exception as exc:
-        st.error(str(exc))
+        _failure("The stage did not move.", "Check that the printer is still connected.", exc)
     else:
-        st.success(f"Moved {axis} {_format_jog_mm(delta_mm)} mm.")
+        st.session_state["stage_last_jog"] = f"Last move: {axis} {_format_jog_mm(delta_mm)} mm."
 
 
 def _render_stage_jog(locked: bool) -> None:
     """Short steps so a connected printer can be checked without starting a scan."""
-    st.caption(
-        "Jog X and Y by 1 mm, or Z by 0.1 mm or 1 mm, from the current position. "
-        "Uses the moving speed below. Positive Z is up."
-    )
     info = printer_status()
     ready = info["online"] and not locked
     x_minus, x_plus, y_minus, y_plus = st.columns(4)
@@ -789,140 +966,145 @@ def _render_stage_jog(locked: bool) -> None:
         _jog_stage("Z", 0.1)
     if z_plus.button("Z +1 mm", disabled=not ready, width="stretch"):
         _jog_stage("Z", 1)
+    last_jog = st.session_state.get("stage_last_jog")
+    if last_jog:
+        st.caption(last_jog)
 
 
 def _render_stage(cap) -> None:
     """Move the 3D-printer stage with the same serpentine as scan_40x60.gcode."""
-    st.subheader("Stage")
+    with st.container(border=True, key="block-stage"):
+        st.subheader("Stage")
 
-    try:
-        ports = cap.list_serial_ports()
-    except ImportError:
-        st.error("pyserial is not installed. From the project folder: pip install pyserial")
-        return
-
-    devices = [device for device, _label in ports]
-    labels = {device: label for device, label in ports}
-    info = printer_status()
-    connected = info["connected"]
-
-    if devices:
-        if st.session_state.get("printer_port") not in devices:
-            st.session_state.pop("printer_port", None)
-        st.selectbox(
-            "Printer port",
-            devices,
-            index=None,
-            placeholder="Select a port",
-            key="printer_port",
-            format_func=lambda device: labels.get(device, device),
+        info = printer_status()
+        connected = info["connected"]
+        if not _render_port_select(
+            cap,
+            label="Printer port",
+            state_key="printer_port",
             disabled=connected,
-        )
-    else:
-        st.info("No serial ports found. Plug in the printer and reopen this tab.")
+        ):
+            return
 
-    connect_col, disconnect_col = st.columns(2)
-    printer_port = st.session_state.get("printer_port")
-    if connect_col.button("Connect Printer", disabled=not printer_port or connected):
-        if _LINK.get("port") and printer_port == _LINK.get("port") and _serial() is not None:
-            st.error("That port is already the Arduino. Choose the other port for the printer.")
-        else:
-            try:
-                connect_printer(printer_port)
-            except Exception as exc:
-                st.error(str(exc))
+        refresh_col, connect_col, disconnect_col = st.columns(3)
+        if refresh_col.button("Refresh ports", key="refresh_printer_port", width="stretch"):
+            st.rerun()
+        printer_port = st.session_state.get("printer_port")
+        if connect_col.button(
+            "Connect Printer",
+            disabled=not printer_port or connected,
+            width="stretch",
+        ):
+            if _LINK.get("port") and printer_port == _LINK.get("port") and _serial() is not None:
+                st.error("That port is already the Arduino. Choose the other port for the printer.")
             else:
-                st.rerun()
-    if disconnect_col.button("Disconnect Printer", disabled=not connected):
-        disconnect_printer()
-        st.rerun()
+                try:
+                    connect_printer(printer_port)
+                except Exception as exc:
+                    _failure(
+                        "Could not open the printer.",
+                        "Pick another port, or unplug it and refresh ports.",
+                        exc,
+                    )
+                else:
+                    st.rerun()
+        if disconnect_col.button("Disconnect Printer", disabled=not connected, width="stretch"):
+            disconnect_printer()
+            st.rerun()
 
-    scanning = (
-        printer_status()["printing"]
-        or autofocus_status()["running"]
-        or scan_capture_status()["running"]
-    )
-    _render_stage_jog(scanning)
-    step_col, x_col, row_col = st.columns(3)
-    step_col.number_input(
-        "Step (mm)",
-        min_value=0.1,
-        max_value=50.0,
-        value=float(STAGE_WIDGET_DEFAULTS["stage_step_mm"]),
-        step=0.001,
-        format="%.3f",
-        key="stage_step_mm",
-        disabled=scanning,
-        help="Distance between picture centers. 6.174 mm is a 6.86 mm field of view with 10 percent overlap.",
-    )
-    x_col.number_input(
-        "Columns",
-        min_value=1,
-        max_value=80,
-        value=int(STAGE_WIDGET_DEFAULTS["stage_columns"]),
-        step=1,
-        key="stage_columns",
-        disabled=scanning,
-        help="Stops along X. The stage steps one fewer time than this.",
-    )
-    row_col.number_input(
-        "Rows",
-        min_value=1,
-        max_value=80,
-        value=int(STAGE_WIDGET_DEFAULTS["stage_rows"]),
-        step=1,
-        key="stage_rows",
-        disabled=scanning,
-        help="Stops along Y. The stage steps one fewer time than this.",
-    )
-    st.number_input(
-        "Moving speed (mm/min)",
-        min_value=1,
-        max_value=6000,
-        value=int(STAGE_WIDGET_DEFAULTS["stage_feed"]),
-        step=100,
-        key="stage_feed",
-        disabled=scanning,
-    )
-
-    summary = scan_summary(
-        float(st.session_state["stage_step_mm"]),
-        int(st.session_state["stage_columns"]),
-        int(st.session_state["stage_rows"]),
-    )
-    pause = _stage_pause()
-    frame_word = "frame" if pause["frames"] == 1 else "frames"
-    st.caption(
-        f"{summary['columns']} × {summary['rows']} stops, "
-        f"travel {summary['x_mm']:.2f} mm in X and {summary['y_mm']:.2f} mm in Y. "
-        f"Pause {pause['dwell_ms']} ms at each stop: {pause['frames']} {frame_word} "
-        f"at {pause['shutter_ms']:.1f} ms shutter, {pause['motion_ms']:.0f} ms after each move, "
-        f"{pause['settle_ms']:.0f} ms light settle, "
-        f"and {pause['margin_ms']} ms margin on each frame"
-        + (
-            f", plus {pause['gap_ms']:.0f} ms between sides."
-            if pause["gaps"]
-            else "."
+        st.divider()
+        scanning = (
+            printer_status()["printing"]
+            or autofocus_status()["running"]
+            or scan_capture_status()["running"]
         )
-    )
-
-    try:
-        program = _stage_program()
-    except ValueError as exc:
-        st.error(str(exc))
-        return
-
-    with st.expander("G-code based on current settings"):
-        st.code(program, language="text")
-        st.download_button(
-            "Download gcode",
-            data=program,
-            file_name="scanwafer.gcode",
-            mime="text/plain",
+        _render_stage_jog(scanning)
+        st.divider()
+        step_col, x_col, row_col = st.columns(3)
+        step_col.number_input(
+            "Step (mm)",
+            min_value=0.1,
+            max_value=50.0,
+            value=float(STAGE_WIDGET_DEFAULTS["stage_step_mm"]),
+            step=0.001,
+            format="%.3f",
+            key="stage_step_mm",
             disabled=scanning,
-            key="stage_download_gcode",
+            help="Distance between picture centers. 6.174 mm is a 6.86 mm field of view with 10 percent overlap.",
+        )
+        x_col.number_input(
+            "Columns",
+            min_value=1,
+            max_value=80,
+            value=int(STAGE_WIDGET_DEFAULTS["stage_columns"]),
+            step=1,
+            key="stage_columns",
+            disabled=scanning,
+            help="Stops along X. The stage steps one fewer time than this.",
+        )
+        row_col.number_input(
+            "Rows",
+            min_value=1,
+            max_value=80,
+            value=int(STAGE_WIDGET_DEFAULTS["stage_rows"]),
+            step=1,
+            key="stage_rows",
+            disabled=scanning,
+            help="Stops along Y. The stage steps one fewer time than this.",
+        )
+        st.number_input(
+            "Moving speed (mm/min)",
+            min_value=1,
+            max_value=6000,
+            value=int(STAGE_WIDGET_DEFAULTS["stage_feed"]),
+            step=100,
+            key="stage_feed",
+            disabled=scanning,
         )
 
-    st.divider()
+        summary = scan_summary(
+            float(st.session_state["stage_step_mm"]),
+            int(st.session_state["stage_columns"]),
+            int(st.session_state["stage_rows"]),
+        )
+        pause = _stage_pause()
+        stops_col, travel_x_col, travel_y_col, dwell_col = st.columns(4)
+        stops_col.metric("Stops", f"{summary['columns']} × {summary['rows']}")
+        travel_x_col.metric("Travel X", f"{summary['x_mm']:.2f} mm")
+        travel_y_col.metric("Travel Y", f"{summary['y_mm']:.2f} mm")
+        dwell_col.metric("Dwell", f"{pause['dwell_ms']} ms")
+
+        try:
+            program = _stage_program()
+        except ValueError as exc:
+            _failure("These scan settings cannot build a path.", "Change the step, columns, or rows.", exc)
+            return
+
+        frame_word = "frame" if pause["frames"] == 1 else "frames"
+        timing = (
+            f"{pause['frames']} {frame_word} at {pause['shutter_ms']:.1f} ms shutter, "
+            f"{pause['motion_ms']:.0f} ms after each move, "
+            f"{pause['settle_ms']:.0f} ms light settle, "
+            f"and {pause['margin_ms']} ms margin on each frame"
+            + (
+                f", plus {pause['gap_ms']:.0f} ms between sides."
+                if pause["gaps"]
+                else "."
+            )
+        )
+        with st.expander("G-code based on current settings"):
+            st.caption(timing)
+            st.code(program, language="text")
+            st.download_button(
+                "Download gcode",
+                data=program,
+                file_name="scanwafer.gcode",
+                mime="text/plain",
+                disabled=scanning,
+                key="stage_download_gcode",
+            )
+
     _render_focus(scanning)
-    _stage_progress()
+    with st.container(border=True, key="block-scan"):
+        st.subheader("Scan")
+        _stage_progress()

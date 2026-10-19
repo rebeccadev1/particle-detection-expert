@@ -1,5 +1,3 @@
-"""Streamlit UI for per-tile particle detection on structured wafer surfaces."""
-
 from __future__ import annotations
 
 import contextlib
@@ -8,6 +6,7 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -22,9 +21,12 @@ from src.overall.config import (  # noqa: E402
     beta_preset_rows,
     load_config,
     preset_for_beta,
+    next_versioned_output_name,
+    output_choice_label,
+    output_folder_choices,
     resolve_output_dir,
 )
-from src.overall.io.results_writer import excel_bytes, write_csv, write_xlsx  # noqa: E402
+from src.overall.io.results_writer import excel_bytes, result_table, write_csv, write_xlsx  # noqa: E402
 from src.overall.io.tile_loader import input_folder_labels  # noqa: E402
 from src.verification.ui import (  # noqa: E402
     render_collection_tab,
@@ -42,28 +44,46 @@ from src.main_pipeline.report.report_generator import (  # noqa: E402
     overlay_downsample,
     overlay_markers,
     particles_at_least,
+    size_distribution,
     summary_stats,
 )
 from src.shadow.shadow import keep_shadow_inputs, render_shadow_tab  # noqa: E402
 
 st.set_page_config(page_title="Particle Detection Software", layout="wide")
+st.markdown(
+    """
+    <style>
+    [data-testid="stVerticalBlock"][class*="st-key-block-"] {
+        background-color: rgba(15, 35, 140, 0.04);
+        border: none;
+        box-shadow: none;
+        border-radius: 0.6rem;
+        padding: 0.35rem 0.9rem 0.7rem;
+        margin-bottom: 0.75rem;
+    }
+    [class*="st-key-block-"] [data-testid="stNumberInputContainer"],
+    [class*="st-key-block-"] [data-testid="stSelectbox"] [role="group"],
+    [class*="st-key-block-"] [data-baseweb="input"],
+    [class*="st-key-block-"] [data-baseweb="textarea"] {
+        background-color: #e2e6f2;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.title("Particle Detection Software")
 
 NM_PER_UM = 1000.0
-UI_SCHEMA = "mixed_layout_v22"
-
+UI_SCHEMA = "mixed_layout_v24"
 
 def _nm_to_um(nm: float) -> float:
     return float(nm) / NM_PER_UM
 
-
 def _um_to_nm(um: float) -> float:
     return float(um) * NM_PER_UM
 
-
 def _base_config() -> dict:
     return load_config(ROOT / "config.yaml")
-
 
 def _widget_defaults(base: dict) -> dict:
     """Map config.yaml fields onto sidebar widget session-state keys."""
@@ -83,7 +103,7 @@ def _widget_defaults(base: dict) -> dict:
         size_agg = "max"
     return {
         "ui_input_dir": str(base.get("input_dir") or ""),
-        "ui_output_dir": str(base.get("output_dir") or "../Outputs"),
+        "ui_output_dir": "",
         "ui_filename_pattern": str(base.get("filename_pattern")),
         "ui_overlap_fraction": float(base.get("overlap_fraction", 0.0)),
         "ui_pixel_size_um": _nm_to_um(float(base.get("pixel_size_nm", 960.0))),
@@ -123,14 +143,11 @@ def _widget_defaults(base: dict) -> dict:
         )["beta"],
     }
 
-
 def _hold_key(key: str) -> str:
     return f"_held_{key}"
 
-
 def _epoch() -> int:
     return int(st.session_state.get("ui_settings_epoch") or 0)
-
 
 def _live_key(key: str) -> str:
     """Widget key. A new epoch remounts the control so the browser shows the new value."""
@@ -139,7 +156,6 @@ def _live_key(key: str) -> str:
         return key
     return f"{key}__e{epoch}"
 
-
 def _apply_widget_defaults(base: dict) -> None:
     defaults = _widget_defaults(base)
     for key, value in defaults.items():
@@ -147,27 +163,13 @@ def _apply_widget_defaults(base: dict) -> None:
         st.session_state[key] = value
         st.session_state[_hold_key(key)] = value
 
-
 def _backfill_held_widgets(base: dict) -> None:
-    """Keep values for sidebar widgets that are not drawn this run.
-
-    Streamlit drops a widget key when that control is not rendered. The held
-    copy is what the pipeline reads for a closed parameter group.
-    """
     for key, value in _widget_defaults(base).items():
         held = _hold_key(key)
         if held not in st.session_state:
             st.session_state[held] = st.session_state.get(key, value)
 
-
 def _restore_widgets(keys: tuple[str, ...], *, force: bool) -> None:
-    """Put held values back before the widgets are drawn.
-
-    A closed group drops its widget, and Streamlit can leave the old key
-    behind as an empty value. Restoring only when the key is missing keeps
-    that empty value and throws away the edit. ``force`` is for the run that
-    opens the group. Later edits in that group must not be overwritten.
-    """
     for key in keys:
         held = _hold_key(key)
         live = _live_key(key)
@@ -177,15 +179,12 @@ def _restore_widgets(keys: tuple[str, ...], *, force: bool) -> None:
             st.session_state[live] = st.session_state[held]
             st.session_state[key] = st.session_state[held]
 
-
 def _capture_widget_values(keys: tuple[str, ...]) -> None:
-    """Copy widgets that are still on screen. Called before they unmount."""
     for key in keys:
         live = _live_key(key)
         if live in st.session_state:
             st.session_state[_hold_key(key)] = st.session_state[live]
             st.session_state[key] = st.session_state[live]
-
 
 _SIDEBAR_SECTIONS: dict[str, tuple[str, ...]] = {
     "Loading": (
@@ -240,19 +239,12 @@ def _selected_profile(base: dict) -> dict:
         return _nsew_config(base)
     return base
 
-
 def _assign_widget(key: str, value, *, previous_epoch: int | None = None) -> None:
-    """Write a sidebar value onto the current epoch key and the held copy.
 
-    The bare key is the widget key when the epoch is still 0. Writing it
-    after that widget exists raises, so callers that just bumped the epoch
-    pass the epoch from before the bump and skip the bare key in that case.
-    """
     st.session_state[_live_key(key)] = value
     st.session_state[_hold_key(key)] = value
     if previous_epoch is None or previous_epoch > 0:
         st.session_state[key] = value
-
 
 def _apply_beta_preset(base: dict, *, previous_epoch: int | None = None, clear_trained: bool = False) -> None:
     """Point the ML model and threshold slider at the selected beta's preset."""
@@ -264,7 +256,6 @@ def _apply_beta_preset(base: dict, *, previous_epoch: int | None = None, clear_t
     st.session_state["ui_beta_model_path"] = str(preset["model_path"])
     if clear_trained:
         st.session_state.pop("ui_trained_model", None)
-
 
 def _on_beta_change(base: dict) -> None:
     """Keep every other sidebar edit, then load this beta's model and threshold."""
@@ -284,25 +275,38 @@ def _on_beta_change(base: dict) -> None:
         _assign_widget(key, value, previous_epoch=previous_epoch)
     _apply_beta_preset(base, previous_epoch=previous_epoch, clear_trained=True)
 
-
 def _apply_standard_settings(
     base: dict, folder: str | None = None, *, clear_trained: bool = False
 ) -> None:
-    """Load Uniform or NSEW standard values. Keep the tile folder just chosen."""
+    """Load Uniform or NSEW standard values. Keep the tile folder just chosen.
+
+    The output folder is ``{tile folder} vN``. An empty tile folder leaves the
+    output folder empty so the control shows its placeholder.
+    """
     previous = _live_key("ui_input_dir")
-    chosen = folder if folder is not None else str(
-        st.session_state.get(previous) or st.session_state.get("ui_input_dir") or ""
-    )
+    profile = _selected_profile(base)
+    if folder is None:
+        chosen = str(
+            st.session_state.get(previous) or st.session_state.get("ui_input_dir") or ""
+        )
+        if not chosen:
+            chosen = str(profile.get("input_dir") or "")
+    else:
+        chosen = folder
     previous_epoch = _epoch()
     st.session_state["ui_settings_epoch"] = previous_epoch + 1
-    _apply_widget_defaults(_selected_profile(base))
+    _apply_widget_defaults(profile)
     live = _live_key("ui_input_dir")
     st.session_state[live] = chosen
     if previous_epoch > 0:
         st.session_state["ui_input_dir"] = chosen
     st.session_state[_hold_key("ui_input_dir")] = chosen
+    _assign_widget(
+        "ui_output_dir",
+        next_versioned_output_name(chosen),
+        previous_epoch=previous_epoch,
+    )
     _apply_beta_preset(base, previous_epoch=previous_epoch, clear_trained=clear_trained)
-
 
 def _on_input_folder(base: dict) -> None:
     chosen = str(st.session_state.get(_live_key("ui_input_dir")) or "")
@@ -310,7 +314,6 @@ def _on_input_folder(base: dict) -> None:
     if chosen == previous:
         return
     _apply_standard_settings(base, chosen)
-
 
 def _keep_filename_pattern(base: dict) -> None:
     """A cleared pattern matches every file and then crashes. Restore the selected profile."""
@@ -320,7 +323,6 @@ def _keep_filename_pattern(base: dict) -> None:
     if current.strip() or held.strip():
         return
     _apply_standard_settings(base)
-
 
 def _widget_value(key: str):
     live = _live_key(key)
@@ -333,77 +335,57 @@ def _widget_value(key: str):
         return st.session_state[key]
     return st.session_state[_hold_key(key)]
 
-
 def _nsew_config(base: dict) -> dict:
     return apply_nsew_settings(base)
-
 
 def _on_reset_standard(base: dict) -> None:
     _apply_standard_settings(base, clear_trained=True)
 
-
 def _on_settings_profile(base: dict) -> None:
     _apply_standard_settings(base, clear_trained=True)
 
+def _on_profile_choice(base: dict) -> None:
+    st.session_state["ui_settings_nsew"] = st.session_state.get("ui_settings_profile") == "NSEW"
+    _on_settings_profile(base)
 
 def _sidebar(base: dict) -> dict:
     config = deepcopy(base)
     if st.session_state.get("ui_schema") != UI_SCHEMA:
         if not isinstance(st.session_state.get("ui_settings_nsew"), bool):
             st.session_state["ui_settings_nsew"] = False
-        _apply_standard_settings(base, clear_trained=True)
+        st.session_state["ui_settings_profile"] = (
+            "NSEW" if st.session_state.get("ui_settings_nsew") else "Uniform"
+        )
+        _apply_standard_settings(base, "", clear_trained=True)
         st.session_state["ui_schema"] = UI_SCHEMA
         st.session_state["ui_initialized"] = True
         st.session_state["ui_sidebar_frontend_seeded"] = True
     _backfill_held_widgets(base)
     _keep_filename_pattern(base)
 
+    if not isinstance(st.session_state.get("ui_settings_nsew"), bool):
+        st.session_state["ui_settings_nsew"] = False
+    if st.session_state.get("ui_settings_profile") not in ("Uniform", "NSEW"):
+        st.session_state["ui_settings_profile"] = (
+            "NSEW" if st.session_state.get("ui_settings_nsew") else "Uniform"
+        )
+    st.sidebar.radio(
+        "Settings profile",
+        ("Uniform", "NSEW"),
+        horizontal=True,
+        key="ui_settings_profile",
+        on_change=_on_profile_choice,
+        args=(base,),
+        help="Uniform or NSEW standard settings for the sidebar.",
+    )
     st.sidebar.button(
         "Reset to standard values",
         on_click=_on_reset_standard,
         args=(base,),
-        help="Restore sidebar settings from config.yaml (Uniform) or "
-        "nsew_config.yaml (NSEW), matching the toggle above.",
+        help="Restore sidebar settings for the profile selected above.",
         width="stretch",
     )
-    if not isinstance(st.session_state.get("ui_settings_nsew"), bool):
-        st.session_state["ui_settings_nsew"] = False
-    uniform_col, nsew_col = st.sidebar.columns([1, 1.4], vertical_alignment="center")
-    uniform_col.markdown(
-        """
-<style>
-div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColumn"]:first-child,
-div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColumn"]:first-child [data-testid="stElementContainer"],
-div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColumn"]:first-child [data-testid="stMarkdown"],
-div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColumn"]:first-child [data-testid="stMarkdownContainer"] {
-  margin: 0 !important;
-  padding: 0 !important;
-  height: 24px !important;
-  min-height: 24px !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: flex-end !important;
-}
-#settings-uniform {
-  margin: 0;
-  font-size: 14px;
-  line-height: 21px;
-  font-weight: 400;
-}
-</style>
-<div id="settings-uniform">Uniform</div>
-""",
-        unsafe_allow_html=True,
-    )
-    nsew_col.toggle(
-        "NSEW",
-        key="ui_settings_nsew",
-        on_change=_on_settings_profile,
-        args=(base,),
-        help="Off is Uniform (config.yaml, v4 threshold 0.23). "
-        "On loads NSEW pixel size, preprocess, detection, and ML threshold "
-        "from nsew_config.yaml.",
-    )
+    st.sidebar.divider()
 
     def _select_sidebar_group(name: str) -> None:
         current = str(st.session_state.get("ui_sidebar_group") or "")
@@ -419,13 +401,10 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
             type="primary" if st.session_state.get("ui_sidebar_group") == name else "secondary",
             width="stretch",
         )
-    section = st.session_state.get("ui_sidebar_group") or "Loading"
-    # First time these controls are on the page, write the saved value into
-    # session state in this run. Otherwise the browser draws the widget
-    # minimum, and the next click stores that minimum over the real setting.
+    section = st.session_state.get("ui_sidebar_group") or ""
+
     seed_frontend = not st.session_state.get("ui_sidebar_frontend_seeded")
-    # Every group stays mounted. Hiding a group used to drop its widgets, and
-    # the next click then saved the empty leftover instead of the edit.
+   
     hidden = [
         name
         for name in ("Loading", "Preprocessing", "Detection", "Output")
@@ -451,10 +430,7 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
         if current_folder and current_folder not in folder_choices:
             folder_choices = [current_folder, *folder_choices]
         folder_help = (
-            "Folder under ASML SE/Inputs. Suggestions appear as you type, "
-            "for example Groundup/Groundup v7 (06-10) or R3 04-08. "
-            "Choosing a folder loads the standard Uniform or NSEW settings, "
-            "matching the switch above."
+            "Folder under ASML SE/Inputs. Suggestions appear as you type."
         )
         if folder_choices:
             st.selectbox(
@@ -476,19 +452,13 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
                 args=(base,),
                 help=folder_help,
             )
-        st.text_input(
-            "Filename pattern (regex)",
-            key=_live_key("ui_filename_pattern"),
-            help="Default: R{run}_{row}_{col}_{mag}X.tif or .bmp, e.g. R3_5_32_5X.tif. "
-            "Leave this as is for Groundup quad and all-lights shots. "
-            "Names that do not match still run detection; they are left out of the mosaic.",
-        )
         st.slider(
             "Tile overlap fraction",
             min_value=0.0,
             max_value=0.5,
             step=0.01,
             key=_live_key("ui_overlap_fraction"),
+            help="The fraction of the tile that is overlapped by the next tile.",
         )
         st.number_input(
             "Pixel size (µm)",
@@ -496,53 +466,81 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
             step=0.1,
             format="%.3f",
             key=_live_key("ui_pixel_size_um"),
-            help="These 5X tiles are 1 pixel = 0.96 µm (960 nm).",
+            help="Select the physical pixel size.",
         )
         st.number_input(
             "Parallel workers",
-            min_value=0,
+            min_value=1,
             max_value=32,
             key=_live_key("ui_workers"),
-            help="Tiles processed in parallel with processes (not threads). 0 uses all CPU cores.",
+            help="How many tiles to process at once. The minimum is 1.",
         )
+        with st.expander("Filename pattern"):
+            st.text_input(
+                "Filename pattern (regex)",
+                key=_live_key("ui_filename_pattern"),
+                help="Names that do not match still run detection; they are left out of the mosaic.",
+            )
     with st.sidebar.container(key="sidebar_sec_Preprocessing"):
         _restore_widgets(_SIDEBAR_SECTIONS["Preprocessing"], force=seed_frontend)
-        st.checkbox("Denoise", key=_live_key("ui_denoise"))
-        st.number_input(
-            "Denoise sigma", min_value=0.0, key=_live_key("ui_denoise_sigma")
+        st.checkbox(
+            "Denoise",
+            key=_live_key("ui_denoise"),
+            help="Small blur so sensor speckle is not detected as particles.",
         )
-        st.checkbox("Flatten illumination", key=_live_key("ui_flatten_illumination"))
+        st.number_input(
+            "Denoise sigma",
+            min_value=0.0,
+            key=_live_key("ui_denoise_sigma"),
+            help="Blur radius in pixels; larger values also round off real particles.",
+        )
+        st.checkbox(
+            "Flatten illumination",
+            key=_live_key("ui_flatten_illumination"),
+            help="Divide each tile by a wide blur of itself to remove vignetting.",
+        )
         st.number_input(
             "Flatten sigma",
             min_value=1.0,
             key=_live_key("ui_flatten_sigma"),
-            help="Large values flatten only illumination. Small values halo region edges.",
+            help="Large values flatten only illumination; small values halo region edges.",
         )
-        st.checkbox("Contrast stretch", key=_live_key("ui_contrast_stretch"))
+        st.checkbox(
+            "Contrast stretch",
+            key=_live_key("ui_contrast_stretch"),
+            help="Map each tile's 1st–99th percentiles onto 0–1 so contrast matches before detection.",
+        )
     with st.sidebar.container(key="sidebar_sec_Detection"):
         _restore_widgets(_SIDEBAR_SECTIONS["Detection"], force=seed_frontend)
         st.selectbox(
             "Background suppression",
             options=["fft", "tophat"],
             key=_live_key("ui_method"),
+            help="fft notches the repeating lattice and falls back to top-hat when a tile has no peaks.",
         )
-        st.checkbox("Particles are bright", key=_live_key("ui_particles_bright"))
+        st.checkbox(
+            "Particles are bright",
+            key=_live_key("ui_particles_bright"),
+            help="Off inverts the residual so dark debris is found the same way.",
+        )
         st.slider(
-            "FFT peak threshold", 0.05, 0.95, key=_live_key("ui_fft_peak_threshold")
+            "FFT peak threshold",
+            0.05,
+            0.95,
+            key=_live_key("ui_fft_peak_threshold"),
+            help="Lower notches more of the lattice and can also remove real structure.",
         )
         st.selectbox(
             "FFT notch source",
             options=["per_tile", "shared"],
             key=_live_key("ui_fft_mask"),
-            help="per_tile: notch each tile from its own spectrum. "
-            "shared: reuse the first tile (uniform lattice only).",
+            help="per_tile notches each tile from its own spectrum; shared reuses the first tile.",
         )
         st.number_input(
             "Top-hat radius (px)",
             min_value=1,
             key=_live_key("ui_tophat_radius"),
-            help="Must be larger than the biggest particle. Default 50 (≈100 µm flakes). "
-            "A small radius erases large debris.",
+            help="Must be larger than the biggest particle, or large debris is erased.",
         )
         st.number_input(
             "Min size (µm)",
@@ -550,8 +548,7 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
             step=0.5,
             format="%.2f",
             key=_live_key("ui_min_size_um"),
-            help="Keep particles larger than this. Default 10 µm (≈10.4 px at 0.96 µm/px). "
-            "Raise Blob min sigma with this so the detector does not hunt for smaller specks.",
+            help="Keep particles larger than this.",
         )
         st.number_input(
             "Max size (µm)",
@@ -559,19 +556,21 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
             step=0.5,
             format="%.2f",
             key=_live_key("ui_max_size_um"),
-            help="Upper size cap. Default 100 µm. Blob max sigma 36 is about 100 µm "
-            "at 0.96 µm/px. Raise Top-hat radius with this so large flakes are not erased.",
+            help="Drop particles larger than this.",
         )
         st.slider(
-            "Blob threshold", 0.001, 0.5, key=_live_key("ui_blob_threshold")
+            "Blob threshold",
+            0.001,
+            0.5,
+            key=_live_key("ui_blob_threshold"),
+            help="DoG peak height after 0–1 scaling; lower keeps dimmer candidates.",
         )
         st.slider(
             "Min prominence",
             min_value=0.0,
             max_value=0.8,
             key=_live_key("ui_min_prominence"),
-            help="Ignore residual weaker than this (0–1). Raises this to drop grid/texture; "
-            "lowers it to pick up dimmer specks. 0 disables.",
+            help="Zero residual weaker than this before detection; 0 disables.",
         )
         st.slider(
             "Confidence score (%)",
@@ -579,59 +578,61 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
             max_value=100,
             step=1,
             key=_live_key("ui_min_confidence_pct"),
-            help="Drop blobs whose residual at the peak is below this score. 0 disables.",
+            help="Drop blobs whose residual at the peak is below this; 0 disables.",
         )
         st.number_input(
-            "Blob min sigma", min_value=0.5, key=_live_key("ui_blob_min_sigma")
+            "Blob min sigma",
+            min_value=0.5,
+            key=_live_key("ui_blob_min_sigma"),
+            help="Smallest scale searched; diameter is about 2.8 times sigma.",
         )
         st.number_input(
-            "Blob max sigma", min_value=1.0, key=_live_key("ui_blob_max_sigma")
+            "Blob max sigma",
+            min_value=1.0,
+            key=_live_key("ui_blob_max_sigma"),
+            help="Largest scale searched; raise it with Max size so large flakes are found.",
         )
         st.number_input(
             "Local SNR sigma (0 = auto)",
             min_value=0.0,
             key=_live_key("ui_local_snr_sigma"),
-            help="Envelope for local energy. 0 auto-enables on FFT residuals "
-            "(3.5 × blob max sigma) and stays off for top-hat.",
+            help="Envelope for local energy; 0 turns this on for FFT residuals and off for top-hat.",
         )
         st.number_input(
             "Edge soften sigma",
             min_value=0.0,
             key=_live_key("ui_edge_soften_sigma"),
-            help="Coarse blur before the region-border gradient. 0 disables.",
+            help="Coarse blur before the region-border gradient; 0 disables.",
         )
         st.number_input(
             "Edge soften strength",
             min_value=0.0,
             key=_live_key("ui_edge_soften_strength"),
-            help="How hard to attenuate residual on area borders. 0 disables.",
+            help="How hard to attenuate residual on area borders; 0 disables.",
         )
         st.number_input(
             "Edge exclude (px)",
             min_value=0.0,
             key=_live_key("ui_edge_exclude_px"),
-            help="Ignore blobs this close to a region border. "
-            "Pad corners and box rims are always dropped.",
+            help="Ignore blobs this close to a region border, including pad corners.",
         )
         st.slider(
             "Min circularity",
             min_value=0.0,
             max_value=1.0,
             key=_live_key("ui_min_circularity"),
-            help="Drop very elongated hits. Keep low: real debris is irregular, not round. 0 keeps every blob.",
+            help="Drop elongated hits; 0 keeps every blob.",
         )
         st.number_input(
             "Structure neighbor radius (px)",
             min_value=0.0,
             key=_live_key("ui_structure_neighbor_px"),
-            help="Drop blobs that have 2+ other blobs this close (chains and grids). 0 disables.",
+            help="Drop blobs that have two or more neighbours this close; 0 disables.",
         )
         st.checkbox(
             "Apply ML filter",
             key=_live_key("ui_ml_enabled"),
-            help="Score each DoG proposal with the trained patch model. "
-            "Leave off until you have trained (`python -m src.training`). "
-            "Detection stays classical; the model only drops false positives.",
+            help="Score each proposal with the trained model and drop false positives.",
         )
         ml_min, ml_max = 0.0, 1.0
         live_threshold = _live_key("ui_ml_threshold")
@@ -648,22 +649,63 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
             max_value=ml_max,
             step=0.01,
             key=_live_key("ui_ml_threshold"),
-            help="Keep blobs with at least this probability. 0 keeps every proposal.",
+            help="Keep blobs with at least this probability; 0 keeps every proposal.",
         )
     with st.sidebar.container(key="sidebar_sec_Output"):
         _restore_widgets(_SIDEBAR_SECTIONS["Output"], force=seed_frontend)
-        st.text_input(
-            "Output folder",
-            key=_live_key("ui_output_dir"),
-            help="Default is ASML SE/Outputs. A name like Single v7 goes in Outputs/Single v7.",
+        output_key = _live_key("ui_output_dir")
+        stored_output = st.session_state.get(output_key, st.session_state.get("ui_output_dir"))
+        current_output = output_choice_label("" if stored_output is None else str(stored_output))
+        if current_output and str(stored_output or "") != current_output:
+            st.session_state[output_key] = current_output
+            st.session_state["ui_output_dir"] = current_output
+            st.session_state[_hold_key("ui_output_dir")] = current_output
+        elif not current_output:
+            st.session_state.pop(output_key, None)
+            st.session_state["ui_output_dir"] = ""
+            st.session_state[_hold_key("ui_output_dir")] = ""
+        tile_folder = str(
+            st.session_state.get(_live_key("ui_input_dir"))
+            or st.session_state.get("ui_input_dir")
+            or ""
         )
+        standard_output = next_versioned_output_name(tile_folder)
+        output_choices = output_folder_choices(current_output, standard_output)
+        output_help = (
+            "Folder under ASML SE/Outputs."
+        )
+        if output_choices:
+            output_kwargs = {}
+            if output_key not in st.session_state:
+                output_kwargs["index"] = None
+            st.selectbox(
+                "Output folder",
+                output_choices,
+                placeholder="Start typing a folder name",
+                accept_new_options=True,
+                filter_mode="fuzzy",
+                key=output_key,
+                help=output_help,
+                **output_kwargs,
+            )
+        else:
+            st.text_input(
+                "Output folder",
+                key=output_key,
+                placeholder="Start typing a folder name",
+                help=output_help,
+            )
         st.number_input(
-            "Merge radius (px)", min_value=0.0, key=_live_key("ui_merge_radius_px")
+            "Merge radius (px)",
+            min_value=0.0,
+            key=_live_key("ui_merge_radius_px"),
+            help="Hits closer than this on overlapping tiles count as one particle; 0 skips the merge.",
         )
         st.selectbox(
             "Cluster size aggregation",
             options=["max", "mean"],
             key=_live_key("ui_size_aggregation"),
+            help="max keeps the largest diameter in a merged cluster; mean averages them.",
         )
         st.number_input(
             "Stitched mosaic size (MB)",
@@ -677,7 +719,7 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
             "Overlay downsample (0 = auto)",
             min_value=0,
             key=_live_key("ui_downsample"),
-            help="0 chooses a factor from the target size. A value > 0 forces that integer factor.",
+            help="0 picks a factor from the target size; a value above 0 forces that factor.",
         )
         beta_rows = beta_preset_rows(base)
         beta_options = [float(row["beta"]) for row in beta_rows]
@@ -688,18 +730,16 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
             key=_live_key("ui_f_beta"),
             on_change=_on_beta_change,
             args=(base,),
-            help="Chooses the Fβ score and the ML model and starting threshold "
-            "for the next detection run. 1 is F1. A later threshold edit stays "
-            "until you pick another beta.",
-        )
-        selected = preset_for_beta(beta_rows, float(_widget_value("ui_f_beta")))
-        st.caption(
-            f"{Path(selected['model_path']).name} · threshold {float(selected['threshold']):.2f}"
+            help="Chooses the Fβ score and the ML model and starting threshold for the next run.",
         )
     st.session_state["ui_sidebar_frontend_seeded"] = True
 
     config["input_dir"] = _widget_value("ui_input_dir")
-    config["output_dir"] = _widget_value("ui_output_dir")
+    chosen_output = _widget_value("ui_output_dir")
+    chosen_output = "" if chosen_output is None else str(chosen_output).strip()
+    if not chosen_output:
+        chosen_output = next_versioned_output_name(str(config.get("input_dir") or ""))
+    config["output_dir"] = chosen_output
     config["filename_pattern"] = _widget_value("ui_filename_pattern")
     config["overlap_fraction"] = float(_widget_value("ui_overlap_fraction"))
     config["pixel_size_nm"] = _um_to_nm(float(_widget_value("ui_pixel_size_um")))
@@ -765,12 +805,13 @@ def _apply_finished_pipeline() -> None:
     if result["stopped"]:
         st.warning("Pipeline stopped. Results from this run were not saved.")
         return
-    if result["trace"]:
-        st.error(result["error"] or "Pipeline failed.")
-        st.code(result["trace"])
-        return
-    if result["error"]:
-        st.error(result["error"])
+    if result["trace"] or result["error"]:
+        st.error("The pipeline stopped before saving this run. Fix the cause below, then run it again.")
+        with st.expander("Error detail"):
+            if result["error"]:
+                st.write(result["error"])
+            if result["trace"]:
+                st.code(result["trace"])
         return
 
     table = result["table"]
@@ -786,35 +827,44 @@ def _apply_finished_pipeline() -> None:
     xlsx_path = out_dir / "particles.xlsx"
     write_csv(table, csv_path)
     write_xlsx(table, xlsx_path, config)
+    for report_name in ("last_pipeline.json", "last_run.pdf", "mosaic_overlay.png"):
+        report_path = out_dir / report_name
+        if report_path.is_file():
+            report_path.touch()
     write_last_pipeline(config, csv_path)
     st.session_state["last_pipeline_csv"] = str(csv_path)
     st.session_state["ui_show_last_run"] = True
-    st.success(f"Wrote {csv_path} and {xlsx_path} ({len(table)} particles).")
+    stats = summary_stats(table)
+    st.success(
+        f"{stats['particle_count']} particles. Mean size {_nm_to_um(stats['size_mean']):.2f} µm."
+    )
+    st.caption(f"Saved to {out_dir}.")
 
 
 def _pipeline_buttons(config: dict, *, running: bool) -> None:
-    run_col, stop_col = st.columns(2)
-    if run_col.button(
-        "Run pipeline",
-        type="primary",
-        disabled=running,
-        key="ui_run_pipeline",
-        width="stretch",
-    ):
-        try:
-            start_pipeline(config)
-        except (ValueError, RuntimeError) as exc:
-            st.error(str(exc))
-        else:
-            st.rerun(scope="app")
-    if stop_col.button(
-        "Stop pipeline",
-        disabled=not running,
-        key="ui_stop_pipeline",
-        width="stretch",
-    ):
-        stop_pipeline()
-        st.rerun(scope="fragment")
+    with st.container(horizontal=True):
+        if st.button(
+            "Run pipeline",
+            type="primary",
+            disabled=running,
+            key="ui_run_pipeline",
+        ):
+            try:
+                start_pipeline(config)
+            except (ValueError, RuntimeError) as exc:
+                detail = str(exc).strip() or type(exc).__name__
+                st.error(f"The pipeline did not start. {detail.splitlines()[0]}")
+                with st.expander("Error detail"):
+                    st.code(detail)
+            else:
+                st.rerun(scope="app")
+        if st.button(
+            "Stop pipeline",
+            disabled=not running,
+            key="ui_stop_pipeline",
+        ):
+            stop_pipeline()
+            st.rerun(scope="fragment")
 
 
 @st.fragment(run_every=0.5)
@@ -971,17 +1021,24 @@ def _render_training(config: dict) -> None:
 
 
 def _saved_mosaic_path(active_config: dict) -> Path | None:
-    """JPEG written for this output folder, only if it belongs to the current CSV.
+    """Mosaic written for this output folder, only if it belongs to the current CSV.
 
-    A run with no row/column names does not stitch. An older ``mosaic_overlay.jpg``
-    left in the same folder is from a previous run and must not be shown.
+    A run with no row/column names does not stitch. An older mosaic left in the
+    same folder is from a previous run and must not be shown.
     """
     output_dir = active_config.get("output_dir")
     if not output_dir:
         return None
     folder = resolve_output_dir(output_dir)
-    path = folder / "mosaic_overlay.jpg"
-    if not path.is_file():
+    path = next(
+        (
+            candidate
+            for name in ("mosaic_overlay.png", "mosaic_overlay.jpg")
+            if (candidate := folder / name).is_file()
+        ),
+        None,
+    )
+    if path is None:
         return None
     csv_path = folder / "particles.csv"
     if csv_path.is_file() and path.stat().st_mtime + 2 < csv_path.stat().st_mtime:
@@ -1014,174 +1071,175 @@ def _render_size_threshold_table(table: pd.DataFrame) -> None:
     st.dataframe(particles_at_least(table), width="content", hide_index=True)
 
 
-def _render_size_bins(table: pd.DataFrame) -> None:
+def _render_size_bins(table: pd.DataFrame, min_size_um: float) -> None:
     st.subheader("Size distribution (µm)")
     if table.empty or "size" not in table.columns:
         st.info("This run has no particle sizes to bin.")
         return
-    sizes_um = table["size"].to_numpy(dtype=float) / NM_PER_UM
-    n_bins = min(20, max(int(table["size"].nunique()), 1))
-    counts, bin_edges = np.histogram(sizes_um, bins=n_bins)
-    hist_df = pd.DataFrame(
-        {"count": counts},
-        index=[f"{bin_edges[i]:.2f}–{bin_edges[i + 1]:.2f}" for i in range(len(counts))],
+    st.bar_chart(
+        size_distribution(table, min_size_um),
+        x_label="Size (µm)",
+        y_label="Amount of particles",
+        sort=False,
     )
-    st.bar_chart(hist_df)
 
 
 def _render_finished_run(config: dict) -> None:
     """Table, size bins, and mosaic from the latest finished pipeline run."""
     table, mosaic, active_config = _finished_run_state(config)
     if table is None:
-        st.info("Run the pipeline once. Last run keeps that table, size bins, and mosaic.")
+        with st.container(border=True, key="block-last-run"):
+            st.subheader("Last run")
+            st.info("Run the pipeline once. Last run keeps that table, size bins, and mosaic.")
         return
 
-    stats = summary_stats(table)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Particles", stats["particle_count"])
-    c2.metric("Mean size (µm)", f"{_nm_to_um(stats['size_mean']):.2f}")
-    c3.metric("Min size (µm)", f"{_nm_to_um(stats['size_min']):.2f}")
-    c4.metric("Max size (µm)", f"{_nm_to_um(stats['size_max']):.2f}")
-    _render_size_threshold_table(table)
+    with st.container(border=True, key="block-last-run"):
+        st.subheader("Last run")
+        stats = summary_stats(table)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Particles", stats["particle_count"])
+        c2.metric("Mean size (µm)", f"{_nm_to_um(stats['size_mean']):.2f}")
+        c3.metric("Min size (µm)", f"{_nm_to_um(stats['size_min']):.2f}")
+        c4.metric("Max size (µm)", f"{_nm_to_um(stats['size_max']):.2f}")
+        _render_size_threshold_table(table)
 
-    st.subheader("Results")
-    display = table.copy()
-    if not display.empty and "size" in display.columns:
-        display.insert(display.columns.get_loc("size") + 1, "size_um", display["size"] / NM_PER_UM)
-    preview_rows = 5_000
-    if len(display) > preview_rows:
-        st.caption(
-            f"Showing the first {preview_rows:,} of {len(display):,} rows. "
-            "Download the CSV or Excel file for the full table."
-        )
-        st.dataframe(display.head(preview_rows), width="stretch", hide_index=True)
-    else:
-        st.dataframe(display, width="stretch", hide_index=True)
-    st.caption(
-        "CSV `size` is equivalent circular diameter in nm "
-        "(from the connected footprint on the photo, not the FFT/top-hat residual "
-        "and not the DoG scale bin). `size_um` is the same value in µm."
-    )
-
-    _render_size_bins(table)
-
-    dl_csv, dl_xlsx = st.columns(2)
-    with dl_csv:
-        st.download_button(
-            "Download CSV",
-            data=table.to_csv(index=False).encode("utf-8"),
-            file_name="particles.csv",
-            mime="text/csv",
-            key="last_run_download_csv",
-        )
-    with dl_xlsx:
-        st.download_button(
-            "Download Excel",
-            data=excel_bytes(table, active_config),
-            file_name="particles.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="last_run_download_xlsx",
-        )
-
-    placements = getattr(mosaic, "placements", None)
-    if not placements:
-        saved = _saved_mosaic_path(active_config)
-        st.subheader("Stitched mosaic")
-        if saved is not None:
-            st.image(str(saved), caption="Saved mosaic from the last run", width="stretch")
-            st.download_button(
-                "Download stitched mosaic",
-                data=saved.read_bytes(),
-                file_name="mosaic_overlay.jpg",
-                mime="image/jpeg",
-                key="last_run_download_saved_mosaic",
-            )
-            return
-        st.info(
-            "No tiles had row/column (or x/y) in the filename, so nothing was "
-            "stitched. Detection results and the size bins are above. Open "
-            "Verification → Pointer to inspect each image."
-        )
-        return
-
-    placed_names = {placement.name for placement in mosaic.placements}
-    if "source_tile" in table.columns:
-        table_tiles = {
-            str(name).replace("\\", "/").rsplit("/", 1)[-1]
-            for name in table["source_tile"].astype(str)
-        }
-        leftover = table_tiles - placed_names
-        if leftover:
-            st.caption(
-                f"{len(leftover)} file(s) did not match the filename pattern and were "
-                "detected but not stitched into this mosaic."
-            )
-
-    st.subheader("Stitched mosaic")
-    max_h = max(int(mosaic.full_height), 1)
-    max_w = max(int(mosaic.full_width), 1)
-    factor = overlay_downsample(mosaic, active_config, crop=None)
-    out_h = max(int(np.ceil(mosaic.full_height / factor)), 0)
-    out_w = max(int(np.ceil(mosaic.full_width / factor)), 0)
-    st.caption(
-        f"Full mosaic is {mosaic.full_height}×{mosaic.full_width} px. "
-        f"Tiles are downsampled ×{factor} before stitching → {out_h}×{out_w} "
-        f"(~{out_h * out_w * 3 / (1024 * 1024):.1f} MB uncompressed RGB)."
-    )
-
-    overlay_key = (
-        "full",
-        float(active_config.get("report", {}).get("target_mb", 20.0)),
-        int(active_config.get("report", {}).get("downsample", 0) or 0),
-        len(table),
-    )
-    if st.session_state.get("overlay_key") != overlay_key:
-        try:
-            st.session_state["overlay"] = overlay_markers(
-                mosaic,
-                table,
-                active_config,
-                crop=None,
-            )
-        except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
-            st.error(f"Mosaic stitching failed: {exc}")
+    with st.container(border=True, key="block-mosaic"):
+        placements = getattr(mosaic, "placements", None)
+        if not placements:
+            saved = _saved_mosaic_path(active_config)
+            st.subheader("Stitched mosaic")
+            if saved is not None:
+                st.image(str(saved), caption="Saved mosaic from the last run", width="stretch")
+                st.download_button(
+                    "Download stitched mosaic",
+                    data=saved.read_bytes(),
+                    file_name=saved.name,
+                    mime="image/png" if saved.suffix.lower() == ".png" else "image/jpeg",
+                    key="last_run_download_saved_mosaic",
+                )
+            else:
+                st.info(
+                    "No tiles had row/column (or x/y) in the filename, so nothing was "
+                    "stitched. The table is below. Open Verification, then Inspect, for each image."
+                )
         else:
-            st.session_state["overlay_key"] = overlay_key
-            mosaic_path = resolve_output_dir(active_config.get("output_dir")) / "mosaic_overlay.jpg"
-            mosaic_path.parent.mkdir(parents=True, exist_ok=True)
-            mosaic_path.write_bytes(encode_overlay_jpeg(st.session_state["overlay"]))
-    overlay = st.session_state.get("overlay")
-    if overlay is not None:
-        st.image(overlay, caption="All tiles, stitched at reduced resolution", width="stretch")
-        st.download_button(
-            "Download stitched mosaic",
-            data=encode_overlay_jpeg(overlay),
-            file_name="mosaic_overlay.jpg",
-            mime="image/jpeg",
-            key="last_run_download_mosaic",
+            placed_names = {placement.name for placement in mosaic.placements}
+            if "source_tile" in table.columns:
+                table_tiles = {
+                    str(name).replace("\\", "/").rsplit("/", 1)[-1]
+                    for name in table["source_tile"].astype(str)
+                }
+                leftover = table_tiles - placed_names
+                if leftover:
+                    st.caption(
+                        f"{len(leftover)} file(s) did not match the filename pattern and were "
+                        "detected but not stitched into this mosaic."
+                    )
+
+            st.subheader("Stitched mosaic")
+            max_h = max(int(mosaic.full_height), 1)
+            max_w = max(int(mosaic.full_width), 1)
+            factor = overlay_downsample(mosaic, active_config, crop=None)
+            out_h = max(int(np.ceil(mosaic.full_height / factor)), 0)
+            out_w = max(int(np.ceil(mosaic.full_width / factor)), 0)
+            st.caption(
+                f"Full mosaic is {mosaic.full_height}×{mosaic.full_width} px. "
+                f"Tiles are downsampled ×{factor} before stitching → {out_h}×{out_w} "
+                f"(~{out_h * out_w * 3 / (1024 * 1024):.1f} MB uncompressed RGB)."
+            )
+
+            overlay_key = (
+                "full",
+                float(active_config.get("report", {}).get("target_mb", 20.0)),
+                int(active_config.get("report", {}).get("downsample", 0) or 0),
+                len(table),
+            )
+            if st.session_state.get("overlay_key") != overlay_key:
+                try:
+                    st.session_state["overlay"] = overlay_markers(
+                        mosaic,
+                        table,
+                        active_config,
+                        crop=None,
+                    )
+                except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
+                    st.error("The mosaic was not stitched. The particle table below is still available.")
+                    with st.expander("Error detail"):
+                        st.code(str(exc))
+                else:
+                    st.session_state["overlay_key"] = overlay_key
+                    mosaic_path = resolve_output_dir(active_config.get("output_dir")) / "mosaic_overlay.png"
+                    mosaic_path.parent.mkdir(parents=True, exist_ok=True)
+                    bgr = cv2.cvtColor(st.session_state["overlay"], cv2.COLOR_RGB2BGR)
+                    if not cv2.imwrite(str(mosaic_path), bgr):
+                        st.error(f"Failed to write mosaic image to {mosaic_path}")
+            overlay = st.session_state.get("overlay")
+            if overlay is not None:
+                st.image(overlay, caption="All tiles, stitched at reduced resolution", width="stretch")
+                st.download_button(
+                    "Download stitched mosaic",
+                    data=encode_overlay_jpeg(overlay),
+                    file_name="mosaic_overlay.jpg",
+                    mime="image/jpeg",
+                    key="last_run_download_mosaic",
+                )
+
+            with st.expander("Inspect a crop (full-resolution mosaic pixels)"):
+                col_a, col_b, col_c, col_d = st.columns(4)
+                crop_y = col_a.number_input("Crop y", min_value=0, max_value=max_h, value=0)
+                crop_x = col_b.number_input("Crop x", min_value=0, max_value=max_w, value=0)
+                crop_h = col_c.number_input(
+                    "Crop height", min_value=1, max_value=max_h, value=min(max_h, 2048)
+                )
+                crop_w = col_d.number_input(
+                    "Crop width", min_value=1, max_value=max_w, value=min(max_w, 2048)
+                )
+                if st.button("Render crop"):
+                    crop = (int(crop_y), int(crop_x), int(crop_h), int(crop_w))
+                    cropped = overlay_markers(mosaic, table, active_config, crop=crop)
+                    st.image(cropped, caption="Cropped region with detections", width="stretch")
+
+    with st.container(border=True, key="block-results"):
+        st.subheader("Results")
+        display = result_table(table)
+        preview_rows = 5_000
+        if len(display) > preview_rows:
+            st.caption(
+                f"Showing the first {preview_rows:,} of {len(display):,} rows. "
+                "Download the CSV or Excel file for the full table."
+            )
+            st.dataframe(display.head(preview_rows), width="stretch", hide_index=True)
+        else:
+            st.dataframe(display, width="stretch", hide_index=True)
+        st.caption(
+            "`x_global_um` and `y_global_um` are microns from the top-left of the mosaic "
+            "(x right, y down). `size_um` is equivalent circular diameter in µm."
         )
 
-    with st.expander("Inspect a crop (full-resolution mosaic pixels)"):
-        col_a, col_b, col_c, col_d = st.columns(4)
-        crop_y = col_a.number_input("Crop y", min_value=0, max_value=max_h, value=0)
-        crop_x = col_b.number_input("Crop x", min_value=0, max_value=max_w, value=0)
-        crop_h = col_c.number_input(
-            "Crop height", min_value=1, max_value=max_h, value=min(max_h, 2048)
-        )
-        crop_w = col_d.number_input(
-            "Crop width", min_value=1, max_value=max_w, value=min(max_w, 2048)
-        )
-        if st.button("Render crop"):
-            crop = (int(crop_y), int(crop_x), int(crop_h), int(crop_w))
-            cropped = overlay_markers(mosaic, table, active_config, crop=crop)
-            st.image(cropped, caption="Cropped region with detections", width="stretch")
+        dl_csv, dl_xlsx = st.columns(2)
+        with dl_csv:
+            st.download_button(
+                "Download CSV",
+                data=result_table(table).to_csv(index=False).encode("utf-8"),
+                file_name="particles.csv",
+                mime="text/csv",
+                key="last_run_download_csv",
+            )
+        with dl_xlsx:
+            st.download_button(
+                "Download Excel",
+                data=excel_bytes(table, active_config),
+                file_name="particles.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="last_run_download_xlsx",
+            )
+
+    min_size_nm = float((active_config.get("detection") or {}).get("min_size_nm") or 0.0)
+    with st.container(border=True, key="block-size"):
+        _render_size_bins(table, _nm_to_um(min_size_nm))
 
 
 def _render_detection(config: dict) -> None:
-    st.caption(
-        "A folder with N, S, E, and W is combined first. "
-        "Detection runs on those shots and on the combi, plus the uniform all shot when the folder has one."
-    )
     _apply_finished_pipeline()
     _pipeline_controls(config)
 
@@ -1192,46 +1250,18 @@ keep_shadow_inputs()
 keep_capture_inputs()
 keep_stage_inputs()
 
-pipeline_tab, verification_tab, training_tab, shadow_tab, redirector_tab, capture_tab = st.tabs(
-    ["Main Pipeline", "Verification", "Training", "Shadow", "Redirector", "Capture"],
+capture_tab, pipeline_tab, verification_tab, tools_tab = st.tabs(
+    ["Capture", "Run", "Verification", "Tools"],
     on_change="rerun",
     key="main_tabs",
 )
 
 if pipeline_tab.open:
     with pipeline_tab:
-        _render_detection(config)
-
-        def _toggle_last_run() -> None:
-            st.session_state["ui_show_last_run"] = not bool(
-                st.session_state.get("ui_show_last_run")
-            )
-
-        def _toggle_last_summary() -> None:
-            st.session_state["ui_show_last_summary"] = not bool(
-                st.session_state.get("ui_show_last_summary")
-            )
-
-        show_last_run = bool(st.session_state.get("ui_show_last_run"))
-        show_summary = bool(st.session_state.get("ui_show_last_summary"))
-        last_col, summary_col = st.columns(2)
-        last_col.button(
-            "Hide last run" if show_last_run else "Last run",
-            key="ui_toggle_last_run",
-            on_click=_toggle_last_run,
-            width="stretch",
-        )
-        summary_col.button(
-            "Hide summary of last run" if show_summary else "Summary of last run",
-            key="ui_toggle_last_summary",
-            on_click=_toggle_last_summary,
-            width="stretch",
-        )
-        if show_last_run:
-            st.subheader("Last run")
-            _render_finished_run(config)
-        if show_summary:
-            st.subheader("Summary of last run")
+        with st.container(border=True, key="block-run"):
+            _render_detection(config)
+        _render_finished_run(config)
+        with st.container(border=True, key="block-review"):
             render_labeled_tiles_tab(
                 config,
                 ROOT,
@@ -1242,32 +1272,34 @@ if pipeline_tab.open:
 if verification_tab.open:
     with verification_tab:
         tinder_tab, pointer_tab, database_tab = st.tabs(
-            ["Tinder", "Pointer", "Database"],
+            ["Label", "Inspect", "Database"],
             on_change="rerun",
             key="verification_tabs",
         )
         if tinder_tab.open:
             with tinder_tab:
-                render_label_tab(
-                    config,
-                    ROOT,
-                    st.session_state.get("table"),
-                    st.session_state.get("mosaic"),
-                )
+                with st.container(border=True, key="block-label"):
+                    render_label_tab(
+                        config,
+                        ROOT,
+                        st.session_state.get("table"),
+                        st.session_state.get("mosaic"),
+                    )
         if pointer_tab.open:
             with pointer_tab:
-                render_tile_inspect_tab(
-                    config,
-                    ROOT,
-                    st.session_state.get("table"),
-                    st.session_state.get("mosaic"),
-                )
+                with st.container(border=True, key="block-inspect"):
+                    render_tile_inspect_tab(
+                        config,
+                        ROOT,
+                        st.session_state.get("table"),
+                        st.session_state.get("mosaic"),
+                    )
         if database_tab.open:
             with database_tab:
                 show_area_line = st.toggle(
-                    "Red area line",
+                    "Area line",
                     value=True,
-                    key="database_red_area_line",
+                    key="database_area_line",
                     help="Outline the measured particle area on the particle crops.",
                 )
                 groundup_tab, glovebox_tab = st.tabs(
@@ -1284,35 +1316,43 @@ if verification_tab.open:
                     with campaign_tab:
                         particle_col, not_particle_col = st.columns(2)
                         with particle_col:
-                            render_collection_tab(
-                                ROOT,
-                                "particle",
-                                "Particles",
-                                n_columns=2,
-                                campaign=campaign,
-                                config=config,
-                                show_area_line=show_area_line,
-                            )
+                            with st.container(border=True, key="block-particles"):
+                                render_collection_tab(
+                                    ROOT,
+                                    "particle",
+                                    "Particles",
+                                    n_columns=2,
+                                    campaign=campaign,
+                                    config=config,
+                                    show_area_line=show_area_line,
+                                )
                         with not_particle_col:
-                            render_collection_tab(
-                                ROOT,
-                                "not_particle",
-                                "Not particles",
-                                n_columns=2,
-                                campaign=campaign,
-                            )
+                            with st.container(border=True, key="block-not-particles"):
+                                render_collection_tab(
+                                    ROOT,
+                                    "not_particle",
+                                    "Not particles",
+                                    n_columns=2,
+                                    campaign=campaign,
+                                )
 
-if training_tab.open:
-    with training_tab:
-        _render_training(config)
-
-if shadow_tab.open:
-    with shadow_tab:
-        render_shadow_tab(config)
-
-if redirector_tab.open:
-    with redirector_tab:
-        render_redirector_tab()
+if tools_tab.open:
+    with tools_tab:
+        training_tab, shadow_tab, redirector_tab = st.tabs(
+            ["Training", "Shadow", "Redirector"],
+            on_change="rerun",
+            key="tools_tabs",
+        )
+        if training_tab.open:
+            with training_tab:
+                with st.container(border=True, key="block-training"):
+                    _render_training(config)
+        if shadow_tab.open:
+            with shadow_tab:
+                render_shadow_tab(config)
+        if redirector_tab.open:
+            with redirector_tab:
+                render_redirector_tab()
 
 if capture_tab.open:
     with capture_tab:

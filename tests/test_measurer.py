@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -69,6 +70,38 @@ def test_resolve_output_dir_uses_workspace_outputs(tmp_path: Path) -> None:
     assert resolve_output_dir(tmp_path / "out") == tmp_path / "out"
     assert DEFAULT_OUTPUT_DIR.parent == WORKSPACE_ROOT
     assert DEFAULT_OUTPUT_DIR.name == "Outputs"
+
+
+def test_next_versioned_output_name_uses_input_folder(tmp_path: Path) -> None:
+    from src.overall.config import next_versioned_output_name
+
+    outputs = tmp_path / "Outputs"
+    outputs.mkdir()
+    (outputs / "Groundup v7 (06-10) v1").mkdir()
+    (outputs / "Groundup v7 (06-10) v3").mkdir()
+    (outputs / "Groundup v7 (06-10) notes").mkdir()
+
+    assert next_versioned_output_name("") == ""
+    assert (
+        next_versioned_output_name("Groundup/Groundup v7 (06-10)", outputs)
+        == "Groundup v7 (06-10) v4"
+    )
+    assert next_versioned_output_name("R3 04-08", outputs) == "R3 04-08 v1"
+
+
+def test_output_folder_choices_keep_current_and_standard_name(tmp_path: Path) -> None:
+    from src.overall.config import output_choice_label, output_folder_choices, output_folder_labels
+
+    outputs = tmp_path / "Outputs"
+    (outputs / "Single v7").mkdir(parents=True)
+    (outputs / ".hidden").mkdir()
+    (outputs / "notes.txt").write_text("skip", encoding="utf-8")
+
+    assert output_folder_labels(outputs) == ["Single v7"]
+    assert output_choice_label("../Outputs/Single v7") == "Single v7"
+    assert output_choice_label("") == ""
+    assert output_folder_choices("Single v7", "Single v8", outputs) == ["Single v8", "Single v7"]
+    assert output_folder_choices("", "R3 04-08 v1", outputs) == ["R3 04-08 v1", "Single v7"]
 
 
 def test_matching_skips_column_zero(tmp_path: Path) -> None:
@@ -390,6 +423,19 @@ def test_pipeline_runs_on_bmp_tiles(tmp_path: Path) -> None:
     assert set(table["source_tile"].astype(str)) == {"R3_0_1_5X.bmp"}
     book = pd.read_excel(tmp_path / "out" / "particles.xlsx", sheet_name=None)
     assert list(book) == ["particles", "parameters"]
+    settings = json.loads((tmp_path / "out" / "last_pipeline.json").read_text(encoding="utf-8"))
+    assert settings["detection"]["method"] == "tophat"
+    saved_table = pd.read_csv(tmp_path / "out" / "particles.csv")
+    assert list(saved_table.columns) == [
+        "id",
+        "x_global_um",
+        "y_global_um",
+        "size_um",
+        "source_tile",
+        "confidence",
+    ]
+    assert (tmp_path / "out" / "last_run.pdf").read_bytes().startswith(b"%PDF")
+    assert (tmp_path / "out" / "mosaic_overlay.png").is_file()
     saved = dict(zip(book["parameters"]["parameter"], book["parameters"]["value"]))
     assert saved["preprocessing.denoise"] is False
     assert saved["detection.method"] == "tophat"
@@ -428,6 +474,8 @@ def test_pipeline_stop_skips_later_tiles_and_skips_outputs(tmp_path: Path) -> No
     assert [name for name in seen if name.endswith(".tif")] == ["R3_0_1_5X.tif"]
     assert not (tmp_path / "out" / "particles.csv").exists()
     assert not (tmp_path / "out" / "particles.xlsx").exists()
+    assert not (tmp_path / "out" / "last_pipeline.json").exists()
+    assert not (tmp_path / "out" / "last_run.pdf").exists()
 
 
 def test_pipeline_stop_cancels_queued_tiles(tmp_path: Path) -> None:
@@ -591,8 +639,15 @@ def test_pipeline_table_includes_feature_columns(tmp_path: Path) -> None:
         assert column in table.columns
     written = write_csv(table, tmp_path / "out" / "particles.csv")
     loaded = pd.read_csv(written)
-    for column in CANDIDATE_FEATURE_FIELDS:
-        assert column in loaded.columns
+    assert list(loaded.columns) == [
+        "id",
+        "x_global_um",
+        "y_global_um",
+        "size_um",
+        "source_tile",
+        "confidence",
+    ]
+    assert "size" not in loaded.columns
 
 
 def test_pipeline_detects_combi_and_the_four_directions(tmp_path: Path) -> None:

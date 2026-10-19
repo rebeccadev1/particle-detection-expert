@@ -10,6 +10,7 @@ from src.overall.io.results_writer import (
     PARTICLES_SHEET,
     excel_bytes,
     parameters_table,
+    write_parameters_json,
     write_xlsx,
 )
 
@@ -49,6 +50,83 @@ def test_parameters_table_flattens_nested_run_settings() -> None:
     assert values["preprocessing.contrast_percentiles"] == "[1.0, 99.0]"
 
 
+def test_result_table_keeps_only_reported_columns() -> None:
+    from src.overall.io.results_writer import result_table
+
+    exported = result_table(_particles())
+    assert list(exported.columns) == [
+        "id",
+        "x_global_um",
+        "y_global_um",
+        "size_um",
+        "source_tile",
+        "confidence",
+    ]
+    assert float(exported.loc[0, "x_global_um"]) == 0.1
+    assert float(exported.loc[0, "y_global_um"]) == 0.2
+    assert float(exported.loc[0, "size_um"]) == 15.0
+    one_digit = result_table(
+        pd.DataFrame(
+            {
+                "id": [1],
+                "x_global": [335260.0],
+                "y_global": [10060.0],
+                "size": [15620.0],
+                "confidence": [0.9],
+                "source_tile": ["a.tif"],
+            }
+        )
+    )
+    assert float(one_digit.loc[0, "x_global_um"]) == 335.3
+    assert float(one_digit.loc[0, "y_global_um"]) == 10.1
+    assert float(one_digit.loc[0, "size_um"]) == 15.6
+
+
+def test_write_parameters_json_keeps_nested_settings(tmp_path: Path) -> None:
+    import json
+
+    path = write_parameters_json(
+        {
+            "input_dir": "R3 04-08",
+            "detection": {"min_size_nm": 20000.0, "recall_mode": False},
+            "preprocessing": {"contrast_percentiles": [1.0, 99.0]},
+        },
+        tmp_path / "parameters.json",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["input_dir"] == "R3 04-08"
+    assert payload["detection"]["min_size_nm"] == 20000.0
+    assert payload["detection"]["recall_mode"] is False
+    assert payload["preprocessing"]["contrast_percentiles"] == [1.0, 99.0]
+
+
+def test_last_run_pdf_includes_summary_and_mosaic(tmp_path: Path) -> None:
+    import numpy as np
+
+    from src.main_pipeline.report.report_generator import write_last_run_pdf
+
+    table = pd.DataFrame(
+        {
+            "size": [20_000.0, 46_620.0, 99_940.0],
+            "x_global": [0.0, 1.0, 2.0],
+            "y_global": [0.0, 1.0, 2.0],
+        }
+    )
+    mosaic = np.zeros((40, 80, 3), dtype=np.uint8)
+    mosaic[10:30, 20:40] = (255, 140, 40)
+    path = write_last_run_pdf(
+        table,
+        {"input_dir": "Recall audit", "detection": {"min_size_nm": 20000.0}},
+        tmp_path / "last_run.pdf",
+        mosaic_rgb=mosaic,
+    )
+    raw = path.read_bytes()
+    assert raw.startswith(b"%PDF")
+    assert b"Last run" in raw or len(raw) > 1000
+    pages = raw.count(b"/Type /Page")
+    assert pages >= 2
+
+
 def test_write_xlsx_adds_parameters_sheet(tmp_path: Path) -> None:
     config = {
         "output_dir": "Single v7",
@@ -80,6 +158,15 @@ def test_particles_at_least_counts_cumulative_sizes() -> None:
     empty = particles_at_least(pd.DataFrame())
     assert list(empty["Size"]) == ["≥10 µm", "≥20 µm", "≥25 µm", "≥50 µm", "≥75 µm"]
     assert list(empty["Particles"]) == [0, 0, 0, 0, 0]
+
+
+def test_size_distribution_steps_from_min_size() -> None:
+    from src.main_pipeline.report.report_generator import size_distribution
+
+    table = pd.DataFrame({"size": [20_000.0, 24_999.0, 25_000.0, 34_000.0, 40_000.0]})
+    counts = size_distribution(table, min_um=20.0)["count"]
+    assert list(counts.index) == ["20–25", "25–30", "30–35", "35–40"]
+    assert list(counts) == [2, 1, 1, 1]
 
 
 def test_excel_bytes_includes_parameters_sheet() -> None:

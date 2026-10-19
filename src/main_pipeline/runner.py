@@ -334,8 +334,11 @@ def run_pipeline(
     downsample factor is greater than 1.
 
     When ``write_outputs`` is true and ``output_dir`` is set, writes
-    ``particles.csv`` and ``particles.xlsx``. The workbook's second sheet is
-    the preprocessing and detection settings used for this run.
+    ``particles.csv``, ``particles.xlsx``, ``last_pipeline.json`` (every setting
+    used for this run, in that output folder), ``mosaic_overlay.png`` when tiles
+    were stitched, and ``last_run.pdf`` (counts, size histogram, and that mosaic).
+    The workbook's second sheet is the same settings as the JSON file. The
+    particle table keeps id, global x/y in µm, size in µm, source tile, and confidence.
 
     ``should_stop`` is checked between tiles. When it returns true the run
     raises ``PipelineStopped`` and does not write outputs.
@@ -457,19 +460,49 @@ def run_pipeline(
         thumbnail_factor=thumb_factor if thumbnails else None,
     )
     if write_outputs:
-        _write_run_outputs(table, config)
+        if progress_cb is not None:
+            progress_cb(total, total, "writing report…")
+        _write_run_outputs(table, mosaic, config)
     return table, mosaic
 
 
-def _write_run_outputs(table: pd.DataFrame, config: dict[str, Any]) -> None:
-    """Save the particle table and the settings that produced it."""
+def _write_run_outputs(
+    table: pd.DataFrame,
+    mosaic: LazyMosaic,
+    config: dict[str, Any],
+) -> None:
+    """Save the particle table, the settings that produced it, and the report."""
     if not str(cfg_get(config, "output_dir", "") or "").strip():
         return
-    from src.overall.io.results_writer import write_csv, write_xlsx
+    from src.overall.io.results_writer import write_csv, write_run_settings, write_xlsx
+    from src.main_pipeline.report.report_generator import overlay_markers, write_last_run_pdf
 
+    out = resolve_output_dir(cfg_get(config, "output_dir"))
     csv_path, _json_path, xlsx_path = default_output_paths(config)
     write_csv(table, csv_path)
     write_xlsx(table, xlsx_path, config)
+    write_run_settings(config, out / "last_pipeline.json", csv_path=csv_path)
+
+    mosaic_png = out / "mosaic_overlay.png"
+    mosaic_jpg = out / "mosaic_overlay.jpg"
+    mosaic_rgb = None
+    if mosaic.placements:
+        mosaic_rgb = overlay_markers(mosaic, table, config, crop=None)
+        _write_overlay_png(mosaic_rgb, mosaic_png)
+        if mosaic_jpg.is_file():
+            mosaic_jpg.unlink()
+    else:
+        for stale in (mosaic_png, mosaic_jpg):
+            if stale.is_file():
+                stale.unlink()
+    write_last_run_pdf(table, config, out / "last_run.pdf", mosaic_rgb=mosaic_rgb)
+
+
+def _write_overlay_png(rgb: np.ndarray, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bgr = cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2BGR)
+    if not cv2.imwrite(str(path), bgr):
+        raise RuntimeError(f"Failed to write mosaic image to {path}")
 
 
 def default_output_paths(config: dict[str, Any]) -> tuple[Path, Path, Path]:

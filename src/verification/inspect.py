@@ -1225,7 +1225,8 @@ def _draw_footprint_edge(
 
 
 # Thin outline of the measured footprint on database particle crops.
-AREA_LINE_COLOR = (255, 0, 0)
+# Standard colour #0F238C.
+AREA_LINE_COLOR = (15, 35, 140)
 AREA_LINE_THICKNESS = 2
 
 
@@ -1250,7 +1251,7 @@ def outline_particle_area(
     pixel_size_nm: float,
     config: Mapping[str, Any] | None = None,
 ) -> np.ndarray:
-    """Copy of a saved crop with a thin red line around the measured area.
+    """Copy of a saved crop with a thin #0F238C line around the measured area.
 
     The saved marker circle is left in place and is not part of the area. The line
     follows the same contrast footprint as the equivalent diameter: pixels

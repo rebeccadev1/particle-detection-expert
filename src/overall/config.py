@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,82 @@ def resolve_output_dir(folder: str | Path | None = None) -> Path:
     if first in (".", ".."):
         return (PACKAGE_ROOT / raw).resolve()
     return (DEFAULT_OUTPUT_DIR / raw).resolve()
+
+
+def next_versioned_output_name(
+    input_folder: str | Path | None,
+    outputs: str | Path | None = None,
+) -> str:
+    """``{input folder name} vN`` under Outputs, one past the highest existing match.
+
+    ``Groundup/Groundup v7 (06-10)`` becomes ``Groundup v7 (06-10) v1`` when
+    that folder is missing, and ``v2`` when ``v1`` already exists. An empty
+    input returns ``""``.
+    """
+    text = str(input_folder or "").strip().strip('"').strip("'").rstrip("/\\")
+    if not text:
+        return ""
+    name = Path(text).name
+    root = DEFAULT_OUTPUT_DIR if outputs is None else Path(outputs)
+    highest = 0
+    if root.is_dir():
+        pattern = re.compile(rf"^{re.escape(name)} v(\d+)$")
+        for child in root.iterdir():
+            match = pattern.fullmatch(child.name)
+            if match and child.is_dir():
+                highest = max(highest, int(match.group(1)))
+    return f"{name} v{highest + 1}"
+
+
+def output_choice_label(folder: str | Path | None) -> str:
+    """Folder name under Outputs, or the original text when it points elsewhere.
+
+    ``../Outputs/Single v7`` and ``Single v7`` are the same suggestion.
+    """
+    text = str(folder or "").strip().strip('"').strip("'")
+    if not text:
+        return ""
+    try:
+        resolved = resolve_output_dir(text)
+        relative = resolved.relative_to(DEFAULT_OUTPUT_DIR.resolve())
+    except (OSError, ValueError):
+        return text
+    if relative == Path("."):
+        return text
+    return relative.as_posix()
+
+
+def output_folder_labels(root: str | Path | None = None) -> list[str]:
+    """Top-level folder names under Outputs.
+
+    A typed name such as ``Single v7`` is created under ``ASML SE/Outputs``.
+    """
+    base = DEFAULT_OUTPUT_DIR if root is None else Path(root)
+    if not base.is_dir():
+        return []
+    try:
+        children = list(base.iterdir())
+    except OSError:
+        return []
+    return sorted(
+        child.name for child in children if child.is_dir() and not child.name.startswith(".")
+    )
+
+
+def output_folder_choices(
+    current: str | None,
+    standard: str | None,
+    root: str | Path | None = None,
+) -> list[str]:
+    """Existing output folders, plus the current value and the standard name.
+
+    The standard name is ``{tile folder} vN`` and may not exist yet.
+    """
+    choices = output_folder_labels(root)
+    for name in (output_choice_label(current), str(standard or "").strip()):
+        if name and name not in choices:
+            choices.insert(0, name)
+    return choices
 
 
 def load_config(path: str | Path) -> dict[str, Any]:

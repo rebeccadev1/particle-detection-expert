@@ -124,17 +124,20 @@ def test_nsew_config_file_has_sidebar_keys() -> None:
 
 def test_app_sidebar_has_nsew_toggle() -> None:
     text = (PACKAGE_ROOT / "app.py").read_text(encoding="utf-8")
-    assert ".toggle(" in text
+    assert "Settings profile" in text
     assert "Uniform" in text
     assert "ui_settings_nsew" in text
     assert "apply_nsew_settings" in text
     assert '["Loading", "Preprocessing", "Detection", "Output"]' in text
-    assert '["Main Pipeline", "Verification", "Training", "Shadow", "Redirector", "Capture"]' in text
-    assert '["Tinder", "Pointer", "Database"]' in text
+    assert '["Capture", "Run", "Verification", "Tools"]' in text
+    assert '["Label", "Inspect", "Database"]' in text
+    assert '["Training", "Shadow", "Redirector"]' in text
     assert "Last run" in text
-    assert "Summary of last run" in text
+    assert "render_labeled_tiles_tab(" in text
+    assert "Summary of last run" not in text
     assert "_nsew_config(base)" in text
-    assert 'if st.session_state.get("ui_settings_nsew"):' in text.split("def _on_reset_standard")[1].split("def ")[0]
+    assert "_apply_standard_settings" in text.split("def _on_reset_standard")[1].split("def ")[0]
+    assert 'if st.session_state.get("ui_settings_nsew"):' in text
 
 
 def test_trial_rank_prefers_high_nsew_recall_then_low_unhappiness() -> None:

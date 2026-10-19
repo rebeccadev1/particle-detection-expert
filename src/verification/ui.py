@@ -10,6 +10,17 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+def _failure(action: str, next_step: str, exc: BaseException) -> None:
+    detail = str(exc).strip() or type(exc).__name__
+    first = detail.splitlines()[0]
+    if len(first) > 160:
+        st.error(f"{action} {next_step}")
+    else:
+        st.error(f"{action} {first}")
+    with st.expander("Error detail"):
+        st.code(detail)
+
+
 from src.overall.config import cfg_get, resolve_output_dir
 from src.overall.io.tile_loader import DEFAULT_FILENAME_PATTERN, matching_tile_paths
 from src.verification.crops import (
@@ -235,18 +246,7 @@ def render_label_tab(
     origin_cache = st.session_state.setdefault("label_origin_cache", {})
 
     st.subheader("Label detections")
-    st.caption(
-        "One at a time: Right = particle · Down = not sure · Left = not a particle · "
-        "Up = undo. All hits: mark each hit that is not a particle, then All done "
-        "saves those marks and labels the rest as particles. A letter N/S/E/W hit shows the direction "
-        "with the highest prominence. A Groundup hit shows the combi or the uniform "
-        "image, whichever prominence is higher. The queue is Main Pipeline → Run pipeline output "
-        "(the latest output folder), skipping already-labeled keys. "
-        "The older R3 review table is not included. "
-        "Labeling N, W, E, S, or a particles-only version labels the same location on all of them. "
-        "On a Groundup submap, a label on any quad or the uniform all-lights shot "
-        "labels that particle on the other four pictures of the same vN folder."
-    )
+    st.caption("One crop at a time. The key for each action is on its button.")
 
     pipeline_csv, pipeline_config = load_last_pipeline(config)
     st.button(
@@ -393,7 +393,7 @@ def render_label_tab(
                     origin_cache=origin_cache,
                 )
     except (FileNotFoundError, ValueError, OSError) as exc:
-        st.error(str(exc))
+        _failure("This crop could not be opened.", "Load the last run again, or pick another tile.", exc)
         _undo_row(store, counts)
         return
 
@@ -439,22 +439,21 @@ def render_label_tab(
             ),
             width=LABEL_IMAGE_WIDTH,
         )
-    st.caption(f"Reviewing 1 of {remaining} remaining in the unlabeled queue.")
+    st.caption(f"This queue: 1 of {remaining} still unlabeled.")
 
-    cols = st.columns(4)
-    not_particle = cols[0].button(
-        "Not a particle", shortcut="Left", width="stretch", key="label_left"
+    cols = st.columns(3)
+    is_particle = cols[0].button(
+        "Particle", shortcut="Right", type="primary", width="stretch", key="label_right"
     )
     not_sure = cols[1].button(
         "Not sure", shortcut="Down", width="stretch", key="label_down"
     )
-    is_particle = cols[2].button(
-        "Particle", shortcut="Right", type="primary", width="stretch", key="label_right"
+    not_particle = cols[2].button(
+        "Not a particle", shortcut="Left", width="stretch", key="label_left"
     )
-    undo = cols[3].button(
+    undo = st.button(
         "Undo",
         shortcut="Up",
-        width="stretch",
         key="label_undo",
         disabled=labeled_n == 0,
     )
@@ -783,7 +782,7 @@ def _render_hit_card(key: str) -> None:
             origin_cache=origin_cache,
         )
     except (FileNotFoundError, ValueError, OSError) as exc:
-        st.error(str(exc))
+        _failure("This crop could not be opened.", "Load the last run again, or pick another tile.", exc)
         return
     size_um = float(record["size"]) / NM_PER_UM
     where = f"{crop.direction} · " if crop.direction else ""
@@ -968,7 +967,7 @@ def render_tile_inspect_tab(
     try:
         run_config, last_csv, detections = _last_pipeline_view(config, table)
     except (ValueError, OSError) as exc:
-        st.error(str(exc))
+        _failure("The last run could not be opened.", "Run the pipeline again.", exc)
         return
     folder = str(cfg_get(run_config, "input_dir", "") or "")
     if not folder:
@@ -995,7 +994,7 @@ def render_tile_inspect_tab(
                 include_unmatched=True,
             )
         except (FileNotFoundError, ValueError) as exc:
-            st.error(str(exc))
+            _failure("The tile folder could not be read.", "Choose the folder in the sidebar, then open Inspect again.", exc)
             return
         if not paths:
             st.warning(f"No matching tiles in {folder}.")
@@ -1133,7 +1132,7 @@ def render_tile_inspect_tab(
                 tile_path, run_config, mosaic=inspect_mosaic, origin_cache=origin_cache
             )
     except (FileNotFoundError, ValueError, OSError) as exc:
-        st.error(str(exc))
+        _failure("This crop could not be opened.", "Load the last run again, or pick another tile.", exc)
         return
 
     pixel_size = float(cfg_get(run_config, "pixel_size_nm", 960.0))
@@ -1712,7 +1711,7 @@ def render_labeled_tiles_tab(
         try:
             detections = load_particles_csv(last_csv)
         except (ValueError, OSError) as exc:
-            st.error(str(exc))
+            _failure("The detection table could not be read.", "Run the pipeline again.", exc)
             return
         # The open session can still hold an older run. The summary follows the
         # CSV last_pipeline.json points at.
@@ -1923,7 +1922,7 @@ def render_labeled_tiles_tab(
             tile_path, run_config, mosaic=mosaic, origin_cache=origin_cache
         )
     except (FileNotFoundError, ValueError, OSError) as exc:
-        st.error(str(exc))
+        _failure("This crop could not be opened.", "Load the last run again, or pick another tile.", exc)
         return
 
     pixel_size = float(cfg_get(run_config, "pixel_size_nm", 960.0))
@@ -2148,7 +2147,7 @@ def _collection_image(
     config: dict[str, Any] | None,
     show_area_line: bool = False,
 ) -> np.ndarray | None:
-    """Particle crops gain a thin red outline of the measured area."""
+    """Particle crops gain a thin #0F238C outline of the measured area."""
     if not show_area_line or label != "particle" or config is None:
         return None
     try:

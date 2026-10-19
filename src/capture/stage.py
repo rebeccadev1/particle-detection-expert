@@ -4,7 +4,7 @@ Millimetres, relative moves, a pause at the current point, then a step. Rows
 alternate +X and -X. Between rows the stage steps in -Y. Nothing is homed; the
 scan starts from the current position.
 
-The standard grid covers a 40 by 60 mm area. Each picture sees 6.86 mm, and
+The standard grid covers a 60 by 40 mm area. Each picture sees 6.86 mm, and
 neighbouring pictures overlap by 10 percent, so the stage steps 6.174 mm.
 """
 
@@ -43,8 +43,8 @@ _LINK = _load_printer_link()
 
 FOV_MM = 6.86
 OVERLAP = 0.10
-SCAN_WIDTH_MM = 40.0
-SCAN_HEIGHT_MM = 60.0
+SCAN_WIDTH_MM = 60.0
+SCAN_HEIGHT_MM = 40.0
 DEFAULT_STEP_MM = FOV_MM * (1.0 - OVERLAP)
 DEFAULT_FEED = 1000
 DEFAULT_DWELL_MS = 1000
@@ -88,7 +88,7 @@ def build_scan_gcode(
     feed: float = DEFAULT_FEED,
     dwell_ms: float = DEFAULT_DWELL_MS,
 ) -> str:
-    """G-code for one serpentine scan. Defaults cover 40 by 60 mm at 10 percent overlap.
+    """G-code for one serpentine scan. Defaults cover 60 by 40 mm at 10 percent overlap.
 
     ``columns`` and ``rows`` are the number of stops. The stage makes one
     fewer move than that along each axis.

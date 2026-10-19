@@ -1,9 +1,9 @@
 """Move the serpentine and take a picture at every stop.
 
 Uniform saves one all-sides frame per stop. NSEW keeps the stage still until
-N, E, S, and W have each been saved. After every seventh stage step the scan
-refocuses on Z, and starts another search whenever sharpness is not above
-80% of the score that autofocus started with.
+N, E, S, and W have each been saved. When focus during the scan is on, every
+seventh stage step refocuses on Z, and starts another search whenever
+sharpness is not above 80% of the score that autofocus started with.
 Start scan still only moves the printer.
 """
 
@@ -63,8 +63,15 @@ _JOB: dict = {
 }
 
 
-def refocus_due(steps_taken: int, every: int = FOCUS_EVERY_STEPS) -> bool:
-    """True after the 7th, 14th, and later stage steps."""
+def refocus_due(
+    steps_taken: int,
+    every: int = FOCUS_EVERY_STEPS,
+    *,
+    enabled: bool = True,
+) -> bool:
+    """True after the 7th, 14th, and later stage steps when focus during the scan is on."""
+    if not enabled:
+        return False
     steps_taken = int(steps_taken)
     every = int(every)
     return every > 0 and steps_taken > 0 and steps_taken % every == 0
@@ -132,6 +139,7 @@ def start_scan_capture(
     focus_coarse_mm: float = DEFAULT_COARSE_MM,
     focus_fine_mm: float = DEFAULT_FINE_MM,
     focus_feed: float = 300,
+    focus_during_scan: bool = True,
 ) -> None:
     """Start the combined scan on a background thread."""
     if mode not in ("Uniform", "NSEW"):
@@ -153,7 +161,9 @@ def start_scan_capture(
     focus_coarse_mm = float(focus_coarse_mm)
     focus_fine_mm = float(focus_fine_mm)
     focus_feed = float(focus_feed)
-    _check_focus_settings(focus_max_travel_mm, focus_coarse_mm, focus_fine_mm, focus_feed)
+    focus_during_scan = bool(focus_during_scan)
+    if focus_during_scan:
+        _check_focus_settings(focus_max_travel_mm, focus_coarse_mm, focus_fine_mm, focus_feed)
     with _JOB_LOCK:
         thread = _JOB.get("thread")
         if thread is not None and thread.is_alive():
@@ -189,6 +199,7 @@ def start_scan_capture(
             "focus_coarse_mm": focus_coarse_mm,
             "focus_fine_mm": focus_fine_mm,
             "focus_feed": focus_feed,
+            "focus_during_scan": focus_during_scan,
         },
         name="scan-capture",
         daemon=True,
@@ -211,6 +222,7 @@ def _scan_thread(
     focus_coarse_mm: float,
     focus_fine_mm: float,
     focus_feed: float,
+    focus_during_scan: bool,
 ) -> None:
     from src.capture.camera_automation_v2 import shutdown
     from src.capture.preview import stop_preview
@@ -241,7 +253,7 @@ def _scan_thread(
                 steps_taken += 1
                 with _JOB_LOCK:
                     _JOB["steps"] = steps_taken
-                if refocus_due(steps_taken):
+                if refocus_due(steps_taken, enabled=focus_during_scan):
                     _focus_here(
                         camera,
                         converter,

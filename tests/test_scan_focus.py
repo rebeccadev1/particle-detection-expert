@@ -12,6 +12,7 @@ from src.capture.stage import scan_stops
 def test_refocus_lands_on_every_seventh_step() -> None:
     assert FOCUS_EVERY_STEPS == 7
     assert [step for step in range(0, 22) if refocus_due(step)] == [7, 14, 21]
+    assert [step for step in range(0, 22) if refocus_due(step, enabled=False)] == []
 
 
 def test_serpentine_refocuses_after_seven_moves() -> None:

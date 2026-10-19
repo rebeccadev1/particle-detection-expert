@@ -26,18 +26,18 @@ def test_old_scan_40x60_still_builds() -> None:
     assert build_scan_gcode(step_mm=6.3, columns=7, rows=10, dwell_ms=1000) == path.read_text()
 
 
-def test_standard_grid_covers_40_by_60_with_10_percent_overlap() -> None:
+def test_standard_grid_covers_60_by_40_with_10_percent_overlap() -> None:
     from src.capture.stage import DEFAULT_COLUMNS, DEFAULT_ROWS, DEFAULT_STEP_MM, FOV_MM
 
     assert DEFAULT_STEP_MM == pytest.approx(6.174)
-    assert DEFAULT_COLUMNS == 7
-    assert DEFAULT_ROWS == 10
+    assert DEFAULT_COLUMNS == 10
+    assert DEFAULT_ROWS == 7
     covered_x = FOV_MM + (DEFAULT_COLUMNS - 1) * DEFAULT_STEP_MM
     covered_y = FOV_MM + (DEFAULT_ROWS - 1) * DEFAULT_STEP_MM
-    assert covered_x >= 40
-    assert covered_y >= 60
-    assert covered_x == pytest.approx(43.904)
-    assert covered_y == pytest.approx(62.426)
+    assert covered_x >= 60
+    assert covered_y >= 40
+    assert covered_x == pytest.approx(62.426)
+    assert covered_y == pytest.approx(43.904)
 
 
 def test_one_row_has_no_y_move() -> None:

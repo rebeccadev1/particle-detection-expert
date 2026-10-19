@@ -307,8 +307,19 @@ def write_last_pipeline(
     csv_path: str | Path,
     pointer_dir: str | Path | None = None,
 ) -> Path:
-    """Remember which CSV + folder the latest pipeline run used."""
+    """Save this run's settings in its output folder and point Outputs at that CSV."""
+    from src.overall.io.results_writer import write_run_settings
+
     destination = Path(csv_path).resolve()
+    output_dir = cfg_get(dict(config), "output_dir", None) or destination.parent
+    run_folder = resolve_output_dir(output_dir)
+    run_file = write_run_settings(
+        config, run_folder / LAST_PIPELINE_POINTER, csv_path=destination
+    )
+    folder = Path(pointer_dir) if pointer_dir is not None else DEFAULT_OUTPUT_DIR
+    pointer = folder / LAST_PIPELINE_POINTER
+    if pointer.resolve() == run_file.resolve():
+        return run_file
     payload = {
         "csv": str(destination),
         "input_dir": str(cfg_get(dict(config), "input_dir", "") or ""),
@@ -317,11 +328,9 @@ def write_last_pipeline(
         "overlap_fraction": cfg_get(dict(config), "overlap_fraction", 0.0),
         "filename_pattern": cfg_get(dict(config), "filename_pattern", None),
     }
-    folder = Path(pointer_dir) if pointer_dir is not None else DEFAULT_OUTPUT_DIR
-    pointer = folder / LAST_PIPELINE_POINTER
     pointer.parent.mkdir(parents=True, exist_ok=True)
     pointer.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    return pointer
+    return run_file
 
 
 def use_last_pipeline_queue(
@@ -381,6 +390,13 @@ def load_particles_csv(path: str | Path) -> pd.DataFrame:
     """Read a detector table and tag it with ``source_csv`` and ``key``."""
     destination = Path(path)
     df = pd.read_csv(destination)
+    for source, dest in (
+        ("x_global_um", "x_global"),
+        ("y_global_um", "y_global"),
+        ("size_um", "size"),
+    ):
+        if dest not in df.columns and source in df.columns:
+            df[dest] = df[source].astype(float) * 1000.0
     missing = [column for column in REQUIRED if column not in df.columns]
     if missing:
         raise ValueError(f"Results table missing columns: {missing}")

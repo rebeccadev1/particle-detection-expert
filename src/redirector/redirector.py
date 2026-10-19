@@ -1,10 +1,3 @@
-"""Plexiglass ring that redirects a horizontal ring light.
-
-The part is an annulus. In cross-section the top face is a smooth curve: the
-height drop and the angles at the inner and outer rims fix it. Thickness is
-the material thickness measured along the surface normal. Rays leave the ring
-light horizontally toward the centre and are traced with Snell's law.
-"""
 
 from __future__ import annotations
 
@@ -807,171 +800,162 @@ def render_redirector_tab() -> None:
     import pandas as pd
     import streamlit as st
     from streamlit_image_coordinates import streamlit_image_coordinates
-
-    st.caption(
-        "The curve meets the height drop and the angles at the inner and outer rims. "
-        "Thickness is perpendicular to that curve. Horizontal rays enter only through the "
-        "outer thickness face. Click a ray to turn it pink. The green mark is the 6.86 mm "
-        "field of view, at the set distance below the inner bottom edge. Output angle is only for rays "
-        "that cross that square, in degrees below horizontal. Exit intensity is the share "
-        "of the source still in the ray. At each surface the reflectance and transmittance "
-        "come from the incidence and transmission angles, and the s and p Fresnel "
-        "coefficients are averaged because the source is unpolarized. Every reflection "
-        "keeps R and every refraction keeps T."
-    )
-    col_a, col_b, col_c, col_d, col_e = st.columns(5)
-    outer = col_a.number_input(
-        "Outer diameter (mm)", min_value=1.0, value=54.0, step=0.5, key="redir_outer_v3"
-    )
-    inner = col_b.number_input(
-        "Inner diameter (mm)", min_value=1.0, value=10.0, step=0.5, key="redir_inner_v3"
-    )
-    drop = col_c.number_input(
-        "Height drop (mm)", min_value=0.1, value=8.4, step=0.1, key="redir_drop_v3",
-        help="How far the inner edge sits below the outer edge.",
-    )
-    thickness = col_d.number_input(
-        "Thickness (mm)", min_value=0.1, value=2.0, step=0.1, key="redir_thick_v3",
-        help="Material thickness, perpendicular to the curved surface.",
-    )
-    index = col_e.number_input(
-        "Refractive index", min_value=1.01, value=PMMA_N, step=0.001, format="%.3f",
-        key="redir_index_v3",
-        help="Plexiglass (PMMA) is about 1.49. Schott N-LASF31A is 1.883.",
-    )
-    angle_row = st.columns(3)
-    inner_angle = angle_row[0].number_input(
-        "Inner angle (°)", min_value=-75.0, max_value=75.0, value=11.0, step=0.1,
-        key="redir_inner_angle",
-        help="Slope of the surface above horizontal at the inner diameter.",
-    )
-    outer_angle = angle_row[1].number_input(
-        "Outer angle (°)", min_value=-75.0, max_value=75.0, value=23.0, step=0.1,
-        key="redir_outer_angle",
-        help="Slope of the surface above horizontal at the outer diameter.",
-    )
-    fov_depth = angle_row[2].number_input(
-        "Distance to FOV (mm)", min_value=0.0, value=FOV_DEPTH_MM, step=0.1,
-        key="redir_fov_depth",
-        help="How far the 6.86 mm field of view sits below the inner bottom edge. "
-        "The optimal values were found for 5 mm.",
-    )
-    button_row = st.columns([1, 1, 2])
-    button_row[0].button(
-        "Default values",
-        on_click=_apply_redirector,
-        args=(67.0, 20.0, 4.0, 3.0, PMMA_N),
-        help="67 mm outer, 20 mm inner, 4 mm drop, 3 mm thick, plexiglass.",
-    )
-    button_row[1].button(
-        "Optimal values",
-        on_click=_apply_redirector,
-        args=(54.0, 10.0, 8.4, 2.0, PMMA_N),
-        kwargs={"inner_angle_deg": 11.0, "outer_angle_deg": 23.0, "bounce": False},
-        help="54 mm outer, 10 mm inner, 8.4 mm drop, 2 mm thick, plexiglass. End angles 11° and 23°.",
-    )
-    reflect_far_side = button_row[2].checkbox(
-        "Bounce off the outer diameter",
-        key="redir_bounce",
-        help="Rays pass through the plexiglass, including the opposite side. The outer face reflects them all back. The inner opening does not.",
-    )
-    count = st.slider("Number of rays", min_value=5, max_value=41, value=21, step=2, key="redir_rays_v2")
-
-    try:
-        shape = make_shape(outer, inner, drop, thickness, inner_angle, outer_angle, fov_depth)
-    except ValueError as exc:
-        st.error(str(exc))
-        return
-
-    traces = [
-        trace
-        for trace in trace_fan(shape, int(count), float(index), reflect_far_side)
-        if trace.path.startswith("outer edge right")
-    ]
-    fraction, angle_low, angle_high = fov_beam(shape, float(index), reflect_far_side)
-    metric_a, metric_b, metric_c, metric_d = st.columns(4)
-    metric_a.metric(
-        "Edge angles",
-        f"{shape.inner_angle_deg:.1f}° / {shape.outer_angle_deg:.1f}°",
-        help="Surface angle above horizontal at the inner rim, then the outer rim.",
-    )
-    if angle_low is not None and angle_high is not None:
-        metric_b.metric(
-            "Output angle",
-            f"{angle_low:.1f}° to {angle_high:.1f}°",
-            help="Degrees below horizontal, only for the part of the beam that crosses the field of view.",
+    
+    with st.container(border=True, key="block-redirector-shape"):
+        col_a, col_b, col_c, col_d, col_e = st.columns(5)
+        outer = col_a.number_input(
+            "Outer diameter (mm)", min_value=1.0, value=54.0, step=0.5, key="redir_outer_v3"
         )
-    else:
-        metric_b.metric("Output angle", "—")
-    metric_c.metric(
-        "Rays in FOV",
-        f"{100.0 * fraction:.1f}%",
-        help="Share of a uniform beam across the thickness that crosses the 6.86 mm square. Independent of how many rays are drawn.",
-    )
-    exited = [trace for trace in traces if trace.status == "exited"]
-    if exited:
-        low = min(trace.intensity for trace in exited)
-        high = max(trace.intensity for trace in exited)
-        intensity_text = (
-            f"{100.0 * low:.1f}%"
-            if abs(high - low) < 0.005
-            else f"{100.0 * low:.1f}% to {100.0 * high:.1f}%"
+        inner = col_b.number_input(
+            "Inner diameter (mm)", min_value=1.0, value=10.0, step=0.5, key="redir_inner_v3"
         )
-        metric_d.metric(
-            "Exit intensity",
-            intensity_text,
-            help=(
-                "Share of the source still in each exiting ray. "
-                "The rest is lost to Fresnel reflection. "
-                "A total internal reflection keeps the whole ray; a partial reflection keeps only R."
-            ),
+        drop = col_c.number_input(
+            "Height drop (mm)", min_value=0.1, value=8.4, step=0.1, key="redir_drop_v3",
+            help="How far the inner edge sits below the outer edge.",
         )
-    else:
-        metric_d.metric("Exit intensity", "—")
+        thickness = col_d.number_input(
+            "Thickness (mm)", min_value=0.1, value=2.0, step=0.1, key="redir_thick_v3",
+            help="Material thickness, perpendicular to the curved surface.",
+        )
+        index = col_e.number_input(
+            "Refractive index", min_value=1.01, value=PMMA_N, step=0.001, format="%.3f",
+            key="redir_index_v3",
+            help="Plexiglass (PMMA) is about 1.49. Schott N-LASF31A is 1.883.",
+        )
+        angle_row = st.columns(3)
+        inner_angle = angle_row[0].number_input(
+            "Inner angle (°)", min_value=-75.0, max_value=75.0, value=11.0, step=0.1,
+            key="redir_inner_angle",
+            help="Slope of the surface above horizontal at the inner diameter.",
+        )
+        outer_angle = angle_row[1].number_input(
+            "Outer angle (°)", min_value=-75.0, max_value=75.0, value=23.0, step=0.1,
+            key="redir_outer_angle",
+            help="Slope of the surface above horizontal at the outer diameter.",
+        )
+        fov_depth = angle_row[2].number_input(
+            "Distance to FOV (mm)", min_value=0.0, value=FOV_DEPTH_MM, step=0.1,
+            key="redir_fov_depth",
+            help="How far the 6.86 mm field of view sits below the inner bottom edge. "
+            "The optimal values were found for 5 mm.",
+        )
+        button_row = st.columns([1, 1, 2])
+        button_row[0].button(
+            "Default values",
+            on_click=_apply_redirector,
+            args=(67.0, 20.0, 4.0, 3.0, PMMA_N),
+            help="67 mm outer, 20 mm inner, 4 mm drop, 3 mm thick, plexiglass.",
+        )
+        button_row[1].button(
+            "Optimal values",
+            on_click=_apply_redirector,
+            args=(54.0, 10.0, 8.4, 2.0, PMMA_N),
+            kwargs={"inner_angle_deg": 11.0, "outer_angle_deg": 23.0, "bounce": False},
+            help="54 mm outer, 10 mm inner, 8.4 mm drop, 2 mm thick, plexiglass. End angles 11° and 23°.",
+        )
+        reflect_far_side = button_row[2].checkbox(
+            "Bounce off the outer diameter",
+            key="redir_bounce",
+            help="Rays pass through the plexiglass, including the opposite side. The outer face reflects them all back. The inner opening does not.",
+        )
+        count = st.slider("Number of rays", min_value=5, max_value=41, value=21, step=2, key="redir_rays_v2")
 
-    selected = st.session_state.get("redir_selected_ray")
-    if not isinstance(selected, int) or not 0 <= selected < len(traces):
-        selected = None
-    image, polylines = section_image(shape, traces, selected)
-    click = streamlit_image_coordinates(
-        image,
-        key="redir_pick",
-        cursor="pointer",
-        use_column_width="always",
-    )
-    if isinstance(click, dict) and "x" in click:
-        stamp = click.get("unix_time")
-        if stamp != st.session_state.get("redir_click_stamp"):
-            st.session_state["redir_click_stamp"] = stamp
-            shown_w = float(click.get("width") or image.size[0])
-            shown_h = float(click.get("height") or image.size[1])
-            x = float(click["x"]) * image.size[0] / max(shown_w, 1.0)
-            y = float(click["y"]) * image.size[1] / max(shown_h, 1.0)
-            st.session_state["redir_selected_ray"] = _nearest_ray(polylines, x, y)
-            st.rerun()
-    st.caption("Click a ray to highlight it.")
+    with st.container(border=True, key="block-redirector-rays"):
+        try:
+            shape = make_shape(outer, inner, drop, thickness, inner_angle, outer_angle, fov_depth)
+        except ValueError as exc:
+            st.error(str(exc))
+            return
 
-    rows = []
-    for trace in traces:
-        in_fov = hits_fov(shape, trace)
-        rows.append(
-            {
-                "Ray height (mm)": round(trace.height_mm, 3),
-                "Output angle (° down)": None if not in_fov or trace.angle_down_deg is None else round(trace.angle_down_deg, 2),
-                "Hits FOV": "yes" if in_fov else "no",
-                "Exit face": trace.exit_face or "",
-                "Exit radius (mm)": None if trace.exit_radius_mm is None else round(trace.exit_radius_mm, 2),
-                "Reflections": trace.reflections,
-                "Exit intensity (%)": (
-                    None if trace.status != "exited" else round(100.0 * trace.intensity, 1)
+        traces = [
+            trace
+            for trace in trace_fan(shape, int(count), float(index), reflect_far_side)
+            if trace.path.startswith("outer edge right")
+        ]
+        fraction, angle_low, angle_high = fov_beam(shape, float(index), reflect_far_side)
+        metric_a, metric_b, metric_c, metric_d = st.columns(4)
+        metric_a.metric(
+            "Edge angles",
+            f"{shape.inner_angle_deg:.1f}° / {shape.outer_angle_deg:.1f}°",
+            help="Surface angle above horizontal at the inner rim, then the outer rim.",
+        )
+        if angle_low is not None and angle_high is not None:
+            metric_b.metric(
+                "Output angle",
+                f"{angle_low:.1f}° to {angle_high:.1f}°",
+                help="Degrees below horizontal, only for the part of the beam that crosses the field of view.",
+            )
+        else:
+            metric_b.metric("Output angle", "—")
+        metric_c.metric(
+            "Rays in FOV",
+            f"{100.0 * fraction:.1f}%",
+            help="Share of a uniform beam across the thickness that crosses the 6.86 mm square. Independent of how many rays are drawn.",
+        )
+        exited = [trace for trace in traces if trace.status == "exited"]
+        if exited:
+            low = min(trace.intensity for trace in exited)
+            high = max(trace.intensity for trace in exited)
+            intensity_text = (
+                f"{100.0 * low:.1f}%"
+                if abs(high - low) < 0.005
+                else f"{100.0 * low:.1f}% to {100.0 * high:.1f}%"
+            )
+            metric_d.metric(
+                "Exit intensity",
+                intensity_text,
+                help=(
+                    "Share of the source still in each exiting ray. "
+                    "The rest is lost to Fresnel reflection. "
+                    "A total internal reflection keeps the whole ray; a partial reflection keeps only R."
                 ),
-                "Intensity lost (%)": (
-                    None
-                    if trace.status != "exited"
-                    else round(100.0 - round(100.0 * trace.intensity, 1), 1)
-                ),
-                "Path": trace.path,
-            }
+            )
+        else:
+            metric_d.metric("Exit intensity", "—")
+
+        selected = st.session_state.get("redir_selected_ray")
+        if not isinstance(selected, int) or not 0 <= selected < len(traces):
+            selected = None
+        image, polylines = section_image(shape, traces, selected)
+        click = streamlit_image_coordinates(
+            image,
+            key="redir_pick",
+            cursor="pointer",
+            use_column_width="always",
         )
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        if isinstance(click, dict) and "x" in click:
+            stamp = click.get("unix_time")
+            if stamp != st.session_state.get("redir_click_stamp"):
+                st.session_state["redir_click_stamp"] = stamp
+                shown_w = float(click.get("width") or image.size[0])
+                shown_h = float(click.get("height") or image.size[1])
+                x = float(click["x"]) * image.size[0] / max(shown_w, 1.0)
+                y = float(click["y"]) * image.size[1] / max(shown_h, 1.0)
+                st.session_state["redir_selected_ray"] = _nearest_ray(polylines, x, y)
+                st.rerun()
+        st.caption("Click a ray to highlight it.")
+
+        rows = []
+        for trace in traces:
+            in_fov = hits_fov(shape, trace)
+            rows.append(
+                {
+                    "Ray height (mm)": round(trace.height_mm, 3),
+                    "Output angle (° down)": None if not in_fov or trace.angle_down_deg is None else round(trace.angle_down_deg, 2),
+                    "Hits FOV": "yes" if in_fov else "no",
+                    "Exit face": trace.exit_face or "",
+                    "Exit radius (mm)": None if trace.exit_radius_mm is None else round(trace.exit_radius_mm, 2),
+                    "Reflections": trace.reflections,
+                    "Exit intensity (%)": (
+                        None if trace.status != "exited" else round(100.0 * trace.intensity, 1)
+                    ),
+                    "Intensity lost (%)": (
+                        None
+                        if trace.status != "exited"
+                        else round(100.0 - round(100.0 * trace.intensity, 1), 1)
+                    ),
+                    "Path": trace.path,
+                }
+            )
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -886,6 +887,10 @@ def test_load_last_pipeline_uses_pointer_not_recall_csv(tmp_path: Path) -> None:
     found, run_config = load_last_pipeline({"input_dir": "other"}, pointer_dir=tmp_path)
     assert found == csv_path.resolve()
     assert run_config["input_dir"] == "My tiles"
+    saved = json.loads((tmp_path / "out" / "last_pipeline.json").read_text(encoding="utf-8"))
+    assert saved["input_dir"] == "My tiles"
+    assert saved["pixel_size_nm"] == 960.0
+    assert saved["csv"] == str(csv_path.resolve())
 
 
 def test_set_scoped_nsew_label_stays_on_one_field() -> None:
