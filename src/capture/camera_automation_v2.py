@@ -11,8 +11,8 @@ lighting has all four sides on, so the camera shutter is that value divided
 by 4. NSEW lights one side, so the shutter equals the total. Side 0 is N,
 then E, S, W clockwise.
 
-Each capture and each scan gets ASML SE/captures/vN YYYY-MM-DD, next to
-Inputs and Outputs. N is how many runs already exist for that date, starting
+Each capture and each scan gets ASML SE/Inputs/Groundup/vN YYYY-MM-DD.
+N is how many runs already exist for that date, starting
 at 1. Pictures in that folder are named by grid position, such as (1,1).png,
 or (1,1)_N.png for one ring side. One capture.json in the run folder records
 every stop. Odd rows run left to right. Even rows start at the right edge
@@ -48,8 +48,8 @@ READY_TIMEOUT_S = 5.0
 ACK_TIMEOUT_S = 2.0
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-# particle_detection/src/capture -> ASML SE, beside Inputs and Outputs.
-CAPTURES_DIR = SCRIPT_DIR.parents[2] / "captures"
+# particle_detection/src/capture -> ASML SE/Inputs/Groundup.
+CAPTURES_DIR = SCRIPT_DIR.parents[2] / "Inputs" / "Groundup"
 # Default stage width. The Capture tab passes the Columns control instead.
 DEFAULT_COLUMNS = 7
 LOCATION_DIR_RE = re.compile(r"^\((\d+),(\d+)\)$")

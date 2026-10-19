@@ -199,6 +199,47 @@ def test_prepare_detection_paths_keeps_combi_and_uniform(tmp_path: Path) -> None
     assert (folder / "combi_2of4.png").is_file()
 
 
+def test_prepare_detection_paths_combines_grid_sides_instead_of_loading_them(
+    tmp_path: Path,
+) -> None:
+    for row, col in ((1, 3), (2, 1)):
+        for name, value in (("N", 40), ("S", 50), ("E", 60), ("W", 70)):
+            _write_gray(tmp_path / f"({row},{col})_{name}.png", value)
+    _write_gray(tmp_path / "(1,1).png", 10)
+    events: list[tuple[int, int, str]] = []
+    paths = prepare_detection_paths(
+        list(tmp_path.iterdir()),
+        progress_cb=lambda cur, tot, name: events.append((cur, tot, name)),
+    )
+    assert sorted(path.name for path in paths) == ["(1,1).png", "(1,3).png", "(2,1).png"]
+    assert (tmp_path / "(1,3).png").is_file()
+    assert (tmp_path / "(2,1).png").is_file()
+    assert [event[0] for event in events] == [1, 2]
+    assert {event[1] for event in events} == {2}
+    assert all(event[2].startswith("Combining (") for event in events)
+    with Image.open(tmp_path / "(1,3).png") as image:
+        assert image.size == (32, 24)
+
+
+def test_prepare_detection_paths_keeps_a_fresh_grid_combi(tmp_path: Path) -> None:
+    for name, value in (("N", 40), ("S", 50), ("E", 60), ("W", 70)):
+        _write_gray(tmp_path / f"(1,3)_{name}.png", value)
+    prepare_detection_paths(list(tmp_path.iterdir()))
+    combi = tmp_path / "(1,3).png"
+    stamp = combi.stat().st_mtime_ns
+    again = prepare_detection_paths(list(tmp_path.iterdir()))
+    assert combi.stat().st_mtime_ns == stamp
+    assert [path.name for path in again] == ["(1,3).png"]
+
+
+def test_prepare_detection_paths_skips_an_incomplete_grid_cell(tmp_path: Path) -> None:
+    _write_gray(tmp_path / "(4,2)_N.png", 10)
+    _write_gray(tmp_path / "(4,2)_E.png", 20)
+    paths = prepare_detection_paths(list(tmp_path.iterdir()))
+    assert paths == []
+    assert not (tmp_path / "(4,2).png").exists()
+
+
 def test_prepare_detection_paths_leaves_a_partial_set(tmp_path: Path) -> None:
     _write_gray(tmp_path / "N.png", 10)
     _write_gray(tmp_path / "S.png", 20)
@@ -225,3 +266,23 @@ def test_combi_beside_letters_uses_nsew_keys(tmp_path: Path) -> None:
     _write_gray(combi, 20)
     key = detection_key({"source_tile": str(combi), "x_global": 10.2, "y_global": 20.4})
     assert key == "v3_NSEW_10_20"
+
+
+def test_pipeline_detects_the_combined_grid_cell(tmp_path: Path) -> None:
+    from src.main_pipeline.runner import run_pipeline
+    from tests.fixtures.synthetic import detector_test_config
+
+    for name in ("N", "S", "E", "W"):
+        _write_gray(tmp_path / f"(1,3)_{name}.png", 40)
+    config = detector_test_config(
+        input_dir=str(tmp_path),
+        output_dir=str(tmp_path / "out"),
+        filename_pattern=r"\((?P<row>\d+),(?P<col>\d+)\)\.(?:png|bmp)",
+    )
+    events: list[tuple[int, int, str]] = []
+    _table, mosaic = run_pipeline(
+        config, progress_cb=lambda cur, tot, name: events.append((cur, tot, name))
+    )
+    assert [placement.name for placement in mosaic.placements] == ["(1,3).png"]
+    found = [event for event in events if "tile" in event[2]]
+    assert found[0][1] == 1

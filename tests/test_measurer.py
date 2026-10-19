@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 import tifffile
 
 from src.main_pipeline.detection.detector import ParticleCandidate
@@ -17,7 +18,7 @@ from src.main_pipeline.measurement.measurer import (
     measure_and_dedupe,
     measure_candidates,
 )
-from src.main_pipeline.runner import run_pipeline
+from src.main_pipeline.runner import PipelineStopped, run_pipeline
 from src.main_pipeline.stitching.stitcher import tile_origin_px
 from src.overall.io.tile_loader import Tile
 from tests.fixtures.synthetic import detector_test_config, make_structured_tile, write_tile_tiff
@@ -405,6 +406,49 @@ def test_pipeline_progress_reports_before_first_tile(tmp_path: Path) -> None:
     assert events[0][0] == 0
     assert events[0][1] == 1
     assert "tile" in events[0][2]
+
+
+def test_pipeline_stop_skips_later_tiles_and_skips_outputs(tmp_path: Path) -> None:
+    write_tile_tiff(tmp_path / "R3_0_1_5X.tif", make_structured_tile((32, 32)))
+    write_tile_tiff(tmp_path / "R3_0_2_5X.tif", make_structured_tile((32, 32)))
+    config = detector_test_config()
+    config["input_dir"] = str(tmp_path)
+    config["output_dir"] = str(tmp_path / "out")
+    seen: list[str] = []
+
+    def progress(_current: int, _total: int, name: str) -> None:
+        seen.append(name)
+
+    def should_stop() -> bool:
+        return any(name.endswith(".tif") for name in seen)
+
+    with pytest.raises(PipelineStopped):
+        run_pipeline(config, progress_cb=progress, should_stop=should_stop)
+
+    assert [name for name in seen if name.endswith(".tif")] == ["R3_0_1_5X.tif"]
+    assert not (tmp_path / "out" / "particles.csv").exists()
+    assert not (tmp_path / "out" / "particles.xlsx").exists()
+
+
+def test_pipeline_stop_cancels_queued_tiles(tmp_path: Path) -> None:
+    write_tile_tiff(tmp_path / "R3_0_1_5X.tif", make_structured_tile((32, 32)))
+    write_tile_tiff(tmp_path / "R3_0_2_5X.tif", make_structured_tile((32, 32)))
+    config = detector_test_config(pipeline={"workers": 2})
+    config["input_dir"] = str(tmp_path)
+    config["output_dir"] = str(tmp_path / "out")
+    seen: list[str] = []
+
+    def progress(_current: int, _total: int, name: str) -> None:
+        seen.append(name)
+
+    def should_stop() -> bool:
+        return any("worker" in name for name in seen)
+
+    with pytest.raises(PipelineStopped):
+        run_pipeline(config, progress_cb=progress, should_stop=should_stop)
+
+    assert not any(name.endswith(".tif") for name in seen)
+    assert not (tmp_path / "out" / "particles.csv").exists()
 
 
 def test_pipeline_thread_pool_processes_two_tiles(tmp_path: Path) -> None:

@@ -34,7 +34,6 @@ from src.main_pipeline.measurement.measurer import (
     is_submap_lighting_tile,
     submap_id,
 )
-from src.main_pipeline.report.report_generator import _to_display_rgb
 from src.main_pipeline.stitching.stitcher import LazyMosaic, TilePlacement, placement_from_tile
 
 CIRCLE_COLOR = (255, 140, 40)  # unlabeled
@@ -144,6 +143,30 @@ def _local_span(center: int, half: int, limit: int) -> tuple[int, int]:
         elif end == int(limit):
             start = max(0, end - target)
     return start, end
+
+
+def grayscale_as_rgb(image: np.ndarray) -> np.ndarray:
+    """RGB copy of grayscale pixels. No per-window contrast stretch."""
+    array = np.asarray(image)
+    if array.size == 0:
+        return np.zeros((0, 0, 3), dtype=np.uint8)
+    if array.dtype == np.uint8:
+        gray = np.ascontiguousarray(array)
+    elif np.issubdtype(array.dtype, np.integer):
+        shift = max(0, int(array.dtype.itemsize) * 8 - 8)
+        gray = np.ascontiguousarray((array >> shift).astype(np.uint8))
+    else:
+        values = np.nan_to_num(np.asarray(array, dtype=np.float32), nan=0.0)
+        peak = float(np.max(values)) if values.size else 0.0
+        if peak <= 1.0:
+            gray = np.clip(np.rint(values * 255.0), 0, 255).astype(np.uint8)
+        elif peak <= 255.0:
+            gray = np.clip(np.rint(values), 0, 255).astype(np.uint8)
+        else:
+            gray = np.clip(np.rint(values / 256.0), 0, 255).astype(np.uint8)
+    if gray.ndim == 3:
+        return np.ascontiguousarray(gray[..., :3])
+    return cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
 
 
 def draw_particle_circle(
@@ -836,7 +859,7 @@ def crop_particle(
     diameter_px = float(record["size"]) / (pixel_size if pixel_size > 0 else 1.0)
     y0, x0, y1, x1 = crop_window(x_local, y_local, diameter_px, height, width)
     patch = np.asarray(image[y0:y1, x0:x1])
-    rgb = _to_display_rgb(patch)
+    rgb = grayscale_as_rgb(patch)
     draw_particle_circle(
         rgb,
         x_local,

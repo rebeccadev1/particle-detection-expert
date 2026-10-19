@@ -1204,6 +1204,15 @@ def test_extra_grid_placement_maps_last_run_csv_onto_tile() -> None:
     assert 0.0 <= y_local < 2076.0
 
 
+def test_preview_click_crop_keeps_file_gray_levels() -> None:
+    image = np.full((200, 200), 80, dtype=np.uint8)
+    image[98:103, 98:103] = 100
+    rgb = preview_click_crop(image, 100.0, 100.0, 10.0, 1.0, color=(0, 0, 0))
+    assert int(rgb[10, 10, 0]) == 80
+    assert int(rgb[10, 10, 1]) == 80
+    assert int(rgb[10, 10, 2]) == 80
+
+
 def test_preview_click_crop_zoom_magnifies_the_speck() -> None:
     image = np.zeros((400, 400), dtype=np.float32)
     image[198:203, 198:203] = 1.0

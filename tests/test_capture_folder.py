@@ -83,10 +83,10 @@ def test_manifest_lives_in_the_run_folder(tmp_path) -> None:
     assert data["shutter_ms"] == 100.0
 
 
-def test_captures_sit_beside_inputs(tmp_path) -> None:
-    assert CAPTURES_DIR.name == "captures"
-    assert (CAPTURES_DIR.parent / "Inputs").is_dir()
-    assert (CAPTURES_DIR.parent / "Outputs").is_dir()
+def test_captures_go_to_inputs_groundup() -> None:
+    assert CAPTURES_DIR.name == "Groundup"
+    assert CAPTURES_DIR.parent.name == "Inputs"
+    assert (CAPTURES_DIR.parent.parent / "Outputs").is_dir()
 
 
 def test_run_folders_count_only_that_day(tmp_path) -> None:

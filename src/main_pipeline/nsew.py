@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,11 @@ from src.main_pipeline.measurement.measurer import (
 )
 
 DIRECTIONS = ("N", "S", "E", "W")
+# Capture names one ring side by grid cell: ``(1,3)_N.png``.
+_POSITIONAL_DIRECTION = re.compile(
+    r"^\((?P<row>\d+),(?P<col>\d+)\)_(?P<direction>[NSEW])$",
+    re.IGNORECASE,
+)
 # Adjacent compass pairs only (not opposite N–S or E–W).
 ORTHOGONAL_PAIRS = (("N", "E"), ("N", "W"), ("S", "E"), ("S", "W"))
 IMAGE_EXTS = {".bmp", ".png", ".tif", ".tiff", ".jpg", ".jpeg"}
@@ -329,41 +335,144 @@ def uniform_image(folder: str | Path) -> Path | None:
     return chosen
 
 
+def _combi_2of4_uint8(paths: list[Path]) -> np.ndarray:
+    sorted_stack, sum_val, _flat = load_flattened_nsew(*paths)
+    isotropic, _sym = symmetry_signal_4way(sorted_stack, sum_val, 2)
+    return scale_combi_uint8(isotropic)
+
+
 def write_combi_2of4(folder: str | Path) -> Path:
     """Write the 2-of-4 combi into ``folder`` itself and return that path."""
     folder = Path(folder)
     nsew = find_nsew_images(folder)
     paths = [nsew[d] for d in DIRECTIONS]
-    sorted_stack, sum_val, _flat = load_flattened_nsew(*paths)
-    isotropic, _sym = symmetry_signal_4way(sorted_stack, sum_val, 2)
-    iso_u8 = scale_combi_uint8(isotropic)
     out = folder / f"combi_2of4{output_suffix(paths[0])}"
-    save_same_resolution(out, iso_u8, paths[0])
+    save_same_resolution(out, _combi_2of4_uint8(paths), paths[0])
     return out
+
+
+def positional_direction(path: str | Path) -> tuple[int, int, str] | None:
+    """``(row, col, direction)`` for a capture named ``(1,3)_N.png``."""
+    file_path = Path(path)
+    if file_path.suffix.lower() not in IMAGE_EXTS:
+        return None
+    match = _POSITIONAL_DIRECTION.fullmatch(file_path.stem)
+    if match is None:
+        return None
+    return (
+        int(match.group("row")),
+        int(match.group("col")),
+        match.group("direction").upper(),
+    )
+
+
+def positional_combi_path(
+    folder: str | Path,
+    row: int,
+    col: int,
+    by_direction: dict[str, Path],
+) -> Path:
+    """``(row,col).png`` written beside that cell's side images."""
+    reference = by_direction[DIRECTIONS[0]]
+    return Path(folder) / f"({int(row)},{int(col)}){output_suffix(reference)}"
+
+
+def combi_is_current(path: str | Path, sources: list[Path]) -> bool:
+    """True when ``path`` exists, opens, and is newer than every source image."""
+    file_path = Path(path)
+    if not file_path.is_file():
+        return False
+    try:
+        built = file_path.stat().st_mtime
+        if any(built < source.stat().st_mtime for source in sources):
+            return False
+        with Image.open(file_path) as image:
+            image.verify()
+    except (OSError, ValueError, SyntaxError):
+        return False
+    return True
+
+
+def write_positional_combi(
+    folder: str | Path,
+    row: int,
+    col: int,
+    by_direction: dict[str, Path],
+) -> Path:
+    """Write ``(row,col).png`` from that cell's four side images."""
+    folder = Path(folder)
+    paths = [by_direction[direction] for direction in DIRECTIONS]
+    out = positional_combi_path(folder, row, col, by_direction)
+    save_same_resolution(out, _combi_2of4_uint8(paths), paths[0])
+    return out
+
+
+def _positional_groups(paths: list[Path]) -> tuple[list[Path], dict[tuple[Path, int, int], dict[str, Path]]]:
+    """Split ``(row,col)_N`` shots out of the files detection would otherwise load."""
+    groups: dict[tuple[Path, int, int], dict[str, Path]] = {}
+    rest: list[Path] = []
+    for path in paths:
+        parsed = positional_direction(path)
+        if parsed is None:
+            rest.append(path)
+            continue
+        row, col, direction = parsed
+        slot = groups.setdefault((path.parent.resolve(), row, col), {})
+        if direction in slot:
+            raise FileExistsError(
+                f"Multiple {direction} images for ({row},{col}) in {path.parent}: "
+                f"{slot[direction].name} and {path.name}"
+            )
+        slot[direction] = path
+    return rest, groups
 
 
 def prepare_detection_paths(
     paths: list[Path],
     progress_cb: Callable[[int, int, str], None] | None = None,
 ) -> list[Path]:
-    """Detect the four directional shots and a 2-of-4 combi of those shots.
+    """Combine directional shots, then return the images detection should load.
 
     A folder with N, S, E, and W (or Groundup quads) gets ``combi_2of4`` written
     beside those files. Detection runs on the combi as well as the original
     shots, including the uniform ``all`` image when the folder has one.
-    Folders without a full set are unchanged.
+
+    A map of ``(row,col)_N`` shots is different: each cell's four sides are
+    combined into ``(row,col).png`` first, and those side files are not loaded.
+    A cell missing a side is left out. Folders without a full set of plain
+    N/S/E/W names are otherwise unchanged.
     """
-    folders = {path.parent.resolve() for path in paths}
+    rest, groups = _positional_groups(paths)
     extras: list[Path] = []
+    pending = [
+        (folder, row, col, found)
+        for (folder, row, col), found in groups.items()
+        if all(direction in found for direction in DIRECTIONS)
+    ]
+    n_cells = len(pending)
+    for index, (folder, row, col, found) in enumerate(pending, start=1):
+        # The count has to change on every cell. A repeat of 0/N leaves the bar stuck.
+        if progress_cb is not None:
+            progress_cb(index, n_cells, f"Combining ({row},{col})")
+        sources = [found[direction] for direction in DIRECTIONS]
+        out = positional_combi_path(folder, row, col, found)
+        if combi_is_current(out, sources):
+            extras.append(out)
+            continue
+        extras.append(write_positional_combi(folder, row, col, found))
+
+    folders = {path.parent.resolve() for path in rest}
     for folder in folders:
         if len(list_direction_images(folder)) < 4:
             continue
         if progress_cb is not None:
-            progress_cb(0, len(paths), f"Combining {folder.name}")
+            progress_cb(0, 1, f"Combining {folder.name}")
         extras.append(write_combi_2of4(folder))
+        if progress_cb is not None:
+            progress_cb(1, 1, f"Combining {folder.name}")
     kept: list[Path] = []
     seen: set[Path] = set()
-    for path in list(paths) + extras:
+    for path in list(rest) + extras:
         resolved = path.resolve()
         if resolved in seen:
             continue

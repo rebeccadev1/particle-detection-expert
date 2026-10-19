@@ -31,6 +31,7 @@ from src.verification.crops import (
     draw_particle_circle,
     find_tile_path,
     global_nm_to_local_px,
+    grayscale_as_rgb,
     placement_for_tile,
 )
 from src.verification.queue import (
@@ -52,7 +53,6 @@ from src.main_pipeline.measurement.measurer import (
     lighting_tile_id,
     submap_id,
 )
-from src.main_pipeline.report.report_generator import _to_display_rgb
 from src.main_pipeline.stitching.stitcher import TilePlacement
 
 LABEL_CIRCLE_COLORS: dict[str, tuple[int, int, int]] = {
@@ -1129,7 +1129,7 @@ def overlay_view(
     crop: tuple[int, int, int, int] | None = None,
     max_side: int | None = OVERVIEW_MAX_SIDE,
 ) -> OverlayView:
-    """Contrast-stretch ``image``, optional crop, downsample, draw circles."""
+    """Show ``image`` as stored grayscale, optional crop, downsample, draw circles."""
     gray = np.asarray(image)
     if crop is not None:
         y0, x0, y1, x1 = crop
@@ -1137,7 +1137,7 @@ def overlay_view(
         crop_x0, crop_y0 = int(x0), int(y0)
     else:
         crop_x0, crop_y0 = 0, 0
-    rgb = _to_display_rgb(gray)
+    rgb = grayscale_as_rgb(gray)
     if rgb.size == 0:
         return OverlayView(rgb=rgb, crop_x0=crop_x0, crop_y0=crop_y0, scale=1.0)
     height, width = int(rgb.shape[0]), int(rgb.shape[1])
@@ -1736,7 +1736,7 @@ def preview_click_crop(
             pad_right,
             cv2.BORDER_REFLECT_101,
         )
-    rgb = _to_display_rgb(patch)
+    rgb = grayscale_as_rgb(patch)
     draw_particle_circle(
         rgb,
         x_local,

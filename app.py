@@ -35,7 +35,7 @@ from src.verification.ui import (  # noqa: E402
 from src.verification.queue import load_last_pipeline, load_particles_csv, write_last_pipeline  # noqa: E402
 from src.main_pipeline.ml.infer import next_versioned_model_path  # noqa: E402
 from src.training.train import default_label_path, main as train_main  # noqa: E402
-from src.main_pipeline.runner import run_pipeline  # noqa: E402
+from src.main_pipeline.job import claim_pipeline_result, pipeline_status, start_pipeline, stop_pipeline  # noqa: E402
 from src.redirector.redirector import render_redirector_tab  # noqa: E402
 from src.main_pipeline.report.report_generator import (  # noqa: E402
     encode_overlay_jpeg,
@@ -758,25 +758,24 @@ div[data-testid="stHorizontalBlock"]:has(#settings-uniform) [data-testid="stColu
     return config
 
 
-def _run_detection(config: dict, progress, status) -> None:
-    if not config["input_dir"]:
-        st.error("Set a tile folder under Loading.")
+def _apply_finished_pipeline() -> None:
+    result = claim_pipeline_result()
+    if result is None:
+        return
+    if result["stopped"]:
+        st.warning("Pipeline stopped. Results from this run were not saved.")
+        return
+    if result["trace"]:
+        st.error(result["error"] or "Pipeline failed.")
+        st.code(result["trace"])
+        return
+    if result["error"]:
+        st.error(result["error"])
         return
 
-    def _on_progress(current: int, total: int, name: str) -> None:
-        fraction = current / max(total, 1)
-        progress.progress(min(max(fraction, 0.0), 1.0), text=f"{current}/{total} {name}")
-
-    try:
-        with st.spinner("Running detection (first tile can take a minute)…"):
-            table, mosaic = run_pipeline(config, progress_cb=_on_progress)
-    except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
-        st.error(str(exc))
-        return
-    except Exception as exc:
-        st.exception(exc)
-        return
-
+    table = result["table"]
+    mosaic = result["mosaic"]
+    config = result["config"]
     st.session_state["table"] = table
     st.session_state["mosaic"] = mosaic
     st.session_state["config"] = config
@@ -790,8 +789,58 @@ def _run_detection(config: dict, progress, status) -> None:
     write_last_pipeline(config, csv_path)
     st.session_state["last_pipeline_csv"] = str(csv_path)
     st.session_state["ui_show_last_run"] = True
-    progress.progress(1.0, text=f"Detection done · {len(table)} particles")
-    status.success(f"Wrote {csv_path} and {xlsx_path} ({len(table)} particles).")
+    st.success(f"Wrote {csv_path} and {xlsx_path} ({len(table)} particles).")
+
+
+def _pipeline_buttons(config: dict, *, running: bool) -> None:
+    run_col, stop_col = st.columns(2)
+    if run_col.button(
+        "Run pipeline",
+        type="primary",
+        disabled=running,
+        key="ui_run_pipeline",
+        width="stretch",
+    ):
+        try:
+            start_pipeline(config)
+        except (ValueError, RuntimeError) as exc:
+            st.error(str(exc))
+        else:
+            st.rerun(scope="app")
+    if stop_col.button(
+        "Stop pipeline",
+        disabled=not running,
+        key="ui_stop_pipeline",
+        width="stretch",
+    ):
+        stop_pipeline()
+        st.rerun(scope="fragment")
+
+
+@st.fragment(run_every=0.5)
+def _pipeline_running(config: dict) -> None:
+    status = pipeline_status()
+    if not status["running"]:
+        st.session_state["_pipeline_was_running"] = False
+        st.rerun(scope="app")
+        return
+    st.session_state["_pipeline_was_running"] = True
+    total = max(status["total"], 1)
+    fraction = min(status["current"], total) / total if status["total"] else 0.0
+    label = status["name"] or "Starting…"
+    if status["total"]:
+        label = f"{status['current']}/{status['total']} {label}"
+    if status["stopping"]:
+        label = f"Stopping after the current tile. {label}"
+    st.progress(fraction, text=label)
+    _pipeline_buttons(config, running=True)
+
+
+def _pipeline_controls(config: dict) -> None:
+    if pipeline_status()["running"] or st.session_state.get("_pipeline_was_running"):
+        _pipeline_running(config)
+        return
+    _pipeline_buttons(config, running=False)
 
 
 def _render_training(config: dict) -> None:
@@ -1133,11 +1182,8 @@ def _render_detection(config: dict) -> None:
         "A folder with N, S, E, and W is combined first. "
         "Detection runs on those shots and on the combi, plus the uniform all shot when the folder has one."
     )
-    run = st.button("Run pipeline", type="primary")
-    if run:
-        progress = st.progress(0.0, text="Idle")
-        status = st.empty()
-        _run_detection(config, progress, status)
+    _apply_finished_pipeline()
+    _pipeline_controls(config)
 
 
 config = _sidebar(_base_config())

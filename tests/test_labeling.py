@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import tifffile
 
 from src.verification.crops import (
     CIRCLE_COLOR,
@@ -118,6 +119,24 @@ def test_crop_window_stays_local_when_point_is_outside_the_tile() -> None:
     assert y1 - y0 == 192
     assert x0 == 0
     assert y0 <= 229 < y1
+
+
+def test_crop_keeps_file_gray_levels(tmp_path: Path) -> None:
+    image = np.full((80, 90), 80, dtype=np.uint8)
+    image[2:8, 3:8] = 110
+    path = tmp_path / "R3_1_1_5X.tif"
+    tifffile.imwrite(path, image)
+    row = {
+        "id": 1,
+        "source_tile": path.name,
+        "x_global": 40.0,
+        "y_global": 40.0,
+        "size": 10.0,
+        "confidence": 1.0,
+    }
+    crop = crop_particle(row, _config(tmp_path))
+    assert int(crop.rgb[0, 0, 0]) == 80
+    assert int(crop.rgb[0, 0, 1]) == 80
 
 
 def test_crop_contains_blob_and_clamps_at_edge(tmp_path: Path) -> None:

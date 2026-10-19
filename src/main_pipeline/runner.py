@@ -52,6 +52,11 @@ from src.main_pipeline.stitching.stitcher import (
 
 
 ProgressCallback = Callable[[int, int, str], None]
+StopCheck = Callable[[], bool]
+
+
+class PipelineStopped(Exception):
+    """Raised when a run is asked to stop before the next tile."""
 
 _WORKER_STATE: dict[str, Any] = {
     "fft_mask": None,
@@ -310,11 +315,17 @@ def _combine_particle_tables(
     return table
 
 
+def _raise_if_stopped(should_stop: StopCheck | None) -> None:
+    if should_stop is not None and should_stop():
+        raise PipelineStopped("Pipeline stopped.")
+
+
 def run_pipeline(
     config: dict[str, Any],
     progress_cb: ProgressCallback | None = None,
     *,
     write_outputs: bool = True,
+    should_stop: StopCheck | None = None,
 ) -> tuple[pd.DataFrame, LazyMosaic]:
     """Run detection on each tile without retaining full-resolution images.
 
@@ -325,6 +336,9 @@ def run_pipeline(
     When ``write_outputs`` is true and ``output_dir`` is set, writes
     ``particles.csv`` and ``particles.xlsx``. The workbook's second sheet is
     the preprocessing and detection settings used for this run.
+
+    ``should_stop`` is checked between tiles. When it returns true the run
+    raises ``PipelineStopped`` and does not write outputs.
     """
     config = with_recall_profile(config)
     folder = cfg_get(config, "input_dir", "")
@@ -339,7 +353,16 @@ def run_pipeline(
     paths = matching_tile_paths(
         folder, pattern, run_filter, mag_filter, include_unmatched=True
     )
-    paths = prepare_detection_paths(paths, progress_cb)
+
+    def _prepare_progress(current: int, total_cells: int, name: str) -> None:
+        _raise_if_stopped(should_stop)
+        if progress_cb is not None:
+            progress_cb(current, total_cells, name)
+
+    _raise_if_stopped(should_stop)
+    paths = prepare_detection_paths(
+        paths, _prepare_progress if progress_cb is not None or should_stop is not None else None
+    )
     total = len(paths)
     if total == 0:
         raise FileNotFoundError(
@@ -353,6 +376,7 @@ def run_pipeline(
 
     if progress_cb is not None:
         progress_cb(0, total, f"found {total} tiles…")
+    _raise_if_stopped(should_stop)
 
     workers = _worker_count(config, total)
     row_origin, col_origin = _grid_index_origin(paths, pattern)
@@ -378,6 +402,7 @@ def run_pipeline(
 
     if workers == 1:
         for index, path in enumerate(paths, start=1):
+            _raise_if_stopped(should_stop)
             result = _process_tile(
                 str(path), pattern, overlap, pixel_size, config, row_origin, col_origin
             )
@@ -389,21 +414,24 @@ def run_pipeline(
     else:
         cv2.setNumThreads(1)
         completed = 0
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                pool.submit(
-                    _process_tile,
-                    str(path),
-                    pattern,
-                    overlap,
-                    pixel_size,
-                    config,
-                    row_origin,
-                    col_origin,
-                ): path
-                for path in paths
-            }
+        pool = ThreadPoolExecutor(max_workers=workers)
+        futures = {
+            pool.submit(
+                _process_tile,
+                str(path),
+                pattern,
+                overlap,
+                pixel_size,
+                config,
+                row_origin,
+                col_origin,
+            ): path
+            for path in paths
+        }
+        try:
+            _raise_if_stopped(should_stop)
             for future in as_completed(futures):
+                _raise_if_stopped(should_stop)
                 result = future.result()
                 _collect_tile_result(
                     result, placed_particles, unplaced_particles, placements, thumbnails
@@ -411,7 +439,14 @@ def run_pipeline(
                 completed += 1
                 if progress_cb is not None:
                     progress_cb(completed, total, result.name)
+        except PipelineStopped:
+            for future in futures:
+                future.cancel()
+            raise
+        finally:
+            pool.shutdown(wait=True, cancel_futures=False)
 
+    _raise_if_stopped(should_stop)
     n_gathered = len(placed_particles) + sum(len(v) for v in unplaced_particles.values())
     if progress_cb is not None:
         progress_cb(total, total, f"merging {n_gathered} detections…")

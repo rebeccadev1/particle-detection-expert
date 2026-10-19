@@ -1,12 +1,10 @@
 input_dir: "Recall audit less dirty"
 output_dir: "../Outputs/Recall audit less dirty fn"
-# R{run}_{row}_{col}_{mag}X.tif  e.g. R3_5_32_5X.tif or .bmp
-filename_pattern: 'R(?P<run>\d+)_(?P<row>\d+)_(?P<col>\d+)_(?P<mag>[\d.]+)X\.(?:tiff?|bmp|png|jpe?g)'
+filename_pattern: '\((?P<row>\d+),(?P<col>\d+)\)\.(?:tiff?|bmp|png|jpe?g)'
 run: ""
 magnification: ""
-overlap_fraction: 0.0
-# 1 pixel = 0.96 µm on the 5X tiles.
-pixel_size_nm: 960.0
+overlap_fraction: 0.1
+pixel_size_nm: 3350.0
 
 pipeline:
   workers: 0
@@ -27,12 +25,6 @@ detection:
   # per_tile: notch each tile from its own spectrum. shared: reuse paths[0].
   fft_mask: per_tile
   tophat_radius: 50
-  # 0.96 µm/px: 10 µm ≈ 10.4 px (DoG sigma ≈ 3.7). Sigma 36 ≈ 100 µm.
-  # Product size floor is 20 µm on the photo equivalent diameter only.
-  # DoG sigma is the search scale and does not reject a peak.
-  # Keep blob_min_sigma at 3.7: raising it to 7.4
-  # on R4 flooded layout FPs and dropped recall below 95%.
-  # Top-hat radius must exceed the largest particle or flakes are erased.
   blob_method: dog
   min_size_nm: 20000.0
   max_size_nm: 100000.0
