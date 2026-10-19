@@ -51,6 +51,7 @@ class FocusResult:
     best_offset_mm: float
     best_sharpness: float
     stopped: bool
+    start_sharpness: float
 
 
 def sharpness(image: np.ndarray) -> float:
@@ -158,6 +159,7 @@ def focus_search(
             )
 
     score = float(measure())
+    start_score = score
     best_offset = 0.0
     best_score = score
     report(score, best_offset, best_score, phase="start", decision="start")
@@ -236,6 +238,7 @@ def focus_search(
         best_offset_mm=best_offset,
         best_sharpness=best_score,
         stopped=stopped,
+        start_sharpness=start_score,
     )
 
 

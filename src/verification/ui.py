@@ -1331,7 +1331,15 @@ def render_tile_inspect_tab(
                 st.warning("That yellow area is under 20 µm, so it is not kept.")
             else:
                 record = missed_particle_record(tile_name, x_global, y_global, saved_nm)
-                store.apply_label(record, "particle", preview)
+                saved = preview_click_crop(
+                    image,
+                    float(pending["x_local"]),
+                    float(pending["y_local"]),
+                    shown_nm,
+                    pixel_size,
+                    zoom=8.0,
+                )
+                store.apply_label(record, "particle", saved)
                 st.session_state.pop("inspect_pending", None)
                 st.session_state.pop("inspect_click_sig", None)
                 st.rerun()

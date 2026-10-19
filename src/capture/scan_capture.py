@@ -2,7 +2,8 @@
 
 Uniform saves one all-sides frame per stop. NSEW keeps the stage still until
 N, E, S, and W have each been saved. After every seventh stage step the scan
-refocuses on Z, and starts another search whenever sharpness is still below 900.
+refocuses on Z, and starts another search whenever sharpness is not above
+80% of the score that autofocus started with.
 Start scan still only moves the printer.
 """
 
@@ -38,7 +39,7 @@ from src.capture.focus import (
 from src.capture.stage import move_axis, move_z, printer_status, scan_stops
 
 FOCUS_EVERY_STEPS = 7
-MIN_SCAN_SHARPNESS = 900.0
+FOCUS_MIN_RATIO = 0.8
 
 _JOB_LOCK = threading.Lock()
 _JOB: dict = {
@@ -72,12 +73,13 @@ def refocus_due(steps_taken: int, every: int = FOCUS_EVERY_STEPS) -> bool:
 def needs_another_focus(
     score: float,
     stopped: bool = False,
-    minimum: float = MIN_SCAN_SHARPNESS,
+    starting: float = 0.0,
+    ratio: float = FOCUS_MIN_RATIO,
 ) -> bool:
-    """Run autofocus again when the search finished softer than 900."""
+    """Run autofocus again when the search is not above 80% of its start."""
     if stopped:
         return False
-    return float(score) < float(minimum)
+    return float(score) <= float(ratio) * float(starting)
 
 
 def scan_capture_status() -> dict:
@@ -313,7 +315,7 @@ def _focus_here(
     fine_mm: float,
     feed: float,
 ) -> None:
-    """Hill-climb Z, and start again from that height while sharpness is below 900."""
+    """Hill-climb Z, and start again while sharpness is not above 80% of the opening score."""
 
     def measure() -> float:
         return _score_triggered_frame(camera, converter, timeout_ms, DEFAULT_SETTLE_S)
@@ -336,6 +338,7 @@ def _focus_here(
             _JOB["best_sharpness"] = float(best_score)
 
     attempt = 0
+    opening = None
     while True:
         if stop.is_set():
             return
@@ -359,8 +362,10 @@ def _focus_here(
         finally:
             with _JOB_LOCK:
                 _JOB["focusing"] = False
+        if opening is None:
+            opening = float(result.start_sharpness)
         with _JOB_LOCK:
             _JOB["sharpness"] = float(result.sharpness)
             _JOB["best_sharpness"] = float(result.best_sharpness)
-        if not needs_another_focus(result.best_sharpness, result.stopped):
+        if not needs_another_focus(result.best_sharpness, result.stopped, opening):
             return

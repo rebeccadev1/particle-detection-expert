@@ -27,7 +27,7 @@ from src.capture.stage import (
     stop_scan,
 )
 
-_CAPTURE_PATH = Path(__file__).resolve().parent / "camera_automation_v2.py"
+_CAPTURE_PATH = Path(__file__).resolve().parent / "camera_automation_v3.py"
 
 def _load_arduino_link() -> dict:
     """Keep the open Arduino across a script reload so the port is not opened twice."""
@@ -83,7 +83,7 @@ def keep_stage_inputs() -> None:
 
 
 def _capture():
-    name = "camera_automation_v2"
+    name = "camera_automation_v3"
     spec = importlib.util.spec_from_file_location(name, _CAPTURE_PATH)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {_CAPTURE_PATH}")
@@ -710,7 +710,7 @@ def _stage_progress() -> None:
         "Scan and capture uses the lighting mode above and leaves the ring as it is "
         "unless the Arduino is connected. NSEW takes N, E, S, and W before the stage moves again. "
         "After every 7 stage steps it refocuses with the Focus settings. "
-        "If sharpness is still below 900, it autofocuses again."
+        "If sharpness is not above 80% of the score autofocus started with, it autofocuses again."
     )
     move_col, both_col = st.columns(2)
     if move_col.button("Start scan", type="primary", disabled=not info["online"] or focusing):

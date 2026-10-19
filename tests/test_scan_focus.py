@@ -2,7 +2,7 @@
 
 from src.capture.scan_capture import (
     FOCUS_EVERY_STEPS,
-    MIN_SCAN_SHARPNESS,
+    FOCUS_MIN_RATIO,
     needs_another_focus,
     refocus_due,
 )
@@ -28,9 +28,10 @@ def test_serpentine_refocuses_after_seven_moves() -> None:
 
 
 def test_soft_focus_runs_again() -> None:
-    assert MIN_SCAN_SHARPNESS == 900
-    assert needs_another_focus(899.9)
-    assert needs_another_focus(0)
-    assert not needs_another_focus(900)
-    assert not needs_another_focus(1200.4)
-    assert not needs_another_focus(100, stopped=True)
+    assert FOCUS_MIN_RATIO == 0.8
+    assert needs_another_focus(800, starting=1000)
+    assert needs_another_focus(0, starting=1000)
+    assert not needs_another_focus(800.1, starting=1000)
+    assert not needs_another_focus(1200.4, starting=1000)
+    assert not needs_another_focus(400, starting=400)
+    assert not needs_another_focus(100, stopped=True, starting=1000)
