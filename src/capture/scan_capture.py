@@ -29,7 +29,7 @@ from src.capture.focus import (
     focus_search,
     sharpness,
 )
-from src.capture.stage import move_axis, move_z, printer_status, return_to_start_moves, scan_stops
+from src.capture.stage import move_axis, move_z, printer_status, return_from_stop_moves, scan_stops
 
 FOCUS_EVERY_STEPS = 7
 FOCUS_MIN_RATIO = 0.8
@@ -176,7 +176,7 @@ def scan_capture_status() -> dict:
 
 
 def stop_scan_capture() -> None:
-    """Finish the stop in progress, then do not move to the next one."""
+    """Finish the stop in progress, then go back to (1, 1)."""
     with _JOB_LOCK:
         stop = _JOB.get("stop")
         if stop is not None:
@@ -225,7 +225,6 @@ def start_scan_capture(
     focus_during_scan = bool(focus_during_scan)
     if focus_during_scan:
         _check_focus_settings(focus_max_travel_mm, focus_coarse_mm, focus_fine_mm, focus_feed)
-    back = return_to_start_moves(columns, rows, step_mm)
     with _JOB_LOCK:
         thread = _JOB.get("thread")
         if thread is not None and thread.is_alive():
@@ -255,6 +254,7 @@ def start_scan_capture(
             "mode": mode,
             "total_exposure_ms": float(total_exposure_ms),
             "feed": float(feed),
+            "step_mm": step_mm,
             "stops": stops,
             "captures_dir": Path(captures_dir),
             "stop": stop,
@@ -263,7 +263,6 @@ def start_scan_capture(
             "focus_fine_mm": focus_fine_mm,
             "focus_feed": focus_feed,
             "focus_during_scan": focus_during_scan,
-            "return_moves": back,
             "stage": None if stage is None else dict(stage),
         },
         name="scan-capture",
@@ -274,12 +273,38 @@ def start_scan_capture(
     worker.start()
 
 
+def _return_to_first_stop(
+    row: int,
+    col: int,
+    step_mm: float,
+    feed: float,
+    stop: threading.Event,
+) -> None:
+    """Move from the stop just visited back to (1, 1).
+
+    The click that ended the scan is cleared first, so that stop still goes
+    home. A second click during this trip aborts it.
+    """
+    moves = return_from_stop_moves(row, col, step_mm)
+    if not moves:
+        return
+    stop.clear()
+    with _JOB_LOCK:
+        _JOB["stopping"] = False
+        _JOB["returning"] = True
+    for axis, delta in moves:
+        if stop.is_set():
+            break
+        move_axis(axis, delta, feed)
+
+
 def _scan_thread(
     *,
     ser,
     mode: str,
     total_exposure_ms: float,
     feed: float,
+    step_mm: float,
     stops: list[tuple[int, int, str | None, float]],
     captures_dir: Path,
     stop: threading.Event,
@@ -288,7 +313,6 @@ def _scan_thread(
     focus_fine_mm: float,
     focus_feed: float,
     focus_during_scan: bool,
-    return_moves: list[tuple[str, float]],
     stage: dict | None,
 ) -> None:
     from src.capture.camera_automation import shutdown
@@ -297,6 +321,7 @@ def _scan_thread(
     camera = None
     saved = 0
     steps_taken = 0
+    reached: tuple[int, int] | None = None
     sharpness_stops: list[dict] = []
     try:
         sides_on = RING_SIDES if mode == "Uniform" else 1
@@ -334,6 +359,7 @@ def _scan_thread(
                         feed=focus_feed,
                         after_step=steps_taken,
                     )
+            reached = (row, col)
             if mode == "Uniform":
                 files = [capture_uniform(camera, converter, ser, run_dir, timeout_ms, row, col)]
             else:
@@ -360,13 +386,8 @@ def _scan_thread(
             saved += 1
             with _JOB_LOCK:
                 _JOB["saved"] = saved
-        if return_moves and not stop.is_set():
-            with _JOB_LOCK:
-                _JOB["returning"] = True
-            for axis, delta in return_moves:
-                if stop.is_set():
-                    break
-                move_axis(axis, delta, feed)
+        if reached is not None:
+            _return_to_first_stop(reached[0], reached[1], step_mm, feed, stop)
     except Exception as exc:
         with _JOB_LOCK:
             _JOB["error"] = str(exc)

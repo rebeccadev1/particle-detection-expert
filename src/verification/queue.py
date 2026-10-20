@@ -308,30 +308,16 @@ def write_last_pipeline(
     csv_path: str | Path,
     pointer_dir: str | Path | None = None,
 ) -> Path:
-    """Save this run's settings in its output folder and point Outputs at that CSV."""
+    """Save this run's settings as ``last_pipeline.json`` inside the run folder."""
     from src.overall.io.results_writer import write_run_settings
 
+    del pointer_dir
     destination = Path(csv_path).resolve()
     output_dir = cfg_get(dict(config), "output_dir", None) or destination.parent
     run_folder = resolve_output_dir(output_dir)
-    run_file = write_run_settings(
+    return write_run_settings(
         config, run_folder / LAST_PIPELINE_POINTER, csv_path=destination
     )
-    folder = Path(pointer_dir) if pointer_dir is not None else DEFAULT_OUTPUT_DIR
-    pointer = folder / LAST_PIPELINE_POINTER
-    if pointer.resolve() == run_file.resolve():
-        return run_file
-    payload = {
-        "csv": str(destination),
-        "input_dir": str(cfg_get(dict(config), "input_dir", "") or ""),
-        "output_dir": str(cfg_get(dict(config), "output_dir", "") or ""),
-        "pixel_size_nm": cfg_get(dict(config), "pixel_size_nm", 960.0),
-        "overlap_fraction": cfg_get(dict(config), "overlap_fraction", 0.0),
-        "filename_pattern": cfg_get(dict(config), "filename_pattern", None),
-    }
-    pointer.parent.mkdir(parents=True, exist_ok=True)
-    pointer.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    return run_file
 
 
 def use_last_pipeline_queue(
@@ -408,19 +394,46 @@ def restore_label_queue(pointer_dir: str | Path | None = None) -> None:
     _label_queue_cleared_path(pointer_dir).unlink(missing_ok=True)
 
 
+def _newest_run_settings(folder: Path) -> Path | None:
+    """``last_pipeline.json`` in the run folder that was written most recently."""
+    if not folder.is_dir():
+        return None
+    newest: Path | None = None
+    newest_mtime = -1
+    try:
+        children = list(folder.iterdir())
+    except OSError:
+        return None
+    for child in children:
+        if not child.is_dir():
+            continue
+        candidate = child / LAST_PIPELINE_POINTER
+        try:
+            if not candidate.is_file():
+                continue
+            mtime = candidate.stat().st_mtime_ns
+        except OSError:
+            continue
+        if mtime >= newest_mtime:
+            newest = candidate
+            newest_mtime = mtime
+    return newest
+
+
 def load_last_pipeline(
     config: Mapping[str, Any] | None = None,
     pointer_dir: str | Path | None = None,
 ) -> tuple[Path | None, dict[str, Any]]:
     """CSV and run settings for the latest pipeline write.
 
-    Prefers ``last_pipeline.json``, then the current ``output_dir``
-    ``particles.csv``. Does not use the labeling recall table.
+    Reads ``last_pipeline.json`` inside the newest run folder, then the
+    current ``output_dir`` ``particles.csv``. Does not use the labeling
+    recall table.
     """
     run_config: dict[str, Any] = dict(config or {})
     folder = Path(pointer_dir) if pointer_dir is not None else DEFAULT_OUTPUT_DIR
-    pointer = folder / LAST_PIPELINE_POINTER
-    if pointer.is_file():
+    pointer = _newest_run_settings(folder)
+    if pointer is not None and pointer.is_file():
         try:
             payload = json.loads(pointer.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, TypeError):

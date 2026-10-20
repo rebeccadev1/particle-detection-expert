@@ -259,6 +259,27 @@ def move_z(delta_mm: float, feed: float) -> None:
     move_axis("Z", delta_mm, feed)
 
 
+def return_from_stop_moves(row: int, col: int, step_mm: float) -> list[tuple[str, float]]:
+    """Relative X and Y from this serpentine stop back to (1, 1).
+
+    Column 1 is the X where the scan started, on every row. Row 1 is the Y
+    where it started. Z is left where focus put it.
+    """
+    row = int(row)
+    col = int(col)
+    step_mm = float(step_mm)
+    if row < 1 or col < 1:
+        raise ValueError("row and column start at 1")
+    if step_mm <= 0:
+        raise ValueError("step must be greater than 0")
+    moves: list[tuple[str, float]] = []
+    if col > 1:
+        moves.append(("X", -(col - 1) * step_mm))
+    if row > 1:
+        moves.append(("Y", (row - 1) * step_mm))
+    return moves
+
+
 def return_to_start_moves(columns: int, rows: int, step_mm: float) -> list[tuple[str, float]]:
     """Relative X and Y that land back on stop (1, 1) after a full serpentine.
 
@@ -273,12 +294,8 @@ def return_to_start_moves(columns: int, rows: int, step_mm: float) -> list[tuple
         raise ValueError("the scan needs at least one column and one row")
     if step_mm <= 0:
         raise ValueError("step must be greater than 0")
-    moves: list[tuple[str, float]] = []
-    if rows % 2 == 1 and columns > 1:
-        moves.append(("X", -(columns - 1) * step_mm))
-    if rows > 1:
-        moves.append(("Y", (rows - 1) * step_mm))
-    return moves
+    end_col = columns if rows % 2 == 1 else 1
+    return return_from_stop_moves(rows, end_col, step_mm)
 
 
 def build_home_gcode() -> str:

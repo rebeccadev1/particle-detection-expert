@@ -15,6 +15,7 @@ from src.capture.stage import (
     move_z,
     next_scan_row,
     pause_plan,
+    return_from_stop_moves,
     return_to_start_moves,
     scan_stops,
     scan_summary,
@@ -145,6 +146,24 @@ def test_xy_jog_is_one_relative_millimetre() -> None:
         "M400",
         "G90",
     ]
+
+
+def test_stopped_scan_returns_from_the_current_stop() -> None:
+    step = 1.5
+    stops = scan_stops(3, 3, step)
+    x = 0.0
+    y = 0.0
+    for row, col, axis, delta in stops:
+        if axis == "X":
+            x += delta
+        elif axis == "Y":
+            y += delta
+        back = return_from_stop_moves(row, col, step)
+        back_x = sum(distance for moved, distance in back if moved == "X")
+        back_y = sum(distance for moved, distance in back if moved == "Y")
+        assert back_x == pytest.approx(-x)
+        assert back_y == pytest.approx(-y)
+    assert return_from_stop_moves(1, 1, step) == []
 
 
 def test_full_scan_returns_to_the_first_stop() -> None:

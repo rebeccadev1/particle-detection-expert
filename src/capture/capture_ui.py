@@ -926,7 +926,8 @@ def _stage_progress() -> None:
             else:
                 st.progress(1.0, text="Returning to stop (1, 1).")
         elif capture["stopping"]:
-            st.caption(f"Stopping after this stop. Last picture is {label}.")
+            where = f" after {label}" if capture["row"] else ""
+            st.caption(f"Stopping{where}, then returning to (1, 1).")
         elif capture["focusing"]:
             st.progress(
                 min(capture["index"], total) / total,

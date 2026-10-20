@@ -922,6 +922,7 @@ def test_load_last_pipeline_uses_pointer_not_recall_csv(tmp_path: Path) -> None:
     assert saved["input_dir"] == "My tiles"
     assert saved["pixel_size_nm"] == 960.0
     assert saved["csv"] == str(csv_path.resolve())
+    assert not (tmp_path / "last_pipeline.json").exists()
 
 
 def test_set_scoped_nsew_label_stays_on_one_field() -> None:
