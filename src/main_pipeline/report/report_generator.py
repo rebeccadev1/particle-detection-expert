@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +13,17 @@ import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
 from src.overall.config import cfg_get
-from src.main_pipeline.stitching.stitcher import LazyMosaic, downsample_for_target
+from src.overall.io.tile_loader import (
+    load_tile_image,
+    matching_tile_paths,
+    resolve_input_dir,
+    try_parse_tile_filename,
+)
+from src.main_pipeline.stitching.stitcher import (
+    LazyMosaic,
+    downsample_for_target,
+    downsample_image,
+)
 
 
 SIZE_COUNT_THRESHOLDS_UM = (10, 20, 25, 50, 75)
@@ -241,15 +251,18 @@ def write_last_run_pdf(
     path: str | Path,
     mosaic_rgb: np.ndarray | None = None,
     mosaic_plain: np.ndarray | None = None,
+    unstitched: Sequence[tuple[str, np.ndarray, np.ndarray]] | None = None,
 ) -> Path:
-    """Write the Last run summary, size histogram, and mosaic with hits.
+    """Write the run summary, size histogram, and mosaic or separate images.
 
     When ``mosaic_plain`` is set, the mosaic page shows the marked image and
-    the same mosaic without markers beneath it.
+    the same mosaic without markers beneath it. ``unstitched`` is
+    ``(filename, labeled rgb, plain rgb)`` for images whose names have no
+    grid pattern; each is placed on its own, not in the mosaic.
     """
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    pages = _last_run_pages(table, config, mosaic_rgb, mosaic_plain)
+    pages = _last_run_pages(table, config, mosaic_rgb, mosaic_plain, unstitched)
     pages[0].save(
         destination,
         "PDF",
@@ -265,10 +278,13 @@ def _last_run_pages(
     config: Mapping[str, Any],
     mosaic_rgb: np.ndarray | None,
     mosaic_plain: np.ndarray | None = None,
+    unstitched: Sequence[tuple[str, np.ndarray, np.ndarray]] | None = None,
 ) -> list[Image.Image]:
     pages = [_summary_page(table, config)]
     if mosaic_rgb is not None and np.asarray(mosaic_rgb).size > 0:
         pages.append(_mosaic_page(np.asarray(mosaic_rgb), mosaic_plain))
+    if unstitched:
+        pages.extend(_unstitched_pages(unstitched))
     return pages
 
 
@@ -318,10 +334,37 @@ def _font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
         return ImageFont.load_default()
 
 
-def _run_title(config: Mapping[str, Any]) -> str:
-    raw = str(config.get("input_dir") or config.get("output_dir") or "").strip()
-    name = Path(raw).name if raw else "unknown"
-    return f"Run on {name}"
+def pdf_header_lines(config: Mapping[str, Any]) -> list[str]:
+    """Title, the path label, the input path, then the folder name."""
+    lines = ["Particle Detection Output"]
+    path, folder = _input_path_and_folder(config)
+    if path:
+        lines.append("Path to analysed image(s):")
+        lines.append(path)
+    if folder:
+        lines.append(folder)
+    return lines
+
+
+def summary_pdf_name(config: Mapping[str, Any]) -> str:
+    """``Summary of {input folder}.pdf``."""
+    _path, folder = _input_path_and_folder(config)
+    label = folder.strip() or "run"
+    for char in '/\\:*?"<>|':
+        label = label.replace(char, " ")
+    label = " ".join(label.split()) or "run"
+    return f"Summary of {label}.pdf"
+
+
+def _input_path_and_folder(config: Mapping[str, Any]) -> tuple[str, str]:
+    raw = str(config.get("input_dir") or "").strip().strip('"').strip("'").rstrip("/\\")
+    if not raw:
+        return "", ""
+    try:
+        resolved = resolve_input_dir(raw)
+    except (FileNotFoundError, OSError):
+        return raw, Path(raw).name
+    return str(resolved), resolved.name
 
 
 def _text_width(font: ImageFont.ImageFont, text: str) -> int:
@@ -329,23 +372,51 @@ def _text_width(font: ImageFont.ImageFont, text: str) -> int:
     return int(box[2] - box[0])
 
 
+def _wrap_text(text: str, font: ImageFont.ImageFont, max_w: int) -> list[str]:
+    """Break ``text`` so each line fits ``max_w``, preferring ``/`` and spaces."""
+    if _text_width(font, text) <= max_w:
+        return [text]
+    lines: list[str] = []
+    rest = text
+    while rest:
+        if _text_width(font, rest) <= max_w:
+            lines.append(rest)
+            break
+        cut = 1
+        for index in range(1, len(rest) + 1):
+            if _text_width(font, rest[:index]) > max_w:
+                break
+            cut = index
+        split = cut
+        for index in range(cut, 0, -1):
+            if rest[index - 1] in "/ ":
+                split = index
+                break
+        lines.append(rest[:split])
+        rest = rest[split:]
+    return lines
+
+
 def _summary_page(table: pd.DataFrame, config: Mapping[str, Any]) -> Image.Image:
     image = Image.new("RGB", (_PAGE_W, _PAGE_H), "white")
     draw = ImageDraw.Draw(image)
     metric_label = _font(_LABEL)
     metric_value = _font(_FIGURE)
-    body = _font(_BODY)
     header = _font(_LABEL, bold=True)
 
     y = _MARGIN
-    heading = _run_title(config)
-    title_size = _H1
-    title = _font(title_size, bold=True)
-    while title_size > _H2 and _text_width(title, heading) > _PAGE_W - 2 * _MARGIN:
-        title_size -= 2
-        title = _font(title_size, bold=True)
-    draw.text((_MARGIN, y), heading, fill=_INK, font=title)
-    y += title_size + 20
+    title = _font(_H1, bold=True)
+    body = _font(_BODY)
+    header_lines = pdf_header_lines(config)
+    draw.text((_MARGIN, y), header_lines[0], fill=_INK, font=title)
+    y += _H1 + 14
+    max_text = _PAGE_W - 2 * _MARGIN
+    for line in header_lines[1:]:
+        for wrapped in _wrap_text(line, body, max_text):
+            draw.text((_MARGIN, y), wrapped, fill=_INK, font=body)
+            y += _BODY + 6
+    if len(header_lines) > 1:
+        y += 12
 
     stats = summary_stats(table)
     metrics = (
@@ -378,6 +449,22 @@ def _summary_page(table: pd.DataFrame, config: Mapping[str, Any]) -> Image.Image
     return image
 
 
+def _count_table_edges(
+    counts: pd.DataFrame,
+    body: ImageFont.ImageFont,
+    header: ImageFont.ImageFont,
+) -> tuple[int, int]:
+    """Left and right of the size table, wide enough for the text only."""
+    size_w = _text_width(header, "Size")
+    count_w = _text_width(header, "Particles")
+    for _, row in counts.iterrows():
+        size_w = max(size_w, _text_width(body, str(row["Size"])))
+        count_w = max(count_w, _text_width(body, str(int(row["Particles"]))))
+    left = _MARGIN
+    right = min(left + size_w + 36 + count_w, _PAGE_W - _MARGIN)
+    return left, right
+
+
 def _draw_count_table(
     draw: ImageDraw.ImageDraw,
     counts: pd.DataFrame,
@@ -385,8 +472,7 @@ def _draw_count_table(
     body: ImageFont.ImageFont,
     header: ImageFont.ImageFont,
 ) -> int:
-    left = _MARGIN
-    right = _PAGE_W - _MARGIN
+    left, right = _count_table_edges(counts, body, header)
     row_h = _BODY + 14
     draw.text((left, y), "Size", fill=_MUTED, font=header)
     particles = "Particles"
@@ -563,6 +649,179 @@ def _mosaic_page(
     y += caption_h
     _paste_fitted(image, _rgb_tile(plain), y, slot)
     return image
+
+
+def _filename_is_placeable(filename: str, pattern: str) -> bool:
+    """True when the name has row/column or x/y, so it can join the mosaic."""
+    meta = try_parse_tile_filename(filename, pattern)
+    if not meta:
+        return False
+    if "x" in meta and "y" in meta:
+        return True
+    return "row" in meta and "col" in meta
+
+
+def unstitched_tile_paths(config: Mapping[str, Any]) -> list[Path]:
+    """Images in the input folder whose names have no grid pattern.
+
+    These still run through detection. They are shown one by one instead of
+    being stitched.
+    """
+    folder = str(config.get("input_dir") or "").strip()
+    if not folder:
+        return []
+    pattern = str(config.get("filename_pattern") or "")
+    try:
+        paths = matching_tile_paths(
+            folder,
+            pattern,
+            config.get("run"),
+            config.get("magnification"),
+            include_unmatched=True,
+        )
+    except (FileNotFoundError, OSError):
+        return []
+    return [path for path in paths if not _filename_is_placeable(path.name, pattern)]
+
+
+def _particles_for_path(table: pd.DataFrame, path: Path) -> pd.DataFrame:
+    if table is None or table.empty or "source_tile" not in table.columns:
+        return table.iloc[0:0] if isinstance(table, pd.DataFrame) else pd.DataFrame()
+    sources = table["source_tile"].astype(str).str.replace("\\", "/", regex=False)
+    base = sources.map(lambda value: value.rsplit("/", 1)[-1])
+    parent = sources.map(
+        lambda value: value.rsplit("/", 1)[0].rsplit("/", 1)[-1] if "/" in value else ""
+    )
+    mask = (base == path.name) & (
+        (parent == "") | (parent == ".") | (parent == path.parent.name)
+    )
+    return table.loc[mask]
+
+
+def _tile_preview_factor(height: int, width: int, config: Mapping[str, Any]) -> int:
+    """Downsample one loose tile. An explicit factor wins; otherwise cap the preview."""
+    settings = dict(config)
+    configured = int(cfg_get(settings, "report.downsample", 0) or 0)
+    if configured > 0:
+        return configured
+    target_mb = float(cfg_get(settings, "report.target_mb", 8.0))
+    return downsample_for_target(
+        height, width, target_mb=min(target_mb, 8.0), channels=3
+    )
+
+
+def _draw_local_markers(
+    rgb: np.ndarray,
+    particles: pd.DataFrame,
+    config: Mapping[str, Any],
+    downsample: int,
+) -> np.ndarray:
+    """Orange circles for particles whose origin on this tile is the top-left."""
+    if (
+        particles.empty
+        or np.asarray(rgb).size == 0
+        or "x_global" not in particles.columns
+        or "y_global" not in particles.columns
+        or "size" not in particles.columns
+    ):
+        return rgb
+    pixel_size = float(config.get("pixel_size_nm") or 1.0)
+    if pixel_size <= 0:
+        pixel_size = 1.0
+    factor = max(int(downsample), 1)
+    marked = np.array(rgb, copy=True)
+    for _, row in particles.iterrows():
+        x_d = int(round((float(row["x_global"]) / pixel_size) / factor))
+        y_d = int(round((float(row["y_global"]) / pixel_size) / factor))
+        if not (0 <= x_d < marked.shape[1] and 0 <= y_d < marked.shape[0]):
+            continue
+        particle_r = float(row["size"]) / pixel_size / factor / 2.0
+        radius = max(int(round(particle_r)) + 10, 14)
+        cv2.circle(
+            marked, (x_d, y_d), radius, (255, 140, 40), thickness=3, lineType=cv2.LINE_AA
+        )
+    return marked
+
+
+def unstitched_tile_pair(
+    path: str | Path,
+    table: pd.DataFrame,
+    config: Mapping[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Downsampled RGB of one loose image, with labels and without them."""
+    tile_path = Path(path)
+    image = load_tile_image(tile_path)
+    factor = _tile_preview_factor(int(image.shape[0]), int(image.shape[1]), config)
+    small = downsample_image(np.asarray(image, dtype=np.float32), factor)
+    plain = _to_display_rgb(small)
+    labeled = _draw_local_markers(
+        plain, _particles_for_path(table, tile_path), config, factor
+    )
+    return labeled, plain
+
+
+def unstitched_tile_rgb(
+    path: str | Path,
+    table: pd.DataFrame,
+    config: Mapping[str, Any],
+    *,
+    labels: bool = True,
+) -> np.ndarray:
+    """Downsampled RGB of one image that is not part of the mosaic."""
+    labeled, plain = unstitched_tile_pair(path, table, config)
+    return labeled if labels else plain
+
+
+def _unstitched_pages(
+    tiles: Sequence[tuple[str, np.ndarray, np.ndarray]],
+) -> list[Image.Image]:
+    """Pages of images that were not stitched, with and without labels."""
+    pages: list[Image.Image] = []
+    image = Image.new("RGB", (_PAGE_W, _PAGE_H), "white")
+    draw = ImageDraw.Draw(image)
+    y = _MARGIN
+    draw.text((_MARGIN, y), "Images", fill=_INK, font=_font(_H1, bold=True))
+    y += _H1 + 16
+    caption_font = _font(_BODY)
+    first_on_page = True
+    max_text = _PAGE_W - 2 * _MARGIN
+    for name, labeled_rgb, plain_rgb in tiles:
+        if np.asarray(labeled_rgb).size == 0 and np.asarray(plain_rgb).size == 0:
+            continue
+        caption_lines = _wrap_text(str(name), caption_font, max_text)
+        caption_h = len(caption_lines) * (_BODY + 4) + 8
+        room = _PAGE_H - _MARGIN - y - caption_h
+        if room < 320 and not first_on_page:
+            pages.append(image)
+            image = Image.new("RGB", (_PAGE_W, _PAGE_H), "white")
+            draw = ImageDraw.Draw(image)
+            y = _MARGIN
+            first_on_page = True
+            room = _PAGE_H - _MARGIN - y - caption_h
+        for line in caption_lines:
+            draw.text((_MARGIN, y), line, fill=_INK, font=caption_font)
+            y += _BODY + 4
+        y += 8
+        label_h = _BODY + 8
+        gap = 16
+        slot = max((min(room, 900) - 2 * label_h - gap) // 2, 1)
+        plain = None if np.asarray(plain_rgb).size == 0 else plain_rgb
+        if plain is None:
+            draw.text((_MARGIN, y), "With labels", fill=_MUTED, font=caption_font)
+            y += label_h
+            y = _paste_fitted(image, _rgb_tile(labeled_rgb), y, slot * 2)
+        else:
+            draw.text((_MARGIN, y), "With labels", fill=_MUTED, font=caption_font)
+            y += label_h
+            y = _paste_fitted(image, _rgb_tile(labeled_rgb), y, slot)
+            y += gap
+            draw.text((_MARGIN, y), "Without labels", fill=_MUTED, font=caption_font)
+            y += label_h
+            y = _paste_fitted(image, _rgb_tile(plain), y, slot)
+        y += 28
+        first_on_page = False
+    pages.append(image)
+    return pages
 
 
 def encode_overlay_jpeg(rgb: np.ndarray, quality: int = 90) -> bytes:

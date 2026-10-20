@@ -371,8 +371,10 @@ def run_pipeline(
     When ``write_outputs`` is true and ``output_dir`` is set, writes
     ``particles.csv``, ``particles.xlsx``, ``last_pipeline.json`` (every setting
     used for this run, in that output folder), ``mosaic_overlay.png`` and
-    ``mosaic_plain.png`` when tiles were stitched, and ``last_run.pdf`` (counts,
-    size histogram, and the mosaic with labels above the mosaic without them).
+    ``mosaic_plain.png`` when tiles were stitched, and ``Summary of {input folder}.pdf``
+    (counts, size histogram, the mosaic with labels above the mosaic without them,
+    and any images whose filenames have no grid pattern, each shown with and
+    without labels).
     The workbook's second sheet is the same settings as the JSON file. The
     particle table keeps id, global x/y in µm, size in µm, source tile, and confidence.
 
@@ -514,6 +516,9 @@ def _write_run_outputs(
     from src.main_pipeline.report.report_generator import (
         draw_overlay_markers,
         overlay_rgb,
+        summary_pdf_name,
+        unstitched_tile_pair,
+        unstitched_tile_paths,
         write_last_run_pdf,
     )
 
@@ -539,12 +544,24 @@ def _write_run_outputs(
         for stale in (mosaic_png, mosaic_plain_png, mosaic_jpg):
             if stale.is_file():
                 stale.unlink()
+    separate: list[tuple[str, np.ndarray, np.ndarray]] = []
+    for path in unstitched_tile_paths(config):
+        try:
+            labeled, plain = unstitched_tile_pair(path, table, config)
+        except (OSError, ValueError, RuntimeError):
+            continue
+        separate.append((path.name, labeled, plain))
+    pdf_path = out / summary_pdf_name(config)
+    stale_pdf = out / "last_run.pdf"
+    if stale_pdf.is_file() and stale_pdf.resolve() != pdf_path.resolve():
+        stale_pdf.unlink()
     write_last_run_pdf(
         table,
         config,
-        out / "last_run.pdf",
+        pdf_path,
         mosaic_rgb=mosaic_rgb,
         mosaic_plain=plain_rgb,
+        unstitched=separate,
     )
 
 

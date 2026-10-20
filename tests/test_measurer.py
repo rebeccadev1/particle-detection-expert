@@ -434,7 +434,9 @@ def test_pipeline_runs_on_bmp_tiles(tmp_path: Path) -> None:
         "source_tile",
         "confidence",
     ]
-    assert (tmp_path / "out" / "last_run.pdf").read_bytes().startswith(b"%PDF")
+    from src.main_pipeline.report.report_generator import summary_pdf_name
+
+    assert (tmp_path / "out" / summary_pdf_name(config)).read_bytes().startswith(b"%PDF")
     assert (tmp_path / "out" / "mosaic_overlay.png").is_file()
     assert (tmp_path / "out" / "mosaic_plain.png").is_file()
     saved = dict(zip(book["parameters"]["parameter"], book["parameters"]["value"]))
@@ -476,7 +478,9 @@ def test_pipeline_stop_skips_later_tiles_and_skips_outputs(tmp_path: Path) -> No
     assert not (tmp_path / "out" / "particles.csv").exists()
     assert not (tmp_path / "out" / "particles.xlsx").exists()
     assert not (tmp_path / "out" / "last_pipeline.json").exists()
-    assert not (tmp_path / "out" / "last_run.pdf").exists()
+    from src.main_pipeline.report.report_generator import summary_pdf_name
+
+    assert not (tmp_path / "out" / summary_pdf_name(config)).exists()
 
 
 def test_pipeline_stop_cancels_queued_tiles(tmp_path: Path) -> None:

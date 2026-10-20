@@ -45,9 +45,9 @@ RING_SIDES = len(DIRECTIONS)
 
 # Dose from one side, in milliseconds. Uniform divides this by RING_SIDES.
 TOTAL_EXPOSURE_MS = 100.0
-SETTLE_S = 0.5
+SETTLE_S = 0.05
 # Automatic NSEW only. Manual side buttons wait for the next click.
-NSEW_GAP_S = 0.5
+NSEW_GAP_S = 0.05
 # After the stage reports the move is finished, before the lights change.
 MOTION_PAUSE_S = 0.5
 BAUD = 9600

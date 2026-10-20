@@ -59,7 +59,10 @@ from src.main_pipeline.report.report_generator import (  # noqa: E402
     overlay_rgb,
     particles_at_least,
     size_distribution,
+    summary_pdf_name,
     summary_stats,
+    unstitched_tile_paths,
+    unstitched_tile_rgb,
 )
 from src.shadow.shadow import keep_shadow_inputs, render_shadow_tab  # noqa: E402
 
@@ -1032,6 +1035,8 @@ def _apply_finished_pipeline() -> None:
     st.session_state.pop("overlay", None)
     st.session_state.pop("overlay_plain", None)
     st.session_state.pop("overlay_key", None)
+    st.session_state.pop("unstitched_images", None)
+    st.session_state.pop("unstitched_key", None)
     out_dir = resolve_output_dir(config["output_dir"])
     csv_path = out_dir / "particles.csv"
     xlsx_path = out_dir / "particles.xlsx"
@@ -1039,7 +1044,7 @@ def _apply_finished_pipeline() -> None:
     write_xlsx(table, xlsx_path, config)
     for report_name in (
         "last_pipeline.json",
-        "last_run.pdf",
+        summary_pdf_name(config),
         "mosaic_overlay.png",
         "mosaic_plain.png",
     ):
@@ -1284,7 +1289,7 @@ def _mosaic_labels_on() -> bool:
         "Labels",
         value=True,
         key="mosaic_show_labels",
-        help="Orange circles around detected particles. Off shows the stitched mosaic alone.",
+        help="Orange circles around detected particles.",
     )
 
 
@@ -1405,6 +1410,52 @@ def _request_labeled_tiles() -> None:
     st.session_state["load_labeled_tiles"] = True
 
 
+def _render_unstitched_images(
+    paths: list[Path],
+    table: pd.DataFrame,
+    config: dict,
+    show_labels: bool,
+) -> None:
+    """Show each image that has no row/column pattern, without stitching."""
+    if not paths:
+        return
+    stamps: list[str] = []
+    for path in paths:
+        try:
+            stamps.append(f"{path}:{path.stat().st_mtime_ns}")
+        except OSError:
+            stamps.append(str(path))
+    report = config.get("report") or {}
+    key = (
+        tuple(stamps),
+        bool(show_labels),
+        int(len(table)),
+        float(report.get("target_mb", 20.0)),
+        int(report.get("downsample", 0) or 0),
+    )
+    cached = st.session_state.get("unstitched_images")
+    if st.session_state.get("unstitched_key") != key or not isinstance(cached, list):
+        built: list[tuple[str, np.ndarray | None, str | None]] = []
+        with st.spinner("Loading images…"):
+            for path in paths:
+                try:
+                    rgb = unstitched_tile_rgb(path, table, config, labels=show_labels)
+                except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
+                    built.append((path.name, None, str(exc)))
+                else:
+                    built.append((path.name, rgb, None))
+        st.session_state["unstitched_images"] = built
+        st.session_state["unstitched_key"] = key
+        cached = built
+    for name, rgb, error in cached:
+        if error or rgb is None:
+            st.error(f"{name} could not be shown.")
+            with st.expander(f"Error detail for {name}"):
+                st.code(error or "")
+            continue
+        st.image(rgb, caption=name, width="stretch")
+
+
 def _render_finished_run(config: dict) -> bool:
     """Table, size bins, and mosaic from the latest finished pipeline run."""
     table, mosaic, active_config = _finished_run_state(config)
@@ -1463,11 +1514,17 @@ def _render_finished_run(config: dict) -> bool:
 
     with st.container(border=True, key="block-mosaic"):
         placements = getattr(mosaic, "placements", None)
-        if not placements:
-            saved = _saved_mosaic_path(active_config)
-            st.header("Stitched mosaic")
+        loose_paths = unstitched_tile_paths(active_config)
+        saved = None if placements else _saved_mosaic_path(active_config)
+        has_mosaic = bool(placements) or saved is not None
+        show_labels = True
+        if not has_mosaic and not loose_paths:
+            st.header("Images")
+            st.info("No images were found for this run.")
+        else:
+            st.header("Stitched mosaic" if has_mosaic else "Images")
+            show_labels = _mosaic_labels_on()
             if saved is not None:
-                show_labels = _mosaic_labels_on()
                 if show_labels:
                     st.image(
                         str(saved),
@@ -1510,27 +1567,7 @@ def _render_finished_run(config: dict) -> bool:
                         mime=download_mime,
                         key="last_run_download_saved_mosaic",
                     )
-            else:
-                st.info(
-                    "No tiles had row/column (or x/y) in the filename, so nothing was "
-                    "stitched. The table is below. Open Verification, then Inspect, for each image."
-                )
-        else:
-            placed_names = {placement.name for placement in mosaic.placements}
-            if "source_tile" in table.columns:
-                table_tiles = {
-                    str(name).replace("\\", "/").rsplit("/", 1)[-1]
-                    for name in table["source_tile"].astype(str)
-                }
-                leftover = table_tiles - placed_names
-                if leftover:
-                    st.caption(
-                        f"{len(leftover)} file(s) did not match the filename pattern and were "
-                        "detected but not stitched into this mosaic."
-                    )
-
-            st.header("Stitched mosaic")
-            show_labels = _mosaic_labels_on()
+        if placements:
             max_h = max(int(mosaic.full_height), 1)
             max_w = max(int(mosaic.full_width), 1)
             factor = overlay_downsample(mosaic, active_config, crop=None)
@@ -1628,6 +1665,13 @@ def _render_finished_run(config: dict) -> bool:
                         else "Cropped region without labels"
                     )
                     st.image(cropped, caption=caption, width="stretch")
+        if loose_paths:
+            if has_mosaic:
+                st.subheader("Separate images")
+                st.caption(
+                    "These filenames have no row/column pattern, so they are not stitched."
+                )
+            _render_unstitched_images(loose_paths, table, active_config, show_labels)
     return True
 
 

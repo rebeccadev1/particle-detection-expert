@@ -100,6 +100,106 @@ def test_write_parameters_json_keeps_nested_settings(tmp_path: Path) -> None:
     assert payload["preprocessing"]["contrast_percentiles"] == [1.0, 99.0]
 
 
+def test_pdf_header_is_title_then_path_then_folder(tmp_path: Path) -> None:
+    from src.main_pipeline.report.report_generator import pdf_header_lines
+
+    lines = pdf_header_lines({"input_dir": str(tmp_path)})
+    assert lines == [
+        "Particle Detection Output",
+        "Path to analysed image(s):",
+        str(tmp_path.resolve()),
+        tmp_path.name,
+    ]
+
+
+def test_count_table_is_only_as_wide_as_its_text() -> None:
+    from src.main_pipeline.report.report_generator import (
+        _BODY,
+        _LABEL,
+        _MARGIN,
+        _PAGE_W,
+        _count_table_edges,
+        _font,
+        particles_at_least,
+    )
+
+    counts = particles_at_least(pd.DataFrame({"size": [10_000.0, 75_000.0]}))
+    _left, right = _count_table_edges(counts, _font(_BODY), _font(_LABEL, bold=True))
+    assert right < _PAGE_W - _MARGIN
+
+
+def test_unstitched_paths_are_names_without_a_grid(tmp_path: Path) -> None:
+    from src.main_pipeline.report.report_generator import unstitched_tile_paths
+
+    (tmp_path / "loose.png").write_bytes(b"")
+    (tmp_path / "R1_2_3.png").write_bytes(b"")
+    (tmp_path / "(4,5).png").write_bytes(b"")
+    grid = r"R(?P<run>\d+)_(?P<row>\d+)_(?P<col>\d+)"
+    names = [
+        path.name
+        for path in unstitched_tile_paths(
+            {"input_dir": str(tmp_path), "filename_pattern": grid}
+        )
+    ]
+    assert names == ["(4,5).png", "loose.png"]
+    paren = [
+        path.name
+        for path in unstitched_tile_paths(
+            {
+                "input_dir": str(tmp_path),
+                "filename_pattern": r"\((?P<row>\d+),(?P<col>\d+)\)",
+            }
+        )
+    ]
+    assert "(4,5).png" not in paren
+    assert "loose.png" in paren
+    blank = {
+        path.name
+        for path in unstitched_tile_paths(
+            {"input_dir": str(tmp_path), "filename_pattern": ""}
+        )
+    }
+    assert blank == {"loose.png", "R1_2_3.png", "(4,5).png"}
+
+
+def test_pdf_puts_unstitched_images_on_their_own_page(tmp_path: Path) -> None:
+    import numpy as np
+
+    from src.main_pipeline.report.report_generator import write_last_run_pdf
+
+    path = write_last_run_pdf(
+        pd.DataFrame({"size": [10_000.0]}),
+        {"input_dir": str(tmp_path), "detection": {"min_size_nm": 10000.0}},
+        tmp_path / "last_run.pdf",
+        unstitched=[
+            (
+                "loose.png",
+                np.full((24, 32, 3), (255, 140, 40), dtype=np.uint8),
+                np.full((24, 32, 3), (20, 40, 80), dtype=np.uint8),
+            )
+        ],
+    )
+    assert path.read_bytes().count(b"/Type /Page") >= 2
+    from src.main_pipeline.report.report_generator import _unstitched_pages
+
+    page = np.asarray(
+        _unstitched_pages(
+            [
+                (
+                    "loose.png",
+                    np.full((30, 60, 3), (255, 140, 40), dtype=np.uint8),
+                    np.full((30, 60, 3), (20, 40, 80), dtype=np.uint8),
+                )
+            ]
+        )[0]
+    )
+    orange = np.where(np.all(page == (255, 140, 40), axis=2))
+    blue = np.where(np.all(page == (20, 40, 80), axis=2))
+    assert orange[0].size > 0
+    assert blue[0].size > 0
+    assert float(orange[0].mean()) < float(blue[0].mean())
+
+
 def test_last_run_pdf_includes_summary_and_mosaic(tmp_path: Path) -> None:
     import numpy as np
 

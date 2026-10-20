@@ -391,7 +391,7 @@ def _render_lighting_controls(cap, mode: str, nsew_style: str, ser) -> None:
     elif nsew_style == "Automatic":
         st.caption(
             "One click lights N, then E, then S, then W, and saves each frame. "
-            "It waits 0.5 seconds between sides."
+            f"It waits {cap.NSEW_GAP_S * 1000:.0f} ms between sides."
         )
         blocked = _still_capture_block_reason(needs_arduino=True)
         if st.button("Capture N, E, S, W", type="primary", disabled=blocked is not None):
