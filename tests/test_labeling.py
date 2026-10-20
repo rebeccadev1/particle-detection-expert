@@ -786,6 +786,36 @@ def test_store_apply_labels_writes_particle_and_not_particle(tmp_path: Path) -> 
     assert detection_key(other) in store.labeled_keys()
 
 
+def test_empty_label_queue_hides_this_file_until_restore_or_rewrite(tmp_path: Path) -> None:
+    from src.verification.queue import (
+        clear_label_queue,
+        label_queue_is_cleared,
+        restore_label_queue,
+    )
+
+    csv_path = tmp_path / "run" / "particles.csv"
+    csv_path.parent.mkdir()
+    csv_path.write_text("id\n", encoding="utf-8")
+    pointer_dir = tmp_path / "Outputs"
+    assert not label_queue_is_cleared(csv_path, pointer_dir)
+    assert not label_queue_is_cleared(None, pointer_dir)
+
+    clear_label_queue(csv_path, pointer_dir)
+    assert label_queue_is_cleared(csv_path, pointer_dir)
+
+    other = tmp_path / "other" / "particles.csv"
+    other.parent.mkdir()
+    other.write_text("id\n", encoding="utf-8")
+    assert not label_queue_is_cleared(other, pointer_dir)
+
+    csv_path.write_text("id\n1\n", encoding="utf-8")
+    assert not label_queue_is_cleared(csv_path, pointer_dir)
+
+    clear_label_queue(csv_path, pointer_dir)
+    restore_label_queue(pointer_dir)
+    assert not label_queue_is_cleared(csv_path, pointer_dir)
+
+
 def test_label_queue_defaults_to_last_pipeline_not_r3(tmp_path: Path) -> None:
     csv_path = tmp_path / "particles.csv"
     csv_path.write_text("id\n", encoding="utf-8")

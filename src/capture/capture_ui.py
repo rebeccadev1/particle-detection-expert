@@ -671,7 +671,7 @@ def _render_focus(locked: bool) -> None:
                 "autofocus runs again. Leave this off to keep the current Z for the whole scan."
             ),
         )
-        with st.expander("Focus travel and steps"):
+        with st.expander("Focus settings"):
             _focus_settings(locked)
         limit_error = _focus_limits()
         if limit_error:
@@ -1072,7 +1072,7 @@ def _render_stage(cap) -> None:
         stops_col.metric("Stops", f"{summary['columns']} × {summary['rows']}")
         travel_x_col.metric("Travel X", f"{summary['x_mm']:.2f} mm")
         travel_y_col.metric("Travel Y", f"{summary['y_mm']:.2f} mm")
-        dwell_col.metric("Dwell", f"{pause['dwell_ms']} ms")
+        dwell_col.metric("Pauze at each stop", f"{pause['dwell_ms']} ms")
 
         try:
             program = _stage_program()

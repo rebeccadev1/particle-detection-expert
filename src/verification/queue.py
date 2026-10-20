@@ -32,6 +32,7 @@ RECALL_CSV_NAME = "recall/particles.csv"
 FALLBACK_CSV_NAME = "allemaal 08/09/particles.csv"
 LAST_RUN_CSV_NAME = RECALL_CSV_NAME
 LAST_PIPELINE_POINTER = "last_pipeline.json"
+LABEL_QUEUE_CLEARED = "label_queue_cleared.json"
 
 REQUIRED = ("id", "x_global", "y_global", "size", "confidence", "source_tile")
 _NSEW_KEY = re.compile(
@@ -346,6 +347,65 @@ def use_last_pipeline_queue(
     if pipeline_csv is None or not Path(pipeline_csv).is_file():
         return False
     return session_source in (None, "", "last_pipeline")
+
+
+def _label_queue_cleared_path(pointer_dir: str | Path | None = None) -> Path:
+    folder = Path(pointer_dir) if pointer_dir is not None else DEFAULT_OUTPUT_DIR
+    return folder / LABEL_QUEUE_CLEARED
+
+
+def _csv_stamp(csv_path: Path) -> dict[str, Any]:
+    stat = csv_path.stat()
+    return {
+        "csv": str(csv_path.resolve()),
+        "mtime_ns": stat.st_mtime_ns,
+        "size": stat.st_size,
+    }
+
+
+def label_queue_is_cleared(
+    csv_path: str | Path | None,
+    pointer_dir: str | Path | None = None,
+) -> bool:
+    """True when Empty queue dropped this exact results file."""
+    if csv_path is None:
+        return False
+    path = Path(csv_path)
+    if not path.is_file():
+        return False
+    pointer = _label_queue_cleared_path(pointer_dir)
+    if not pointer.is_file():
+        return False
+    try:
+        payload = json.loads(pointer.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    stamp = _csv_stamp(path)
+    try:
+        saved_mtime = int(payload.get("mtime_ns"))
+        saved_size = int(payload.get("size"))
+    except (TypeError, ValueError):
+        return False
+    return payload.get("csv") == stamp["csv"] and saved_mtime == stamp["mtime_ns"] and saved_size == stamp["size"]
+
+
+def clear_label_queue(
+    csv_path: str | Path,
+    pointer_dir: str | Path | None = None,
+) -> Path:
+    """Remember that this results file's unlabeled hits should not be shown."""
+    path = Path(csv_path)
+    pointer = _label_queue_cleared_path(pointer_dir)
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text(json.dumps(_csv_stamp(path), indent=2), encoding="utf-8")
+    return pointer
+
+
+def restore_label_queue(pointer_dir: str | Path | None = None) -> None:
+    """Put a cleared Label queue back. A rewritten results file does this on its own."""
+    _label_queue_cleared_path(pointer_dir).unlink(missing_ok=True)
 
 
 def load_last_pipeline(

@@ -1,11 +1,3 @@
-"""Move the serpentine and take a picture at every stop.
-
-Uniform saves one all-sides frame per stop. NSEW keeps the stage still until
-N, E, S, and W have each been saved. When focus during the scan is on, every
-seventh stage step refocuses on Z, and starts another search whenever
-sharpness is not above 80% of the score that autofocus started with.
-Start scan still only moves the printer.
-"""
 
 from __future__ import annotations
 

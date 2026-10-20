@@ -79,9 +79,12 @@ from src.verification.inspect import (
     undetected_size_floor_nm,
 )
 from src.verification.queue import (
+    clear_label_queue,
     expand_labeled_keys,
+    label_queue_is_cleared,
     last_run_csv,
     load_last_pipeline,
+    restore_label_queue,
     use_last_pipeline_queue,
     load_particles_csv,
     label_map_with_aliases,
@@ -249,18 +252,6 @@ def render_label_tab(
     st.caption("One crop at a time. The key for each action is on its button.")
 
     pipeline_csv, pipeline_config = load_last_pipeline(config)
-    st.button(
-        "Load last run",
-        key="label_load_last_run",
-        disabled=pipeline_csv is None or not Path(pipeline_csv).is_file(),
-        on_click=_on_load_last_pipeline,
-        help=(
-            f"Queue {pipeline_csv.parent.name}/particles.csv"
-            if pipeline_csv is not None and Path(pipeline_csv).is_file()
-            else "Run Detection first so last_pipeline.json points at an output folder."
-        ),
-    )
-
     use_last_pipeline = use_last_pipeline_queue(
         st.session_state.get("label_source"), pipeline_csv
     )
@@ -294,6 +285,9 @@ def render_label_tab(
         crop_config.get("overlap_fraction", 0.0) or 0.0
     ):
         crop_config = placed
+    if label_queue_is_cleared(last_csv):
+        queue = queue.iloc[0:0]
+
     front = st.session_state.get("label_front_key")
     if front is not None and not queue.empty:
         match = queue["key"].astype(str) == str(front)
@@ -303,6 +297,28 @@ def render_label_tab(
     counts = store.counts()
     labeled_n = sum(counts.values())
     remaining = len(queue)
+    load_col, empty_col = st.columns(2)
+    with load_col:
+        st.button(
+            "Load last run",
+            key="label_load_last_run",
+            disabled=pipeline_csv is None or not Path(pipeline_csv).is_file(),
+            on_click=_on_load_last_pipeline,
+            help=(
+                f"Queue {pipeline_csv.parent.name}/particles.csv"
+                if pipeline_csv is not None and Path(pipeline_csv).is_file()
+                else "Run Detection first so last_pipeline.json points at an output folder."
+            ),
+        )
+    with empty_col:
+        st.button(
+            "Empty queue",
+            key="label_empty_queue",
+            disabled=last_csv is None or not Path(last_csv).is_file() or remaining == 0,
+            on_click=_on_empty_label_queue,
+            args=(str(last_csv),) if last_csv is not None else (),
+            help="Drop the remaining unlabeled hits. Saved labels stay. Load last run puts this queue back.",
+        )
     source_label = _source_caption(last_csv, last_pipeline=use_last_pipeline)
     st.caption(
         f"{remaining} remaining · labeled {labeled_n} "
@@ -337,6 +353,8 @@ def render_label_tab(
             size_frac,
             scene_labels,
         )
+        if label_queue_is_cleared(last_csv):
+            queue = queue.iloc[0:0]
 
     if queue.empty:
         st.success("Nothing left to label.")
@@ -868,10 +886,18 @@ def _queued_label_items(
 
 
 def _on_load_last_pipeline() -> None:
-    """Switch Tinder to Detection's last output folder (runs before widgets)."""
+    """Switch Label to Detection's last output folder (runs before widgets)."""
+    restore_label_queue()
     st.session_state["label_source"] = "last_pipeline"
     st.session_state["label_source_notice"] = True
     st.session_state.pop("label_front_key", None)
+
+
+def _on_empty_label_queue(csv_path: str) -> None:
+    """Drop the remaining unlabeled hits for this results file."""
+    clear_label_queue(csv_path)
+    st.session_state.pop("label_front_key", None)
+    st.session_state["all_hits_reject_keys"] = []
 
 
 def _advance_inspect_tile(delta: int) -> None:
