@@ -39,6 +39,7 @@ _JOB: dict = {
     "stopped": False,
     "steps": [],
     "run_id": 0,
+    "still_saved": False,
 }
 
 
@@ -287,6 +288,17 @@ def autofocus_status() -> dict:
         }
 
 
+def claim_focus_capture() -> bool:
+    """True once, after a finished autofocus, so the page can save one still."""
+    with _JOB_LOCK:
+        if _JOB["running"] or _JOB["phase"] != "done" or _JOB["error"]:
+            return False
+        if _JOB["still_saved"]:
+            return False
+        _JOB["still_saved"] = True
+        return True
+
+
 def stop_autofocus() -> None:
     """Ask the search to finish the current move, then return to the best Z."""
     with _JOB_LOCK:
@@ -378,6 +390,7 @@ def start_autofocus(
         _JOB["stopped"] = False
         _JOB["steps"] = []
         _JOB["run_id"] = int(_JOB["run_id"]) + 1
+        _JOB["still_saved"] = False
     worker.start()
 
 

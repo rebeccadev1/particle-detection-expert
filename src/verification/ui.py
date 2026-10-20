@@ -754,7 +754,7 @@ def _render_all_hits(
         [class*="st-key-all_hits_card_"] .all-hits-caption {
             min-height: 2.6em;
             margin: 0.2rem 0 0.35rem;
-            font-size: 0.85rem;
+            font-size: calc(0.85 * 16px + 8pt);
             line-height: 1.3;
         }
         </style>
@@ -997,7 +997,7 @@ def render_tile_inspect_tab(
         return
     folder = str(cfg_get(run_config, "input_dir", "") or "")
     if not folder:
-        st.info("Run the pipeline, or set a tile folder in the sidebar.")
+        st.info("Run the pipeline, or set a tile folder under Adjust parameters on the Run tab.")
         return
     pattern = str(cfg_get(run_config, "filename_pattern", DEFAULT_FILENAME_PATTERN))
     source = last_csv if last_csv is not None else "sidebar"
@@ -1020,7 +1020,7 @@ def render_tile_inspect_tab(
                 include_unmatched=True,
             )
         except (FileNotFoundError, ValueError) as exc:
-            _failure("The tile folder could not be read.", "Choose the folder in the sidebar, then open Inspect again.", exc)
+            _failure("The tile folder could not be read.", "Choose the folder under Adjust parameters on the Run tab, then open Inspect again.", exc)
             return
         if not paths:
             st.warning(f"No matching tiles in {folder}.")
@@ -1395,9 +1395,9 @@ def _last_run_stat_card(label: str, value: int | str, color: str, wash: str) -> 
     return (
         "<div style='flex:0 0 auto;width:max-content;padding:0.7rem 0.85rem;"
         f"border-radius:12px;background:{wash};border:1px solid {color}66;'>"
-        f"<div style='font-size:0.78rem;font-weight:650;letter-spacing:0.04em;"
+        f"<div style='font-size:calc(0.78 * 16px + 8pt);font-weight:650;letter-spacing:0.04em;"
         f"text-transform:uppercase;color:{color};white-space:nowrap;'>{label}</div>"
-        f"<div style='font-size:1.9rem;font-weight:750;line-height:1.15;"
+        f"<div style='font-size:calc(1.9 * 16px + 8pt);font-weight:750;line-height:1.15;"
         f"font-variant-numeric:tabular-nums;color:{color};white-space:nowrap;'>{shown}</div>"
         "</div>"
     )

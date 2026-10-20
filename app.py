@@ -49,7 +49,11 @@ from src.main_pipeline.report.report_generator import (  # noqa: E402
 )
 from src.shadow.shadow import keep_shadow_inputs, render_shadow_tab  # noqa: E402
 
-st.set_page_config(page_title="Particle Detection Software", layout="wide")
+st.set_page_config(
+    page_title="Particle Detection Software",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 st.markdown(
     """
     <style>
@@ -66,6 +70,27 @@ st.markdown(
     [class*="st-key-block-"] [data-baseweb="input"],
     [class*="st-key-block-"] [data-baseweb="textarea"] {
         background-color: #e2e6f2;
+    }
+    html {
+        font-size: calc(16px + 8pt) !important;
+    }
+    h1 {
+        font-size: calc(2.75 * 16px + 8pt) !important;
+    }
+    h2 {
+        font-size: calc(2.25 * 16px + 8pt) !important;
+    }
+    h3 {
+        font-size: calc(1.75 * 16px + 8pt) !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: calc(2.25 * 16px + 8pt) !important;
+    }
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 3.75rem !important;
+    }
+    [data-testid="stMain"] h1 {
+        padding-top: 0.75rem !important;
     }
     </style>
     """,
@@ -348,8 +373,7 @@ def _on_profile_choice(base: dict) -> None:
     st.session_state["ui_settings_nsew"] = st.session_state.get("ui_settings_profile") == "NSEW"
     _on_settings_profile(base)
 
-def _sidebar(base: dict) -> dict:
-    config = deepcopy(base)
+def _prepare_ui_state(base: dict) -> None:
     if st.session_state.get("ui_schema") != UI_SCHEMA:
         if not isinstance(st.session_state.get("ui_settings_nsew"), bool):
             st.session_state["ui_settings_nsew"] = False
@@ -362,45 +386,50 @@ def _sidebar(base: dict) -> dict:
         st.session_state["ui_sidebar_frontend_seeded"] = True
     _backfill_held_widgets(base)
     _keep_filename_pattern(base)
-
     if not isinstance(st.session_state.get("ui_settings_nsew"), bool):
         st.session_state["ui_settings_nsew"] = False
     if st.session_state.get("ui_settings_profile") not in ("Uniform", "NSEW"):
         st.session_state["ui_settings_profile"] = (
             "NSEW" if st.session_state.get("ui_settings_nsew") else "Uniform"
         )
-    st.sidebar.radio(
+
+
+def _render_adjust_parameters(base: dict) -> None:
+    st.radio(
         "Settings profile",
         ("Uniform", "NSEW"),
         horizontal=True,
         key="ui_settings_profile",
         on_change=_on_profile_choice,
         args=(base,),
-        help="Uniform or NSEW standard settings for the sidebar.",
+        help="Uniform or NSEW standard settings.",
     )
-    st.sidebar.button(
+    st.button(
         "Reset to standard values",
         on_click=_on_reset_standard,
         args=(base,),
-        help="Restore sidebar settings for the profile selected above.",
+        help="Restore settings for the profile selected above.",
         width="stretch",
     )
-    st.sidebar.divider()
 
     def _select_sidebar_group(name: str) -> None:
         current = str(st.session_state.get("ui_sidebar_group") or "")
         _capture_widget_values(_SIDEBAR_SECTIONS.get(current, ()))
-        st.session_state["ui_sidebar_group"] = name
+        st.session_state["ui_sidebar_group"] = "" if current == name else name
 
-    for name in ["Loading", "Preprocessing", "Detection", "Output"]:
-        st.sidebar.button(
-            name,
-            key=f"ui_sidebar_tab_{name}",
-            on_click=_select_sidebar_group,
-            args=(name,),
-            type="primary" if st.session_state.get("ui_sidebar_group") == name else "secondary",
-            width="stretch",
-        )
+    for column, name in zip(
+        st.columns(4),
+        ["Loading", "Preprocessing", "Detection", "Output"],
+    ):
+        with column:
+            st.button(
+                name,
+                key=f"ui_sidebar_tab_{name}",
+                on_click=_select_sidebar_group,
+                args=(name,),
+                type="primary" if st.session_state.get("ui_sidebar_group") == name else "secondary",
+                width="stretch",
+            )
     section = st.session_state.get("ui_sidebar_group") or ""
 
     seed_frontend = not st.session_state.get("ui_sidebar_frontend_seeded")
@@ -412,14 +441,14 @@ def _sidebar(base: dict) -> dict:
     ]
     if hidden:
         selectors = ",".join(
-            f'[data-testid="stSidebar"] .st-key-sidebar_sec_{name}' for name in hidden
+            f'.st-key-sidebar_sec_{name}' for name in hidden
         )
-        st.sidebar.markdown(
+        st.markdown(
             f"<style>{selectors}{{display:none !important;}}</style>",
             unsafe_allow_html=True,
         )
 
-    with st.sidebar.container(key="sidebar_sec_Loading"):
+    with st.container(key="sidebar_sec_Loading"):
         _restore_widgets(_SIDEBAR_SECTIONS["Loading"], force=seed_frontend)
         folder_choices = input_folder_labels()
         current_folder = str(
@@ -481,7 +510,7 @@ def _sidebar(base: dict) -> dict:
                 key=_live_key("ui_filename_pattern"),
                 help="Names that do not match still run detection; they are left out of the mosaic.",
             )
-    with st.sidebar.container(key="sidebar_sec_Preprocessing"):
+    with st.container(key="sidebar_sec_Preprocessing"):
         _restore_widgets(_SIDEBAR_SECTIONS["Preprocessing"], force=seed_frontend)
         st.checkbox(
             "Denoise",
@@ -510,7 +539,7 @@ def _sidebar(base: dict) -> dict:
             key=_live_key("ui_contrast_stretch"),
             help="Map each tile's 1st–99th percentiles onto 0–1 so contrast matches before detection.",
         )
-    with st.sidebar.container(key="sidebar_sec_Detection"):
+    with st.container(key="sidebar_sec_Detection"):
         _restore_widgets(_SIDEBAR_SECTIONS["Detection"], force=seed_frontend)
         st.selectbox(
             "Background suppression",
@@ -651,7 +680,7 @@ def _sidebar(base: dict) -> dict:
             key=_live_key("ui_ml_threshold"),
             help="Keep blobs with at least this probability; 0 keeps every proposal.",
         )
-    with st.sidebar.container(key="sidebar_sec_Output"):
+    with st.container(key="sidebar_sec_Output"):
         _restore_widgets(_SIDEBAR_SECTIONS["Output"], force=seed_frontend)
         output_key = _live_key("ui_output_dir")
         stored_output = st.session_state.get(output_key, st.session_state.get("ui_output_dir"))
@@ -734,6 +763,9 @@ def _sidebar(base: dict) -> dict:
         )
     st.session_state["ui_sidebar_frontend_seeded"] = True
 
+
+def _config_from_state(base: dict) -> dict:
+    config = deepcopy(base)
     config["input_dir"] = _widget_value("ui_input_dir")
     chosen_output = _widget_value("ui_output_dir")
     chosen_output = "" if chosen_output is None else str(chosen_output).strip()
@@ -1244,119 +1276,141 @@ def _render_detection(config: dict) -> None:
     _pipeline_controls(config)
 
 
-config = _sidebar(_base_config())
+base_config = _base_config()
+_prepare_ui_state(base_config)
 
 keep_shadow_inputs()
 keep_capture_inputs()
 keep_stage_inputs()
 
-capture_tab, pipeline_tab, verification_tab, tools_tab = st.tabs(
-    ["Capture", "Run", "Verification", "Tools"],
-    on_change="rerun",
-    key="main_tabs",
-)
+_MAIN_PAGES = ["Capture", "Run", "Verify", "Additional tools"]
 
-if pipeline_tab.open:
-    with pipeline_tab:
-        with st.container(border=True, key="block-run"):
-            _render_detection(config)
-        _render_finished_run(config)
-        with st.container(border=True, key="block-review"):
-            render_labeled_tiles_tab(
-                config,
-                ROOT,
-                st.session_state.get("mosaic"),
-                st.session_state.get("table"),
+
+def _select_main_page(name: str) -> None:
+    st.session_state["main_toolbar"] = name
+
+
+if st.session_state.get("main_toolbar") not in _MAIN_PAGES:
+    st.session_state["main_toolbar"] = "Capture"
+
+with st.sidebar:
+    st.subheader("Modules")
+    for name in _MAIN_PAGES:
+        st.button(
+            name,
+            key=f"main_toolbar_{name}",
+            on_click=_select_main_page,
+            args=(name,),
+            type="primary" if st.session_state["main_toolbar"] == name else "secondary",
+            width="stretch",
+        )
+
+page = st.session_state["main_toolbar"]
+
+if page == "Run":
+    with st.container(border=True, key="block-parameters"):
+        st.subheader("Adjust parameters")
+        _render_adjust_parameters(base_config)
+    config = _config_from_state(base_config)
+    with st.container(border=True, key="block-run"):
+        st.subheader("Run/stop pipeline")
+        _render_detection(config)
+    _render_finished_run(config)
+    with st.container(border=True, key="block-review"):
+        render_labeled_tiles_tab(
+            config,
+            ROOT,
+            st.session_state.get("mosaic"),
+            st.session_state.get("table"),
+        )
+else:
+    config = _config_from_state(base_config)
+
+if page == "Verify":
+    tinder_tab, pointer_tab, database_tab = st.tabs(
+        ["Label", "Inspect", "Database"],
+        on_change="rerun",
+        key="verification_tabs",
+    )
+    if tinder_tab.open:
+        with tinder_tab:
+            with st.container(border=True, key="block-label"):
+                render_label_tab(
+                    config,
+                    ROOT,
+                    st.session_state.get("table"),
+                    st.session_state.get("mosaic"),
+                )
+    if pointer_tab.open:
+        with pointer_tab:
+            with st.container(border=True, key="block-inspect"):
+                render_tile_inspect_tab(
+                    config,
+                    ROOT,
+                    st.session_state.get("table"),
+                    st.session_state.get("mosaic"),
+                )
+    if database_tab.open:
+        with database_tab:
+            show_area_line = st.toggle(
+                "Area line",
+                value=True,
+                key="database_area_line",
+                help="Outline the measured particle area on the particle crops.",
             )
+            groundup_tab, glovebox_tab = st.tabs(
+                ["Groundup", "Glovebox"],
+                on_change="rerun",
+                key="database_campaign_tabs",
+            )
+            for campaign_tab, campaign in (
+                (groundup_tab, "groundup"),
+                (glovebox_tab, "glovebox"),
+            ):
+                if not campaign_tab.open:
+                    continue
+                with campaign_tab:
+                    particle_col, not_particle_col = st.columns(2)
+                    with particle_col:
+                        with st.container(border=True, key="block-particles"):
+                            render_collection_tab(
+                                ROOT,
+                                "particle",
+                                "Particles",
+                                n_columns=2,
+                                campaign=campaign,
+                                config=config,
+                                show_area_line=show_area_line,
+                            )
+                    with not_particle_col:
+                        with st.container(border=True, key="block-not-particles"):
+                            render_collection_tab(
+                                ROOT,
+                                "not_particle",
+                                "Not particles",
+                                n_columns=2,
+                                campaign=campaign,
+                            )
 
-if verification_tab.open:
-    with verification_tab:
-        tinder_tab, pointer_tab, database_tab = st.tabs(
-            ["Label", "Inspect", "Database"],
-            on_change="rerun",
-            key="verification_tabs",
-        )
-        if tinder_tab.open:
-            with tinder_tab:
-                with st.container(border=True, key="block-label"):
-                    render_label_tab(
-                        config,
-                        ROOT,
-                        st.session_state.get("table"),
-                        st.session_state.get("mosaic"),
-                    )
-        if pointer_tab.open:
-            with pointer_tab:
-                with st.container(border=True, key="block-inspect"):
-                    render_tile_inspect_tab(
-                        config,
-                        ROOT,
-                        st.session_state.get("table"),
-                        st.session_state.get("mosaic"),
-                    )
-        if database_tab.open:
-            with database_tab:
-                show_area_line = st.toggle(
-                    "Area line",
-                    value=True,
-                    key="database_area_line",
-                    help="Outline the measured particle area on the particle crops.",
-                )
-                groundup_tab, glovebox_tab = st.tabs(
-                    ["Groundup", "Glovebox"],
-                    on_change="rerun",
-                    key="database_campaign_tabs",
-                )
-                for campaign_tab, campaign in (
-                    (groundup_tab, "groundup"),
-                    (glovebox_tab, "glovebox"),
-                ):
-                    if not campaign_tab.open:
-                        continue
-                    with campaign_tab:
-                        particle_col, not_particle_col = st.columns(2)
-                        with particle_col:
-                            with st.container(border=True, key="block-particles"):
-                                render_collection_tab(
-                                    ROOT,
-                                    "particle",
-                                    "Particles",
-                                    n_columns=2,
-                                    campaign=campaign,
-                                    config=config,
-                                    show_area_line=show_area_line,
-                                )
-                        with not_particle_col:
-                            with st.container(border=True, key="block-not-particles"):
-                                render_collection_tab(
-                                    ROOT,
-                                    "not_particle",
-                                    "Not particles",
-                                    n_columns=2,
-                                    campaign=campaign,
-                                )
+if page == "Additional tools":
+    training_tab, shadow_tab, redirector_tab = st.tabs(
+        ["Training", "Shadow", "Redirector"],
+        on_change="rerun",
+        key="tools_tabs",
+    )
+    if training_tab.open:
+        with training_tab:
+            with st.container(border=True, key="block-training"):
+                _render_training(config)
+    if shadow_tab.open:
+        with shadow_tab:
+            render_shadow_tab(config)
+    if redirector_tab.open:
+        with redirector_tab:
+            render_redirector_tab()
 
-if tools_tab.open:
-    with tools_tab:
-        training_tab, shadow_tab, redirector_tab = st.tabs(
-            ["Training", "Shadow", "Redirector"],
-            on_change="rerun",
-            key="tools_tabs",
-        )
-        if training_tab.open:
-            with training_tab:
-                with st.container(border=True, key="block-training"):
-                    _render_training(config)
-        if shadow_tab.open:
-            with shadow_tab:
-                render_shadow_tab(config)
-        if redirector_tab.open:
-            with redirector_tab:
-                render_redirector_tab()
-
-if capture_tab.open:
-    with capture_tab:
-        render_capture_tab()
+if page == "Capture":
+    render_capture_tab()
 else:
     suspend_live_view()
 

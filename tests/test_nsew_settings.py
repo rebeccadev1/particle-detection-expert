@@ -129,7 +129,7 @@ def test_app_sidebar_has_nsew_toggle() -> None:
     assert "ui_settings_nsew" in text
     assert "apply_nsew_settings" in text
     assert '["Loading", "Preprocessing", "Detection", "Output"]' in text
-    assert '["Capture", "Run", "Verification", "Tools"]' in text
+    assert '["Capture", "Run", "Verify", "Additional tools"]' in text
     assert '["Label", "Inspect", "Database"]' in text
     assert '["Training", "Shadow", "Redirector"]' in text
     assert "Last run" in text

@@ -1597,7 +1597,7 @@ def render_shadow_tab(config: dict[str, Any]) -> None:
 
     st.caption(
         "Measure the dark region next to a particle on the side away from the light. "
-        "Pixel size comes from the sidebar."
+        "Pixel size comes from Adjust parameters on the Run tab."
     )
     db_col, upload_col = st.columns(2)
     db_col.button(

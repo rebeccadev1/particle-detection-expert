@@ -8,6 +8,7 @@ from src.capture.camera_automation_v2 import (
     CAPTURES_DIR,
     allocate_capture_folder,
     allocate_run_folder,
+    next_run_folder,
     folder_location,
     image_filename,
     next_capture_location,
@@ -83,10 +84,43 @@ def test_manifest_lives_in_the_run_folder(tmp_path) -> None:
     assert data["shutter_ms"] == 100.0
 
 
+def test_manifest_keeps_stage_settings(tmp_path) -> None:
+    stage = {
+        "fov_mm": 7.4,
+        "overlap": 0.10,
+        "step_mm": 6.66,
+        "columns": 10,
+        "rows": 7,
+        "feed_mm_per_min": 1000,
+    }
+    write_manifest(
+        tmp_path,
+        {"mode": "uniform", "row": 1, "col": 1, "files": ["(1,1).png"], "stage": stage},
+    )
+    write_manifest(
+        tmp_path,
+        {"mode": "uniform", "row": 1, "col": 2, "files": ["(1,2).png"]},
+    )
+    data = json.loads((tmp_path / "capture.json").read_text())
+    assert data["stage"] == stage
+    assert [stop["col"] for stop in data["stops"]] == [1, 2]
+
+
 def test_captures_go_to_inputs_groundup() -> None:
     assert CAPTURES_DIR.name == "Groundup"
     assert CAPTURES_DIR.parent.name == "Inputs"
     assert (CAPTURES_DIR.parent.parent / "Outputs").is_dir()
+
+
+def test_next_run_folder_does_not_create_the_directory(tmp_path) -> None:
+    today = date(2026, 10, 9)
+    (tmp_path / "v1 2026-10-09").mkdir()
+    folder = next_run_folder(tmp_path, on=today)
+    assert folder.name == "v2 2026-10-09"
+    assert not folder.exists()
+    missing = tmp_path / "missing"
+    assert next_run_folder(missing, on=today).name == "v1 2026-10-09"
+    assert not missing.exists()
 
 
 def test_run_folders_count_only_that_day(tmp_path) -> None:

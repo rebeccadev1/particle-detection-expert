@@ -100,16 +100,25 @@ def folder_location(folder: Path) -> tuple[int, int]:
     return int(match.group(1)), int(match.group(2))
 
 
-def allocate_run_folder(base: Path, on: date | None = None) -> Path:
-    """Next captures/vN YYYY-MM-DD directory. N restarts at 1 each day."""
+def next_run_folder(base: Path, on: date | None = None) -> Path:
+    """Path of the next captures/vN YYYY-MM-DD directory. Does not create it.
+
+    N restarts at 1 each day.
+    """
     day = (date.today() if on is None else on).isoformat()
-    base.mkdir(parents=True, exist_ok=True)
     taken: list[int] = []
-    for path in base.iterdir():
-        match = RUN_DIR_RE.match(path.name)
-        if match and path.is_dir() and match.group(2) == day:
-            taken.append(int(match.group(1)))
-    folder = base / f"v{max(taken, default=0) + 1} {day}"
+    if base.is_dir():
+        for path in base.iterdir():
+            match = RUN_DIR_RE.match(path.name)
+            if match and path.is_dir() and match.group(2) == day:
+                taken.append(int(match.group(1)))
+    return base / f"v{max(taken, default=0) + 1} {day}"
+
+
+def allocate_run_folder(base: Path, on: date | None = None) -> Path:
+    """Create the next captures/vN YYYY-MM-DD directory. N restarts at 1 each day."""
+    folder = next_run_folder(base, on=on)
+    folder.parent.mkdir(parents=True, exist_ok=True)
     folder.mkdir()
     return folder
 
@@ -538,6 +547,16 @@ def write_manifest(folder: Path, payload: dict) -> None:
     for key in ("mode", "total_exposure_ms", "shutter_ms", "exposure_us", "sides_on", "port"):
         if key in payload:
             data[key] = payload[key]
+    if payload.get("stage") is not None:
+        stage = payload["stage"]
+        data["stage"] = {
+            "fov_mm": float(stage["fov_mm"]),
+            "overlap": float(stage["overlap"]),
+            "step_mm": float(stage["step_mm"]),
+            "columns": int(stage["columns"]),
+            "rows": int(stage["rows"]),
+            "feed_mm_per_min": float(stage["feed_mm_per_min"]),
+        }
     stops = data.setdefault("stops", [])
     for existing in stops:
         if existing.get("row") == stop["row"] and existing.get("col") == stop["col"]:

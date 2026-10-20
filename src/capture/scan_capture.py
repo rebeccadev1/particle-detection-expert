@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -28,7 +29,7 @@ from src.capture.focus import (
     focus_search,
     sharpness,
 )
-from src.capture.stage import move_axis, move_z, printer_status, scan_stops
+from src.capture.stage import move_axis, move_z, printer_status, return_to_start_moves, scan_stops
 
 FOCUS_EVERY_STEPS = 7
 FOCUS_MIN_RATIO = 0.8
@@ -52,6 +53,7 @@ _JOB: dict = {
     "sharpness": 0.0,
     "best_sharpness": 0.0,
     "focus_attempt": 0,
+    "returning": False,
 }
 
 
@@ -81,6 +83,70 @@ def needs_another_focus(
     return float(score) <= float(ratio) * float(starting)
 
 
+def score_saved_frame(path: Path) -> float:
+    """Sharpness of a frame already written by the scan."""
+    import cv2
+
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise RuntimeError(f"Could not read {path} to score sharpness.")
+    if getattr(image, "ndim", 0) == 3 and image.shape[2] == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+    elif getattr(image, "ndim", 0) == 3 and image.shape[2] == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    return sharpness(image)
+
+
+def sharpness_stop(
+    row: int,
+    col: int,
+    files: list[dict],
+    autofocus: dict | None = None,
+) -> dict:
+    """One stop: the sharpness of each saved frame, and autofocus when it ran there."""
+    scores = [float(item["sharpness"]) for item in files]
+    record = {
+        "row": int(row),
+        "col": int(col),
+        "sharpness": float(sum(scores) / len(scores)) if scores else 0.0,
+        "files": [
+            {"name": str(item["name"]), "sharpness": float(item["sharpness"])}
+            for item in files
+        ],
+    }
+    if autofocus is not None:
+        record["autofocus"] = autofocus
+    return record
+
+
+def autofocus_log(searches: list[dict], *, after_step: int | None = None) -> dict:
+    """Net Z change from the height where this scan autofocus began, and each attempt."""
+    net = sum(float(search["z_change_mm"]) for search in searches)
+    first = searches[0]
+    last = searches[-1]
+    record: dict = {}
+    if after_step is not None:
+        record["after_step"] = int(after_step)
+    record.update(
+        {
+            "z_change_mm": net,
+            "attempts": len(searches),
+            "stopped": bool(last["stopped"]),
+            "start_sharpness": float(first["start_sharpness"]),
+            "sharpness": float(last["sharpness"]),
+            "best_sharpness": float(last["best_sharpness"]),
+            "searches": list(searches),
+        }
+    )
+    return record
+
+
+def write_sharpness_log(folder: Path, stops: list[dict]) -> None:
+    """Rewrite ``sharpness.json`` so a stopped scan still keeps the stops already taken."""
+    path = Path(folder) / "sharpness.json"
+    path.write_text(json.dumps({"stops": stops}, indent=2) + "\n")
+
+
 def scan_capture_status() -> dict:
     with _JOB_LOCK:
         thread = _JOB.get("thread")
@@ -105,6 +171,7 @@ def scan_capture_status() -> dict:
             "sharpness": float(_JOB["sharpness"]),
             "best_sharpness": float(_JOB["best_sharpness"]),
             "focus_attempt": int(_JOB["focus_attempt"]),
+            "returning": bool(_JOB["returning"]),
         }
 
 
@@ -132,6 +199,7 @@ def start_scan_capture(
     focus_fine_mm: float = DEFAULT_FINE_MM,
     focus_feed: float = 300,
     focus_during_scan: bool = True,
+    stage: dict | None = None,
 ) -> None:
     """Start the combined scan on a background thread."""
     if mode not in ("Uniform", "NSEW"):
@@ -148,6 +216,7 @@ def start_scan_capture(
         raise RuntimeError("The printer has not answered yet. Wait a moment and try again.")
     if status["printing"]:
         raise RuntimeError("A scan is already running.")
+    step_mm = round(float(step_mm), 2)
     stops = scan_stops(columns, rows, step_mm)
     focus_max_travel_mm = float(focus_max_travel_mm)
     focus_coarse_mm = float(focus_coarse_mm)
@@ -156,6 +225,7 @@ def start_scan_capture(
     focus_during_scan = bool(focus_during_scan)
     if focus_during_scan:
         _check_focus_settings(focus_max_travel_mm, focus_coarse_mm, focus_fine_mm, focus_feed)
+    back = return_to_start_moves(columns, rows, step_mm)
     with _JOB_LOCK:
         thread = _JOB.get("thread")
         if thread is not None and thread.is_alive():
@@ -177,6 +247,7 @@ def start_scan_capture(
         _JOB["sharpness"] = 0.0
         _JOB["best_sharpness"] = 0.0
         _JOB["focus_attempt"] = 0
+        _JOB["returning"] = False
     worker = threading.Thread(
         target=_scan_thread,
         kwargs={
@@ -192,6 +263,8 @@ def start_scan_capture(
             "focus_fine_mm": focus_fine_mm,
             "focus_feed": focus_feed,
             "focus_during_scan": focus_during_scan,
+            "return_moves": back,
+            "stage": None if stage is None else dict(stage),
         },
         name="scan-capture",
         daemon=True,
@@ -215,6 +288,8 @@ def _scan_thread(
     focus_fine_mm: float,
     focus_feed: float,
     focus_during_scan: bool,
+    return_moves: list[tuple[str, float]],
+    stage: dict | None,
 ) -> None:
     from src.capture.camera_automation_v2 import shutdown
     from src.capture.preview import stop_preview
@@ -222,6 +297,7 @@ def _scan_thread(
     camera = None
     saved = 0
     steps_taken = 0
+    sharpness_stops: list[dict] = []
     try:
         sides_on = RING_SIDES if mode == "Uniform" else 1
         shutter = shutter_ms(total_exposure_ms, sides_on)
@@ -239,6 +315,7 @@ def _scan_thread(
                 _JOB["index"] = index
                 _JOB["row"] = row
                 _JOB["col"] = col
+            focus_record = None
             if axis is not None:
                 move_axis(axis, delta, feed)
                 time.sleep(MOTION_PAUSE_S)
@@ -246,7 +323,7 @@ def _scan_thread(
                 with _JOB_LOCK:
                     _JOB["steps"] = steps_taken
                 if refocus_due(steps_taken, enabled=focus_during_scan):
-                    _focus_here(
+                    focus_record = _focus_here(
                         camera,
                         converter,
                         timeout_ms,
@@ -255,27 +332,41 @@ def _scan_thread(
                         coarse_mm=focus_coarse_mm,
                         fine_mm=focus_fine_mm,
                         feed=focus_feed,
+                        after_step=steps_taken,
                     )
             if mode == "Uniform":
                 files = [capture_uniform(camera, converter, ser, run_dir, timeout_ms, row, col)]
             else:
                 files = capture_nsew(camera, converter, ser, run_dir, timeout_ms, row, col)
-            write_manifest(
-                run_dir,
-                {
-                    "mode": "uniform" if mode == "Uniform" else "nsew",
-                    "row": row,
-                    "col": col,
-                    "total_exposure_ms": total_exposure_ms,
-                    "shutter_ms": shutter,
-                    "exposure_us": exposure_us,
-                    "sides_on": sides_on,
-                    "files": files,
-                },
-            )
+            scored = [
+                {"name": name, "sharpness": score_saved_frame(run_dir / name)}
+                for name in files
+            ]
+            sharpness_stops.append(sharpness_stop(row, col, scored, focus_record))
+            write_sharpness_log(run_dir, sharpness_stops)
+            manifest = {
+                "mode": "uniform" if mode == "Uniform" else "nsew",
+                "row": row,
+                "col": col,
+                "total_exposure_ms": total_exposure_ms,
+                "shutter_ms": shutter,
+                "exposure_us": exposure_us,
+                "sides_on": sides_on,
+                "files": files,
+            }
+            if stage is not None:
+                manifest["stage"] = stage
+            write_manifest(run_dir, manifest)
             saved += 1
             with _JOB_LOCK:
                 _JOB["saved"] = saved
+        if return_moves and not stop.is_set():
+            with _JOB_LOCK:
+                _JOB["returning"] = True
+            for axis, delta in return_moves:
+                if stop.is_set():
+                    break
+                move_axis(axis, delta, feed)
     except Exception as exc:
         with _JOB_LOCK:
             _JOB["error"] = str(exc)
@@ -290,6 +381,7 @@ def _scan_thread(
             _JOB["running"] = False
             _JOB["stopping"] = False
             _JOB["focusing"] = False
+            _JOB["returning"] = False
             _JOB["saved"] = saved
 
 
@@ -318,7 +410,8 @@ def _focus_here(
     coarse_mm: float,
     fine_mm: float,
     feed: float,
-) -> None:
+    after_step: int,
+) -> dict | None:
     """Hill-climb Z, and start again while sharpness is not above 80% of the opening score."""
 
     def measure() -> float:
@@ -343,9 +436,10 @@ def _focus_here(
 
     attempt = 0
     opening = None
+    searches: list[dict] = []
     while True:
         if stop.is_set():
-            return
+            break
         attempt += 1
         with _JOB_LOCK:
             _JOB["focusing"] = True
@@ -368,8 +462,21 @@ def _focus_here(
                 _JOB["focusing"] = False
         if opening is None:
             opening = float(result.start_sharpness)
+        searches.append(
+            {
+                "attempt": attempt,
+                "z_change_mm": float(result.best_offset_mm),
+                "sharpness": float(result.sharpness),
+                "best_sharpness": float(result.best_sharpness),
+                "start_sharpness": float(result.start_sharpness),
+                "stopped": bool(result.stopped),
+            }
+        )
         with _JOB_LOCK:
             _JOB["sharpness"] = float(result.sharpness)
             _JOB["best_sharpness"] = float(result.best_sharpness)
         if not needs_another_focus(result.best_sharpness, result.stopped, opening):
-            return
+            break
+    if not searches:
+        return None
+    return autofocus_log(searches, after_step=after_step)

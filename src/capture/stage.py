@@ -1,11 +1,13 @@
 """Serpentine stage scan, sent to the printer the same way Pronterface does.
 
 Millimetres, relative moves, a pause at the current point, then a step. Rows
-alternate +X and -X. Between rows the stage steps in -Y. Nothing is homed; the
-scan starts from the current position.
+alternate +X and -X. Between rows the stage steps in -Y. The scan starts from
+the current position. A finished scan steps back to that start, stop (1, 1).
+Home is separate: it parks X and Y on the Ender-3 V3 SE endstops and
+leaves Z where it is.
 
-The standard grid covers a 60 by 40 mm area. Each picture sees 6.86 mm, and
-neighbouring pictures overlap by 10 percent, so the stage steps 6.174 mm.
+The standard grid covers a 60 by 40 mm area. Each picture sees 7.40 mm.
+The pictures overlap by 10%, so the stage steps 6.66 mm between centers.
 """
 
 from __future__ import annotations
@@ -41,16 +43,40 @@ def _load_printer_link() -> dict:
 
 _LINK = _load_printer_link()
 
-FOV_MM = 6.86
+FOV_MM = 7.4
 OVERLAP = 0.10
 SCAN_WIDTH_MM = 60.0
 SCAN_HEIGHT_MM = 40.0
-DEFAULT_STEP_MM = FOV_MM * (1.0 - OVERLAP)
 DEFAULT_FEED = 1000
 DEFAULT_DWELL_MS = 1000
 DEFAULT_BAUD = 115200
+# Stock Creality Ender-3 V3 SE firmware homes X and Y toward the minimum
+# endstops. With the platform offset on, that park is reported as these positions.
+HOME_X_MM = -13.0
+HOME_Y_MM = -15.0
 # Extra time after the light settle and the shutter, for trigger, readout, and save.
 PAUSE_MARGIN_MS = 500
+
+
+def step_from_fov(fov_mm: float, overlap: float = OVERLAP) -> float:
+    """Distance between picture centers, in millimetres.
+
+    ``overlap`` is the fraction of the field shared with the next picture.
+    The printer is sent two decimal places, so the result is rounded to that.
+    """
+    fov_mm = float(fov_mm)
+    overlap = float(overlap)
+    if fov_mm <= 0:
+        raise ValueError("field of view must be greater than 0")
+    if overlap < 0 or overlap >= 1:
+        raise ValueError("overlap must be from 0 up to, but not including, 1")
+    step_mm = round(fov_mm * (1.0 - overlap), 2)
+    if step_mm <= 0:
+        raise ValueError("step must be greater than 0")
+    return step_mm
+
+
+DEFAULT_STEP_MM = step_from_fov(FOV_MM, OVERLAP)
 
 
 def grid_stops(span_mm: float, fov_mm: float = FOV_MM, step_mm: float = DEFAULT_STEP_MM) -> int:
@@ -81,6 +107,11 @@ def _num(value: float) -> str:
     return f"{rounded:.4f}".rstrip("0").rstrip(".")
 
 
+def _mm(value: float) -> str:
+    """A distance the printer moves, always with two digits after the decimal."""
+    return f"{round(float(value), 2):.2f}"
+
+
 def build_scan_gcode(
     step_mm: float = DEFAULT_STEP_MM,
     columns: int = DEFAULT_COLUMNS,
@@ -88,12 +119,12 @@ def build_scan_gcode(
     feed: float = DEFAULT_FEED,
     dwell_ms: float = DEFAULT_DWELL_MS,
 ) -> str:
-    """G-code for one serpentine scan. Defaults cover 60 by 40 mm at 10 percent overlap.
+    """G-code for one serpentine scan. Defaults cover 60 by 40 mm at the default step.
 
     ``columns`` and ``rows`` are the number of stops. The stage makes one
-    fewer move than that along each axis.
+    fewer move than that along each axis. Distances are sent with two decimal places.
     """
-    step_mm = float(step_mm)
+    step_mm = round(float(step_mm), 2)
     columns = int(columns)
     rows = int(rows)
     feed = float(feed)
@@ -107,7 +138,7 @@ def build_scan_gcode(
     if dwell_ms < 0:
         raise ValueError("pause cannot be negative")
 
-    step = _num(step_mm)
+    step = _mm(step_mm)
     feed_text = _num(feed)
     lines = ["G21", "G91", "", "; Start at top-left position"]
 
@@ -125,6 +156,11 @@ def build_scan_gcode(
         if row < rows - 1:
             move(f"Y-{step}")
     pause()
+    back = return_to_start_moves(columns, rows, step_mm)
+    if back:
+        lines.append("; Return to stop (1, 1)")
+        for axis, delta in back:
+            lines.append(f"G1 {axis}{_mm(delta)} F{feed_text}")
     lines.extend(["", "G90", ""])
     return "\n".join(lines)
 
@@ -170,7 +206,7 @@ def build_relative_move_gcode(axis: str, delta_mm: float, feed: float) -> str:
     axis = str(axis).upper()
     if axis not in {"X", "Y", "Z"}:
         raise ValueError("axis must be X, Y, or Z")
-    delta_mm = float(delta_mm)
+    delta_mm = round(float(delta_mm), 2)
     feed = float(feed)
     if not math.isfinite(delta_mm):
         raise ValueError(f"{axis} move must be a finite distance")
@@ -180,7 +216,7 @@ def build_relative_move_gcode(axis: str, delta_mm: float, feed: float) -> str:
         [
             "G21",
             "G91",
-            f"G1 {axis}{_num(delta_mm)} F{_num(feed)}",
+            f"G1 {axis}{_mm(delta_mm)} F{_num(feed)}",
             "M400",
             "G90",
             "",
@@ -223,6 +259,67 @@ def move_z(delta_mm: float, feed: float) -> None:
     move_axis("Z", delta_mm, feed)
 
 
+def return_to_start_moves(columns: int, rows: int, step_mm: float) -> list[tuple[str, float]]:
+    """Relative X and Y that land back on stop (1, 1) after a full serpentine.
+
+    Odd rows finish on the last column, so X steps back across the row. Even
+    rows already finish on column 1. Y always walks back toward the first row.
+    Z is left where focus put it.
+    """
+    columns = int(columns)
+    rows = int(rows)
+    step_mm = float(step_mm)
+    if columns < 1 or rows < 1:
+        raise ValueError("the scan needs at least one column and one row")
+    if step_mm <= 0:
+        raise ValueError("step must be greater than 0")
+    moves: list[tuple[str, float]] = []
+    if rows % 2 == 1 and columns > 1:
+        moves.append(("X", -(columns - 1) * step_mm))
+    if rows > 1:
+        moves.append(("Y", (rows - 1) * step_mm))
+    return moves
+
+
+def build_home_gcode() -> str:
+    """Park X and Y on the Ender-3 V3 SE endstops. Z is not homed.
+
+    ``G28 X Y`` is the firmware home. On the stock machine that position is
+    X −13 mm and Y −15 mm, so nothing else has to be commanded.
+    """
+    return "\n".join(
+        [
+            "G21",
+            "G28 X Y",
+            "M400",
+            "",
+        ]
+    )
+
+
+def home_xy() -> None:
+    """Home X and Y, then block until the stage is on the endstops."""
+    text = build_home_gcode()
+    status = printer_status()
+    if not status["connected"]:
+        raise RuntimeError("Connect the printer first.")
+    if not status["online"]:
+        raise RuntimeError("The printer has not answered yet. Wait a moment and try again.")
+    if status["printing"]:
+        raise RuntimeError("A scan is already running.")
+    start_gcode(text)
+    deadline = time.monotonic() + 90.0
+    while time.monotonic() < deadline:
+        info = printer_status()
+        if not info["printing"]:
+            if not info["connected"]:
+                raise RuntimeError(info["error"] or "The printer disconnected.")
+            return
+        time.sleep(0.05)
+    stop_scan()
+    raise TimeoutError("Homing did not finish.")
+
+
 def scan_stops(columns: int, rows: int, step_mm: float) -> list[tuple[int, int, str | None, float]]:
     """Visit order for one serpentine, starting at the current position.
 
@@ -263,14 +360,17 @@ def next_scan_row(existing: list[tuple[int, int]]) -> int:
     return max(row for row, _col in existing) + 1
 
 
-def scan_summary(step_mm: float, columns: int, rows: int) -> dict:
-    """Travel and stop counts for the controls."""
+def scan_summary(step_mm: float, columns: int, rows: int, fov_mm: float = FOV_MM) -> dict:
+    """Stop count and the photographed area for the controls."""
     step_mm = float(step_mm)
     columns = int(columns)
     rows = int(rows)
+    fov_mm = float(fov_mm)
     return {
         "x_mm": (columns - 1) * step_mm,
         "y_mm": (rows - 1) * step_mm,
+        "covered_x_mm": fov_mm + (columns - 1) * step_mm,
+        "covered_y_mm": fov_mm + (rows - 1) * step_mm,
         "stops": columns * rows,
         "columns": columns,
         "rows": rows,

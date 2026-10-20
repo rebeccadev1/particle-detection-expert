@@ -52,6 +52,7 @@ light_all = v2.light_all
 lights_off = v2.lights_off
 list_serial_ports = v2.list_serial_ports
 next_capture_location = v2.next_capture_location
+next_run_folder = v2.next_run_folder
 open_camera = v2.open_camera
 open_live_camera = v2.open_live_camera
 orient_frame = v2.orient_frame
