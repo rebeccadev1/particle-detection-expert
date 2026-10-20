@@ -335,8 +335,9 @@ def run_pipeline(
 
     When ``write_outputs`` is true and ``output_dir`` is set, writes
     ``particles.csv``, ``particles.xlsx``, ``last_pipeline.json`` (every setting
-    used for this run, in that output folder), ``mosaic_overlay.png`` when tiles
-    were stitched, and ``last_run.pdf`` (counts, size histogram, and that mosaic).
+    used for this run, in that output folder), ``mosaic_overlay.png`` and
+    ``mosaic_plain.png`` when tiles were stitched, and ``last_run.pdf`` (counts,
+    size histogram, and the mosaic with labels above the mosaic without them).
     The workbook's second sheet is the same settings as the JSON file. The
     particle table keeps id, global x/y in µm, size in µm, source tile, and confidence.
 
@@ -475,7 +476,11 @@ def _write_run_outputs(
     if not str(cfg_get(config, "output_dir", "") or "").strip():
         return
     from src.overall.io.results_writer import write_csv, write_run_settings, write_xlsx
-    from src.main_pipeline.report.report_generator import overlay_markers, write_last_run_pdf
+    from src.main_pipeline.report.report_generator import (
+        draw_overlay_markers,
+        overlay_rgb,
+        write_last_run_pdf,
+    )
 
     out = resolve_output_dir(cfg_get(config, "output_dir"))
     csv_path, _json_path, xlsx_path = default_output_paths(config)
@@ -484,18 +489,28 @@ def _write_run_outputs(
     write_run_settings(config, out / "last_pipeline.json", csv_path=csv_path)
 
     mosaic_png = out / "mosaic_overlay.png"
+    mosaic_plain_png = out / "mosaic_plain.png"
     mosaic_jpg = out / "mosaic_overlay.jpg"
     mosaic_rgb = None
+    plain_rgb = None
     if mosaic.placements:
-        mosaic_rgb = overlay_markers(mosaic, table, config, crop=None)
+        plain_rgb = overlay_rgb(mosaic, config, crop=None)
+        mosaic_rgb = draw_overlay_markers(plain_rgb, mosaic, table, config, crop=None)
         _write_overlay_png(mosaic_rgb, mosaic_png)
+        _write_overlay_png(plain_rgb, mosaic_plain_png)
         if mosaic_jpg.is_file():
             mosaic_jpg.unlink()
     else:
-        for stale in (mosaic_png, mosaic_jpg):
+        for stale in (mosaic_png, mosaic_plain_png, mosaic_jpg):
             if stale.is_file():
                 stale.unlink()
-    write_last_run_pdf(table, config, out / "last_run.pdf", mosaic_rgb=mosaic_rgb)
+    write_last_run_pdf(
+        table,
+        config,
+        out / "last_run.pdf",
+        mosaic_rgb=mosaic_rgb,
+        mosaic_plain=plain_rgb,
+    )
 
 
 def _write_overlay_png(rgb: np.ndarray, path: Path) -> None:

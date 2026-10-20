@@ -248,10 +248,24 @@ def render_label_tab(
     cache = st.session_state.setdefault("label_tile_cache", TileImageCache())
     origin_cache = st.session_state.setdefault("label_origin_cache", {})
 
-    st.subheader("Label detections")
+    st.header("Label detections")
     st.caption("One crop at a time. The key for each action is on its button.")
 
     pipeline_csv, pipeline_config = load_last_pipeline(config)
+    if not st.session_state.get("load_last_run"):
+        st.button(
+            "Load last run",
+            key="label_load_last_run",
+            disabled=pipeline_csv is None or not Path(pipeline_csv).is_file(),
+            on_click=request_last_run,
+            help=(
+                f"Queue {pipeline_csv.parent.name}/particles.csv"
+                if pipeline_csv is not None and Path(pipeline_csv).is_file()
+                else "Run the pipeline first."
+            ),
+        )
+        st.caption("Last run stays unloaded until you click Load last run.")
+        return
     use_last_pipeline = use_last_pipeline_queue(
         st.session_state.get("label_source"), pipeline_csv
     )
@@ -754,7 +768,8 @@ def _render_all_hits(
         [class*="st-key-all_hits_card_"] .all-hits-caption {
             min-height: 2.6em;
             margin: 0.2rem 0 0.35rem;
-            font-size: calc(0.85 * 16px + 8pt);
+            font-size: 0.8rem;
+            font-weight: 400;
             line-height: 1.3;
         }
         </style>
@@ -885,12 +900,18 @@ def _queued_label_items(
     return items, failed
 
 
-def _on_load_last_pipeline() -> None:
-    """Switch Label to Detection's last output folder (runs before widgets)."""
+def request_last_run() -> None:
+    """Load the saved pipeline run. Pages stay empty until this runs."""
     restore_label_queue()
+    st.session_state["load_last_run"] = True
     st.session_state["label_source"] = "last_pipeline"
     st.session_state["label_source_notice"] = True
     st.session_state.pop("label_front_key", None)
+
+
+def _on_load_last_pipeline() -> None:
+    """Switch Label to Detection's last output folder (runs before widgets)."""
+    request_last_run()
 
 
 def _on_empty_label_queue(csv_path: str) -> None:
@@ -988,7 +1009,17 @@ def render_tile_inspect_tab(
     mosaic: LazyMosaic | None,
 ) -> None:
     """Walk the last-pipeline tile folder, with detection and label circles."""
-    st.subheader("Inspect tiles")
+    st.header("Inspect tiles")
+    if not st.session_state.get("load_last_run"):
+        pipeline_csv, _pipeline_config = load_last_pipeline(config)
+        st.button(
+            "Load last run",
+            key="inspect_load_last_run",
+            disabled=pipeline_csv is None or not Path(pipeline_csv).is_file(),
+            on_click=request_last_run,
+        )
+        st.caption("Last run stays unloaded until you click Load last run.")
+        return
 
     try:
         run_config, last_csv, detections = _last_pipeline_view(config, table)
@@ -1395,9 +1426,9 @@ def _last_run_stat_card(label: str, value: int | str, color: str, wash: str) -> 
     return (
         "<div style='flex:0 0 auto;width:max-content;padding:0.7rem 0.85rem;"
         f"border-radius:12px;background:{wash};border:1px solid {color}66;'>"
-        f"<div style='font-size:calc(0.78 * 16px + 8pt);font-weight:650;letter-spacing:0.04em;"
+        f"<div style='font-size:0.75rem;font-weight:500;letter-spacing:0.03em;"
         f"text-transform:uppercase;color:{color};white-space:nowrap;'>{label}</div>"
-        f"<div style='font-size:calc(1.9 * 16px + 8pt);font-weight:750;line-height:1.15;"
+        f"<div style='font-size:1.1rem;font-weight:600;line-height:1.2;"
         f"font-variant-numeric:tabular-nums;color:{color};white-space:nowrap;'>{shown}</div>"
         "</div>"
     )
@@ -1717,6 +1748,9 @@ def render_labeled_tiles_tab(
     table: pd.DataFrame | None = None,
 ) -> None:
     """Latest pipeline run: tiles with detector circles and zoomed crops."""
+    if not st.session_state.get("load_last_run"):
+        return
+    st.header("Labeled tiles")
     run_config = dict(config)
     session_config = st.session_state.get("config")
     if isinstance(session_config, dict):
@@ -2103,7 +2137,7 @@ def render_collection_tab(
     df = store.by_label(label)
     if campaign is not None:
         df = rows_for_campaign(df, campaign)
-    st.subheader(title)
+    st.header(title)
     st.caption(f"{len(df)} crops")
     if df.empty:
         st.info("No crops in this collection yet.")

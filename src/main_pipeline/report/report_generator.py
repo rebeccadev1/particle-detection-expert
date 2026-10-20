@@ -132,6 +132,70 @@ def overlay_downsample(
     return downsample_for_target(height, width, target_mb=target_mb, channels=3)
 
 
+def overlay_rgb(
+    mosaic: LazyMosaic,
+    config: dict[str, Any],
+    crop: tuple[int, int, int, int] | None = None,
+    progress_cb: Callable[[int, int, str], None] | None = None,
+) -> np.ndarray:
+    """Downsampled mosaic with no particle markers.
+
+    ``crop`` is ``(y, x, h, w)`` in full-resolution mosaic pixels. ``crop=None``
+    stitches every tile into one overview.
+    """
+    downsample = overlay_downsample(mosaic, config, crop=crop)
+    preview = mosaic.preview(downsample=downsample, crop=crop, progress_cb=progress_cb)
+    return _to_display_rgb(preview)
+
+
+def draw_overlay_markers(
+    rgb: np.ndarray,
+    mosaic: LazyMosaic,
+    particles: pd.DataFrame,
+    config: dict[str, Any],
+    crop: tuple[int, int, int, int] | None = None,
+) -> np.ndarray:
+    """Copy ``rgb`` and draw orange circles on detected particles.
+
+    Marker positions are converted back to mosaic pixels using ``pixel_size_nm``.
+    ``crop`` is ``(y, x, h, w)`` in full-resolution mosaic pixels, matching the
+    crop used to build ``rgb``.
+    """
+    if particles.empty or np.asarray(rgb).size == 0:
+        return rgb
+
+    placed_names = {placement.name for placement in mosaic.placements}
+    if placed_names and "source_tile" in particles.columns:
+        names = particles["source_tile"].astype(str).map(
+            lambda path: str(path).replace("\\", "/").rsplit("/", 1)[-1]
+        )
+        particles = particles.loc[names.isin(placed_names)]
+        if particles.empty:
+            return rgb
+
+    downsample = overlay_downsample(mosaic, config, crop=crop)
+    pixel_size = float(cfg_get(config, "pixel_size_nm", 1.0))
+    if pixel_size <= 0:
+        pixel_size = 1.0
+    y_off = 0 if crop is None else crop[0]
+    x_off = 0 if crop is None else crop[1]
+    marked = np.array(rgb, copy=True)
+
+    for _, row in particles.iterrows():
+        x_px = float(row["x_global"]) / pixel_size
+        y_px = float(row["y_global"]) / pixel_size
+        x_d = int(round((x_px - x_off) / downsample))
+        y_d = int(round((y_px - y_off) / downsample))
+        if not (0 <= x_d < marked.shape[1] and 0 <= y_d < marked.shape[0]):
+            continue
+        particle_r = float(row["size"]) / pixel_size / downsample / 2.0
+        radius = max(int(round(particle_r)) + 10, 14)
+        cv2.circle(
+            marked, (x_d, y_d), radius, (255, 140, 40), thickness=3, lineType=cv2.LINE_AA
+        )
+    return marked
+
+
 def overlay_markers(
     mosaic: LazyMosaic,
     particles: pd.DataFrame,
@@ -145,40 +209,8 @@ def overlay_markers(
     ``crop`` is ``(y, x, h, w)`` in full-resolution mosaic pixels. ``crop=None``
     stitches every tile into one overview.
     """
-    downsample = overlay_downsample(mosaic, config, crop=crop)
-    preview = mosaic.preview(downsample=downsample, crop=crop, progress_cb=progress_cb)
-    rgb = _to_display_rgb(preview)
-    if particles.empty or rgb.size == 0:
-        return rgb
-
-    placed_names = {placement.name for placement in mosaic.placements}
-    if placed_names and "source_tile" in particles.columns:
-        names = particles["source_tile"].astype(str).map(
-            lambda path: str(path).replace("\\", "/").rsplit("/", 1)[-1]
-        )
-        particles = particles.loc[names.isin(placed_names)]
-        if particles.empty:
-            return rgb
-
-    pixel_size = float(cfg_get(config, "pixel_size_nm", 1.0))
-    if pixel_size <= 0:
-        pixel_size = 1.0
-    y_off = 0 if crop is None else crop[0]
-    x_off = 0 if crop is None else crop[1]
-
-    for _, row in particles.iterrows():
-        x_px = float(row["x_global"]) / pixel_size
-        y_px = float(row["y_global"]) / pixel_size
-        x_d = int(round((x_px - x_off) / downsample))
-        y_d = int(round((y_px - y_off) / downsample))
-        if not (0 <= x_d < rgb.shape[1] and 0 <= y_d < rgb.shape[0]):
-            continue
-        particle_r = float(row["size"]) / pixel_size / downsample / 2.0
-        radius = max(int(round(particle_r)) + 10, 14)
-        cv2.circle(
-            rgb, (x_d, y_d), radius, (255, 140, 40), thickness=3, lineType=cv2.LINE_AA
-        )
-    return rgb
+    rgb = overlay_rgb(mosaic, config, crop=crop, progress_cb=progress_cb)
+    return draw_overlay_markers(rgb, mosaic, particles, config, crop=crop)
 
 
 def _to_display_rgb(image: np.ndarray) -> np.ndarray:
@@ -207,11 +239,16 @@ def write_last_run_pdf(
     config: Mapping[str, Any],
     path: str | Path,
     mosaic_rgb: np.ndarray | None = None,
+    mosaic_plain: np.ndarray | None = None,
 ) -> Path:
-    """Write the Last run summary, size histogram, and mosaic with hits."""
+    """Write the Last run summary, size histogram, and mosaic with hits.
+
+    When ``mosaic_plain`` is set, the mosaic page shows the marked image and
+    the same mosaic without markers beneath it.
+    """
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    pages = _last_run_pages(table, config, mosaic_rgb)
+    pages = _last_run_pages(table, config, mosaic_rgb, mosaic_plain)
     pages[0].save(
         destination,
         "PDF",
@@ -226,14 +263,23 @@ def _last_run_pages(
     table: pd.DataFrame,
     config: Mapping[str, Any],
     mosaic_rgb: np.ndarray | None,
+    mosaic_plain: np.ndarray | None = None,
 ) -> list[Image.Image]:
     pages = [_summary_page(table, config)]
     if mosaic_rgb is not None and np.asarray(mosaic_rgb).size > 0:
-        pages.append(_mosaic_page(np.asarray(mosaic_rgb)))
+        pages.append(_mosaic_page(np.asarray(mosaic_rgb), mosaic_plain))
     return pages
 
 
-_FONT_CANDIDATES = (
+# Page pixels are A4 at 150 dpi, so 1 pt is 150/72 px.
+_PT_PX = 150.0 / 72.0
+_H1 = round(18 * _PT_PX)
+_H2 = round(14 * _PT_PX)
+_FIGURE = round(13 * _PT_PX)
+_BODY = round(11 * _PT_PX)
+_LABEL = round(9 * _PT_PX)
+
+_FONT_REGULAR = (
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/Library/Fonts/Arial Unicode.ttf",
@@ -241,23 +287,28 @@ _FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 )
-_FONT_FILE: str | None = None
+_FONT_BOLD = (
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+)
+_FONT_FILE: dict[bool, str | None] = {False: None, True: None}
 
 
-def _font_file() -> str | None:
-    global _FONT_FILE
-    if _FONT_FILE is not None:
-        return _FONT_FILE or None
-    for candidate in _FONT_CANDIDATES:
+def _font_file(*, bold: bool = False) -> str | None:
+    cached = _FONT_FILE[bold]
+    if cached is not None:
+        return cached or None
+    for candidate in (_FONT_BOLD if bold else _FONT_REGULAR):
         if Path(candidate).is_file():
-            _FONT_FILE = candidate
+            _FONT_FILE[bold] = candidate
             return candidate
-    _FONT_FILE = ""
+    _FONT_FILE[bold] = ""
     return None
 
 
-def _font(size: int) -> ImageFont.ImageFont:
-    path = _font_file()
+def _font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
+    path = _font_file(bold=bold)
     if path:
         return ImageFont.truetype(path, size=size)
     try:
@@ -280,20 +331,20 @@ def _text_width(font: ImageFont.ImageFont, text: str) -> int:
 def _summary_page(table: pd.DataFrame, config: Mapping[str, Any]) -> Image.Image:
     image = Image.new("RGB", (_PAGE_W, _PAGE_H), "white")
     draw = ImageDraw.Draw(image)
-    metric_label = _font(18)
-    metric_value = _font(36)
-    body = _font(20)
-    small = _font(16)
+    metric_label = _font(_LABEL)
+    metric_value = _font(_FIGURE)
+    body = _font(_BODY)
+    header = _font(_LABEL, bold=True)
 
     y = _MARGIN
     heading = _run_title(config)
-    title_size = 42
-    title = _font(title_size)
-    while title_size > 22 and _text_width(title, heading) > _PAGE_W - 2 * _MARGIN:
+    title_size = _H1
+    title = _font(title_size, bold=True)
+    while title_size > _H2 and _text_width(title, heading) > _PAGE_W - 2 * _MARGIN:
         title_size -= 2
-        title = _font(title_size)
+        title = _font(title_size, bold=True)
     draw.text((_MARGIN, y), heading, fill=_INK, font=title)
-    y += 72
+    y += title_size + 20
 
     stats = summary_stats(table)
     metrics = (
@@ -306,23 +357,23 @@ def _summary_page(table: pd.DataFrame, config: Mapping[str, Any]) -> Image.Image
     for index, (label, value) in enumerate(metrics):
         x = _MARGIN + index * slot
         draw.text((x, y), label, fill=_MUTED, font=metric_label)
-        draw.text((x, y + 28), value, fill=_INK, font=metric_value)
-    y += 100
+        draw.text((x, y + _LABEL + 6), value, fill=_INK, font=metric_value)
+    y += _LABEL + 6 + _FIGURE + 22
     draw.line([(_MARGIN, y), (_PAGE_W - _MARGIN, y)], fill=_RULE, width=2)
-    y += 28
+    y += 22
 
     caption = "Detected particles at least this large (equivalent circular diameter)."
     draw.text((_MARGIN, y), caption, fill=_INK, font=body)
-    y += 40
+    y += _BODY + 14
     counts = particles_at_least(table)
-    y = _draw_count_table(draw, counts, y, body, small)
-    y += 36
+    y = _draw_count_table(draw, counts, y, body, header)
+    y += 28
 
-    draw.text((_MARGIN, y), "Size distribution (µm)", fill=_INK, font=_font(28))
-    y += 48
+    draw.text((_MARGIN, y), "Size distribution (µm)", fill=_INK, font=_font(_H2, bold=True))
+    y += _H2 + 16
     min_size_nm = float((config.get("detection") or {}).get("min_size_nm") or 0.0)
     distribution = size_distribution(table, min_size_nm / NM_PER_UM)
-    _draw_histogram(image, distribution, y, y + 640, small)
+    _draw_histogram(image, distribution, y, y + 640)
     return image
 
 
@@ -331,15 +382,15 @@ def _draw_count_table(
     counts: pd.DataFrame,
     y: int,
     body: ImageFont.ImageFont,
-    small: ImageFont.ImageFont,
+    header: ImageFont.ImageFont,
 ) -> int:
     left = _MARGIN
     right = _PAGE_W - _MARGIN
     mid = left + 280
-    row_h = 36
-    draw.text((left, y), "Size", fill=_MUTED, font=small)
-    draw.text((mid, y), "Particles", fill=_MUTED, font=small)
-    y += 28
+    row_h = _BODY + 14
+    draw.text((left, y), "Size", fill=_MUTED, font=header)
+    draw.text((mid, y), "Particles", fill=_MUTED, font=header)
+    y += _LABEL + 10
     draw.line([(left, y), (right, y)], fill=_RULE, width=1)
     y += 8
     for _, row in counts.iterrows():
@@ -399,14 +450,15 @@ def _draw_histogram(
     distribution: pd.DataFrame,
     top: int,
     bottom: int,
-    font: ImageFont.ImageFont,
 ) -> None:
     draw = ImageDraw.Draw(image)
-    label_w = 52
-    left = _MARGIN + 28 + label_w
+    ticks_font = _font(_LABEL)
+    axis_font = _font(_BODY)
+    label_w = 72
+    left = _MARGIN + 36 + label_w
     right = _PAGE_W - _MARGIN
     plot_top = top + 8
-    plot_bottom = bottom - 56
+    plot_bottom = bottom - _BODY - _LABEL - 28
     counts = [int(value) for value in distribution["count"].tolist()]
     labels = [str(label) for label in distribution.index]
     peak = max(counts) if counts else 0
@@ -423,9 +475,14 @@ def _draw_histogram(
         y = plot_bottom - (tick / scale) * (plot_bottom - plot_top)
         draw.line([(left - 6, y), (left, y)], fill=_INK, width=2)
         label = _tick_label(tick)
-        draw.text((left - 10 - _text_width(font, label), y - 8), label, fill=_INK, font=font)
+        draw.text(
+            (left - 10 - _text_width(ticks_font, label), y - _LABEL // 2),
+            label,
+            fill=_INK,
+            font=ticks_font,
+        )
     axis_y = "Amount of particles"
-    _paste_vertical(image, axis_y, font, _MARGIN - 8, plot_top + 70)
+    _paste_vertical(image, axis_y, axis_font, 12, plot_top + 48)
     if not counts:
         return
     slot = (right - left) / len(counts)
@@ -438,41 +495,66 @@ def _draw_histogram(
         draw.rectangle([bar_left, bar_top, bar_right, plot_bottom], fill=_BAR)
         center = (bar_left + bar_right) / 2
         draw.line([(center, plot_bottom), (center, plot_bottom + 6)], fill=_INK, width=2)
-        text_w = _text_width(font, label)
-        draw.text((center - text_w / 2, plot_bottom + 10), label, fill=_INK, font=font)
+        text_w = _text_width(ticks_font, label)
+        draw.text((center - text_w / 2, plot_bottom + 8), label, fill=_INK, font=ticks_font)
     axis = "Size (µm)"
     draw.text(
-        ((left + right) / 2 - _text_width(font, axis) / 2, bottom - 22),
+        ((left + right) / 2 - _text_width(axis_font, axis) / 2, bottom - _BODY - 4),
         axis,
         fill=_INK,
-        font=font,
+        font=axis_font,
     )
 
 
-def _mosaic_page(mosaic_rgb: np.ndarray) -> Image.Image:
-    image = Image.new("RGB", (_PAGE_W, _PAGE_H), "white")
-    draw = ImageDraw.Draw(image)
-    draw.text((_MARGIN, _MARGIN), "Stitched mosaic", fill=_INK, font=_font(42))
-    draw.text(
-        (_MARGIN, _MARGIN + 56),
-        "Downsampled mosaic with detected particles marked.",
-        fill=_MUTED,
-        font=_font(20),
-    )
+def _rgb_tile(mosaic_rgb: np.ndarray) -> Image.Image:
     rgb = np.asarray(mosaic_rgb)
     if rgb.ndim == 2:
         rgb = cv2.cvtColor(rgb, cv2.COLOR_GRAY2RGB)
-    tile = Image.fromarray(np.ascontiguousarray(rgb[:, :, :3].astype(np.uint8)), mode="RGB")
+    return Image.fromarray(np.ascontiguousarray(rgb[:, :, :3].astype(np.uint8)), mode="RGB")
+
+
+def _paste_fitted(page: Image.Image, tile: Image.Image, top: int, max_h: int) -> int:
     max_w = _PAGE_W - 2 * _MARGIN
-    max_h = _PAGE_H - _MARGIN - 140
-    scale = min(max_w / tile.width, max_h / tile.height, 1.0)
+    scale = min(max_w / tile.width, max_h / max(tile.height, 1), 1.0)
     resized = tile.resize(
         (max(int(tile.width * scale), 1), max(int(tile.height * scale), 1)),
         Image.Resampling.LANCZOS,
     )
-    x = (_PAGE_W - resized.width) // 2
-    y = _MARGIN + 110
-    image.paste(resized, (x, y))
+    page.paste(resized, ((_PAGE_W - resized.width) // 2, top))
+    return top + resized.height
+
+
+def _mosaic_page(
+    mosaic_rgb: np.ndarray,
+    mosaic_plain: np.ndarray | None = None,
+) -> Image.Image:
+    image = Image.new("RGB", (_PAGE_W, _PAGE_H), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((_MARGIN, _MARGIN), "Stitched mosaic", fill=_INK, font=_font(_H1, bold=True))
+    y = _MARGIN + _H1 + 12
+    plain = None if mosaic_plain is None or np.asarray(mosaic_plain).size == 0 else mosaic_plain
+    if plain is None:
+        draw.text(
+            (_MARGIN, y),
+            "Downsampled mosaic with detected particles marked.",
+            fill=_MUTED,
+            font=_font(_BODY),
+        )
+        y += _BODY + 20
+        _paste_fitted(image, _rgb_tile(mosaic_rgb), y, _PAGE_H - y - _MARGIN)
+        return image
+
+    caption_h = _BODY + 10
+    gap = 28
+    available = _PAGE_H - y - _MARGIN - 2 * caption_h - gap
+    slot = max(available // 2, 1)
+    draw.text((_MARGIN, y), "With labels", fill=_MUTED, font=_font(_BODY))
+    y += caption_h
+    y = _paste_fitted(image, _rgb_tile(mosaic_rgb), y, slot)
+    y += gap
+    draw.text((_MARGIN, y), "Without labels", fill=_MUTED, font=_font(_BODY))
+    y += caption_h
+    _paste_fitted(image, _rgb_tile(plain), y, slot)
     return image
 
 

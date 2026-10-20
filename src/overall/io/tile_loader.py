@@ -85,6 +85,26 @@ def resolve_input_dir(folder: str | Path) -> Path:
     )
 
 
+def follow_latest_capture(
+    current: str,
+    previous_suggestion: str | None,
+    latest: str | None,
+    *,
+    seeded: bool,
+) -> tuple[str, str | None, bool]:
+    """Tile folder that should follow the newest capture folder.
+
+    The first time a capture folder exists, use it. After that, keep a folder
+    the user picked, and keep following the newest capture while the tile
+    folder is still the previous suggestion or still empty.
+    """
+    if not latest:
+        return current, previous_suggestion, seeded
+    if not seeded or not str(current or "") or current == previous_suggestion:
+        return latest, latest, True
+    return current, previous_suggestion, True
+
+
 def input_folder_labels(root: str | Path | None = None) -> list[str]:
     """Folder names under Inputs that the main pipeline can run.
 

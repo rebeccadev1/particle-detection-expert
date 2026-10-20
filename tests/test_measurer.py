@@ -436,6 +436,7 @@ def test_pipeline_runs_on_bmp_tiles(tmp_path: Path) -> None:
     ]
     assert (tmp_path / "out" / "last_run.pdf").read_bytes().startswith(b"%PDF")
     assert (tmp_path / "out" / "mosaic_overlay.png").is_file()
+    assert (tmp_path / "out" / "mosaic_plain.png").is_file()
     saved = dict(zip(book["parameters"]["parameter"], book["parameters"]["value"]))
     assert saved["preprocessing.denoise"] is False
     assert saved["detection.method"] == "tophat"

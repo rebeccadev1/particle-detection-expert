@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 import io
 import sys
 from copy import deepcopy
@@ -15,8 +16,19 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import src.capture.camera_automation_v2 as _camera_v2  # noqa: E402
+import src.overall.io.tile_loader as _tile_loader  # noqa: E402
+
+# Streamlit reruns this file but keeps already imported modules. Reload so a
+# name added after the process started, such as latest_run_folder, is present.
+importlib.reload(_camera_v2)
+importlib.reload(_tile_loader)
+latest_run_folder = _camera_v2.latest_run_folder
+input_folder_labels = _tile_loader.input_folder_labels
+
 from src.capture.capture_ui import keep_capture_inputs, keep_stage_inputs, render_capture_tab, suspend_live_view  # noqa: E402
 from src.overall.config import (  # noqa: E402
+    DEFAULT_INPUT_DIR,
     apply_nsew_settings,
     beta_preset_rows,
     load_config,
@@ -27,12 +39,12 @@ from src.overall.config import (  # noqa: E402
     resolve_output_dir,
 )
 from src.overall.io.results_writer import excel_bytes, result_table, write_csv, write_xlsx  # noqa: E402
-from src.overall.io.tile_loader import input_folder_labels  # noqa: E402
 from src.verification.ui import (  # noqa: E402
     render_collection_tab,
     render_label_tab,
     render_labeled_tiles_tab,
     render_tile_inspect_tab,
+    request_last_run,
 )
 from src.verification.queue import load_last_pipeline, load_particles_csv, write_last_pipeline  # noqa: E402
 from src.main_pipeline.ml.infer import next_versioned_model_path  # noqa: E402
@@ -40,9 +52,10 @@ from src.training.train import default_label_path, main as train_main  # noqa: E
 from src.main_pipeline.job import claim_pipeline_result, pipeline_status, start_pipeline, stop_pipeline  # noqa: E402
 from src.redirector.redirector import render_redirector_tab  # noqa: E402
 from src.main_pipeline.report.report_generator import (  # noqa: E402
+    draw_overlay_markers,
     encode_overlay_jpeg,
     overlay_downsample,
-    overlay_markers,
+    overlay_rgb,
     particles_at_least,
     size_distribution,
     summary_stats,
@@ -71,26 +84,76 @@ st.markdown(
     [class*="st-key-block-"] [data-baseweb="textarea"] {
         background-color: #e2e6f2;
     }
+    /* Body is 16px + 4pt. Each step below is smaller and lighter.
+       h1 app title, h2 section, h3 subsection, then figures, then body. */
     html {
-        font-size: calc(16px + 8pt) !important;
+        font-size: calc(16px + 4pt) !important;
+    }
+    h1, h2, h3 {
+        line-height: 1.25 !important;
+        margin: 0 !important;
     }
     h1 {
-        font-size: calc(2.75 * 16px + 8pt) !important;
+        font-size: 2rem !important;
+        font-weight: 700 !important;
+        padding: 0.35rem 0 0.5rem !important;
     }
     h2 {
-        font-size: calc(2.25 * 16px + 8pt) !important;
+        font-size: 1.5rem !important;
+        font-weight: 650 !important;
+        padding: 0.15rem 0 0.4rem !important;
     }
     h3 {
-        font-size: calc(1.75 * 16px + 8pt) !important;
+        font-size: 1.25rem !important;
+        font-weight: 600 !important;
+        padding: 0.1rem 0 0.3rem !important;
     }
-    [data-testid="stMetricValue"] {
-        font-size: calc(2.25 * 16px + 8pt) !important;
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 {
+        font-size: 1.05rem !important;
+        font-weight: 650 !important;
+        padding: 0.1rem 0 0.35rem !important;
+    }
+    [data-testid="stMetricValue"],
+    [data-testid="stMetricValue"] * {
+        font-size: 1.1rem !important;
+        font-weight: 600 !important;
+    }
+    [data-testid="stMetricLabel"],
+    [data-testid="stMetricLabel"] * {
+        font-size: 0.75rem !important;
+        font-weight: 500 !important;
+    }
+    [data-testid="stCaptionContainer"] p,
+    [data-testid="stCaptionContainer"] span {
+        font-size: 0.8rem !important;
+        font-weight: 400 !important;
+    }
+    [data-testid="stWidgetLabel"] p {
+        font-size: 0.95rem !important;
+        font-weight: 500 !important;
+    }
+    [data-testid="stMarkdownContainer"] p {
+        font-weight: 400;
+    }
+    button[data-baseweb="tab"] {
+        font-size: 0.95rem !important;
+        font-weight: 550 !important;
+    }
+    .stButton button, .stDownloadButton button {
+        font-size: 0.95rem !important;
+        font-weight: 500 !important;
+    }
+    [data-testid="stTable"] th {
+        font-size: 0.8rem !important;
+        font-weight: 650 !important;
+    }
+    [data-testid="stTable"] td {
+        font-size: 0.9rem !important;
+        font-weight: 400 !important;
     }
     [data-testid="stMainBlockContainer"] {
         padding-top: 3.75rem !important;
-    }
-    [data-testid="stMain"] h1 {
-        padding-top: 0.75rem !important;
     }
     </style>
     """,
@@ -99,7 +162,7 @@ st.markdown(
 st.title("Particle Detection Software")
 
 NM_PER_UM = 1000.0
-UI_SCHEMA = "mixed_layout_v24"
+UI_SCHEMA = "mixed_layout_v25"
 
 def _nm_to_um(nm: float) -> float:
     return float(nm) / NM_PER_UM
@@ -386,12 +449,33 @@ def _prepare_ui_state(base: dict) -> None:
         st.session_state["ui_sidebar_frontend_seeded"] = True
     _backfill_held_widgets(base)
     _keep_filename_pattern(base)
+    _apply_capture_suggestion()
     if not isinstance(st.session_state.get("ui_settings_nsew"), bool):
         st.session_state["ui_settings_nsew"] = False
     if st.session_state.get("ui_settings_profile") not in ("Uniform", "NSEW"):
         st.session_state["ui_settings_profile"] = (
             "NSEW" if st.session_state.get("ui_settings_nsew") else "Uniform"
         )
+
+
+def _capture_folder_label(folder: Path) -> str:
+    """``Inputs``-relative name, such as ``Groundup/v1 2026-10-20``."""
+    try:
+        return folder.resolve().relative_to(DEFAULT_INPUT_DIR.resolve()).as_posix()
+    except ValueError:
+        return folder.name
+
+
+def _apply_capture_suggestion() -> None:
+    """Remember the newest capture folder so Tile folder can offer it first.
+
+    The control itself stays empty until a folder is chosen, so the placeholder
+    stays visible.
+    """
+    latest_path = latest_run_folder()
+    if latest_path is None:
+        return
+    st.session_state["ui_suggested_capture"] = _capture_folder_label(latest_path)
 
 
 def _render_adjust_parameters(base: dict) -> None:
@@ -451,32 +535,45 @@ def _render_adjust_parameters(base: dict) -> None:
     with st.container(key="sidebar_sec_Loading"):
         _restore_widgets(_SIDEBAR_SECTIONS["Loading"], force=seed_frontend)
         folder_choices = input_folder_labels()
+        suggestion = st.session_state.get("ui_suggested_capture")
+        if isinstance(suggestion, str) and suggestion in folder_choices:
+            folder_choices = [suggestion, *(name for name in folder_choices if name != suggestion)]
+        input_key = _live_key("ui_input_dir")
         current_folder = str(
-            st.session_state.get(_live_key("ui_input_dir"))
+            st.session_state.get(input_key)
             or st.session_state.get("ui_input_dir")
             or ""
         )
         if current_folder and current_folder not in folder_choices:
             folder_choices = [current_folder, *folder_choices]
+        elif not current_folder:
+            st.session_state.pop(input_key, None)
+            st.session_state["ui_input_dir"] = ""
+            st.session_state[_hold_key("ui_input_dir")] = ""
         folder_help = (
             "Folder under ASML SE/Inputs. Suggestions appear as you type."
         )
         if folder_choices:
+            input_kwargs = {}
+            if input_key not in st.session_state:
+                input_kwargs["index"] = None
             st.selectbox(
                 "Tile folder",
                 folder_choices,
                 placeholder="Start typing a folder name",
                 accept_new_options=True,
                 filter_mode="fuzzy",
-                key=_live_key("ui_input_dir"),
+                key=input_key,
                 on_change=_on_input_folder,
                 args=(base,),
                 help=folder_help,
+                **input_kwargs,
             )
         else:
             st.text_input(
                 "Tile folder",
-                key=_live_key("ui_input_dir"),
+                key=input_key,
+                placeholder="Start typing a folder name",
                 on_change=_on_input_folder,
                 args=(base,),
                 help=folder_help,
@@ -766,7 +863,8 @@ def _render_adjust_parameters(base: dict) -> None:
 
 def _config_from_state(base: dict) -> dict:
     config = deepcopy(base)
-    config["input_dir"] = _widget_value("ui_input_dir")
+    chosen_input = _widget_value("ui_input_dir")
+    config["input_dir"] = "" if chosen_input is None else str(chosen_input)
     chosen_output = _widget_value("ui_output_dir")
     chosen_output = "" if chosen_output is None else str(chosen_output).strip()
     if not chosen_output:
@@ -853,19 +951,26 @@ def _apply_finished_pipeline() -> None:
     st.session_state["mosaic"] = mosaic
     st.session_state["config"] = config
     st.session_state.pop("overlay", None)
+    st.session_state.pop("overlay_plain", None)
     st.session_state.pop("overlay_key", None)
     out_dir = resolve_output_dir(config["output_dir"])
     csv_path = out_dir / "particles.csv"
     xlsx_path = out_dir / "particles.xlsx"
     write_csv(table, csv_path)
     write_xlsx(table, xlsx_path, config)
-    for report_name in ("last_pipeline.json", "last_run.pdf", "mosaic_overlay.png"):
+    for report_name in (
+        "last_pipeline.json",
+        "last_run.pdf",
+        "mosaic_overlay.png",
+        "mosaic_plain.png",
+    ):
         report_path = out_dir / report_name
         if report_path.is_file():
             report_path.touch()
     write_last_pipeline(config, csv_path)
     st.session_state["last_pipeline_csv"] = str(csv_path)
     st.session_state["ui_show_last_run"] = True
+    st.session_state["load_last_run"] = True
     stats = summary_stats(table)
     st.success(
         f"{stats['particle_count']} particles. Mean size {_nm_to_um(stats['size_mean']):.2f} µm."
@@ -1052,6 +1157,16 @@ def _render_training(config: dict) -> None:
         st.caption(f"Detection model: `{active}`")
 
 
+def _mosaic_labels_on() -> bool:
+    """Checkbox for orange detection circles on the stitched mosaic. On by default."""
+    return st.checkbox(
+        "Labels",
+        value=True,
+        key="mosaic_show_labels",
+        help="Orange circles around detected particles. Off shows the stitched mosaic alone.",
+    )
+
+
 def _saved_mosaic_path(active_config: dict) -> Path | None:
     """Mosaic written for this output folder, only if it belongs to the current CSV.
 
@@ -1086,6 +1201,8 @@ def _finished_run_state(config: dict) -> tuple[pd.DataFrame | None, object, dict
     active_config["report"] = config.get("report", active_config.get("report", {}))
     if isinstance(table, pd.DataFrame):
         return table, mosaic, active_config
+    if not st.session_state.get("load_last_run"):
+        return None, None, active_config
     last_csv, run_config = load_last_pipeline(config)
     if last_csv is None or not last_csv.is_file():
         return None, None, active_config
@@ -1104,7 +1221,7 @@ def _render_size_threshold_table(table: pd.DataFrame) -> None:
 
 
 def _render_size_bins(table: pd.DataFrame, min_size_um: float) -> None:
-    st.subheader("Size distribution (µm)")
+    st.header("Size distribution (µm)")
     if table.empty or "size" not in table.columns:
         st.info("This run has no particle sizes to bin.")
         return
@@ -1121,12 +1238,19 @@ def _render_finished_run(config: dict) -> None:
     table, mosaic, active_config = _finished_run_state(config)
     if table is None:
         with st.container(border=True, key="block-last-run"):
-            st.subheader("Last run")
-            st.info("Run the pipeline once. Last run keeps that table, size bins, and mosaic.")
+            st.header("Last run")
+            saved_csv, _saved_config = load_last_pipeline(config)
+            st.button(
+                "Load last run",
+                key="run_load_last_run",
+                on_click=request_last_run,
+                disabled=saved_csv is None or not Path(saved_csv).is_file(),
+            )
+            st.caption("Last run stays unloaded until you click Load last run.")
         return
 
     with st.container(border=True, key="block-last-run"):
-        st.subheader("Last run")
+        st.header("Last run")
         stats = summary_stats(table)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Particles", stats["particle_count"])
@@ -1139,14 +1263,25 @@ def _render_finished_run(config: dict) -> None:
         placements = getattr(mosaic, "placements", None)
         if not placements:
             saved = _saved_mosaic_path(active_config)
-            st.subheader("Stitched mosaic")
+            st.header("Stitched mosaic")
             if saved is not None:
-                st.image(str(saved), caption="Saved mosaic from the last run", width="stretch")
+                show_labels = _mosaic_labels_on()
+                plain = saved.parent / "mosaic_plain.png"
+                showing_labels = show_labels or not plain.is_file()
+                if not show_labels and not plain.is_file():
+                    st.caption("This saved run has only the mosaic with labels.")
+                shown = saved if showing_labels else plain
+                caption = (
+                    "Saved mosaic with labels"
+                    if showing_labels
+                    else "Saved mosaic without labels"
+                )
+                st.image(str(shown), caption=caption, width="stretch")
                 st.download_button(
                     "Download stitched mosaic",
-                    data=saved.read_bytes(),
-                    file_name=saved.name,
-                    mime="image/png" if saved.suffix.lower() == ".png" else "image/jpeg",
+                    data=shown.read_bytes(),
+                    file_name=shown.name,
+                    mime="image/png" if shown.suffix.lower() == ".png" else "image/jpeg",
                     key="last_run_download_saved_mosaic",
                 )
             else:
@@ -1168,7 +1303,8 @@ def _render_finished_run(config: dict) -> None:
                         "detected but not stitched into this mosaic."
                     )
 
-            st.subheader("Stitched mosaic")
+            st.header("Stitched mosaic")
+            show_labels = _mosaic_labels_on()
             max_h = max(int(mosaic.full_height), 1)
             max_w = max(int(mosaic.full_width), 1)
             factor = overlay_downsample(mosaic, active_config, crop=None)
@@ -1188,7 +1324,10 @@ def _render_finished_run(config: dict) -> None:
             )
             if st.session_state.get("overlay_key") != overlay_key:
                 try:
-                    st.session_state["overlay"] = overlay_markers(
+                    plain = overlay_rgb(mosaic, active_config, crop=None)
+                    st.session_state["overlay_plain"] = plain
+                    st.session_state["overlay"] = draw_overlay_markers(
+                        plain,
                         mosaic,
                         table,
                         active_config,
@@ -1200,18 +1339,29 @@ def _render_finished_run(config: dict) -> None:
                         st.code(str(exc))
                 else:
                     st.session_state["overlay_key"] = overlay_key
-                    mosaic_path = resolve_output_dir(active_config.get("output_dir")) / "mosaic_overlay.png"
-                    mosaic_path.parent.mkdir(parents=True, exist_ok=True)
-                    bgr = cv2.cvtColor(st.session_state["overlay"], cv2.COLOR_RGB2BGR)
-                    if not cv2.imwrite(str(mosaic_path), bgr):
-                        st.error(f"Failed to write mosaic image to {mosaic_path}")
-            overlay = st.session_state.get("overlay")
+                    out_dir = resolve_output_dir(active_config.get("output_dir"))
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    for name, rgb in (
+                        ("mosaic_overlay.png", st.session_state["overlay"]),
+                        ("mosaic_plain.png", st.session_state["overlay_plain"]),
+                    ):
+                        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                        if not cv2.imwrite(str(out_dir / name), bgr):
+                            st.error(f"Failed to write mosaic image to {out_dir / name}")
+            labeled = st.session_state.get("overlay")
+            plain = st.session_state.get("overlay_plain")
+            overlay = labeled if show_labels or plain is None else plain
             if overlay is not None:
-                st.image(overlay, caption="All tiles, stitched at reduced resolution", width="stretch")
+                caption = (
+                    "All tiles, stitched at reduced resolution, with labels"
+                    if show_labels
+                    else "All tiles, stitched at reduced resolution, without labels"
+                )
+                st.image(overlay, caption=caption, width="stretch")
                 st.download_button(
                     "Download stitched mosaic",
                     data=encode_overlay_jpeg(overlay),
-                    file_name="mosaic_overlay.jpg",
+                    file_name="mosaic_overlay.jpg" if show_labels else "mosaic_plain.jpg",
                     mime="image/jpeg",
                     key="last_run_download_mosaic",
                 )
@@ -1228,11 +1378,20 @@ def _render_finished_run(config: dict) -> None:
                 )
                 if st.button("Render crop"):
                     crop = (int(crop_y), int(crop_x), int(crop_h), int(crop_w))
-                    cropped = overlay_markers(mosaic, table, active_config, crop=crop)
-                    st.image(cropped, caption="Cropped region with detections", width="stretch")
+                    cropped = overlay_rgb(mosaic, active_config, crop=crop)
+                    if show_labels:
+                        cropped = draw_overlay_markers(
+                            cropped, mosaic, table, active_config, crop=crop
+                        )
+                    caption = (
+                        "Cropped region with labels"
+                        if show_labels
+                        else "Cropped region without labels"
+                    )
+                    st.image(cropped, caption=caption, width="stretch")
 
     with st.container(border=True, key="block-results"):
-        st.subheader("Results")
+        st.header("Results")
         display = result_table(table)
         preview_rows = 5_000
         if len(display) > preview_rows:
@@ -1283,7 +1442,7 @@ keep_shadow_inputs()
 keep_capture_inputs()
 keep_stage_inputs()
 
-_MAIN_PAGES = ["Capture", "Run", "Verify", "Additional tools"]
+_MAIN_PAGES = ["Capture", "Analyse", "Verify", "Additional tools"]
 
 
 def _select_main_page(name: str) -> None:
@@ -1307,22 +1466,23 @@ with st.sidebar:
 
 page = st.session_state["main_toolbar"]
 
-if page == "Run":
+if page == "Analyse":
     with st.container(border=True, key="block-parameters"):
-        st.subheader("Adjust parameters")
+        st.header("Adjust parameters")
         _render_adjust_parameters(base_config)
     config = _config_from_state(base_config)
     with st.container(border=True, key="block-run"):
-        st.subheader("Run/stop pipeline")
+        st.header("Run/stop pipeline")
         _render_detection(config)
     _render_finished_run(config)
-    with st.container(border=True, key="block-review"):
-        render_labeled_tiles_tab(
-            config,
-            ROOT,
-            st.session_state.get("mosaic"),
-            st.session_state.get("table"),
-        )
+    if st.session_state.get("load_last_run"):
+        with st.container(border=True, key="block-review"):
+            render_labeled_tiles_tab(
+                config,
+                ROOT,
+                st.session_state.get("mosaic"),
+                st.session_state.get("table"),
+            )
 else:
     config = _config_from_state(base_config)
 

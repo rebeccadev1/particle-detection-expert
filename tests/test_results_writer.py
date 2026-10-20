@@ -127,6 +127,21 @@ def test_last_run_pdf_includes_summary_and_mosaic(tmp_path: Path) -> None:
     assert pages >= 2
 
 
+def test_mosaic_page_puts_labels_above_the_plain_mosaic() -> None:
+    import numpy as np
+
+    from src.main_pipeline.report.report_generator import _mosaic_page
+
+    labeled = np.full((30, 60, 3), (255, 140, 40), dtype=np.uint8)
+    plain = np.full((30, 60, 3), (20, 40, 80), dtype=np.uint8)
+    page = np.asarray(_mosaic_page(labeled, plain))
+    orange = np.where(np.all(page == (255, 140, 40), axis=2))
+    blue = np.where(np.all(page == (20, 40, 80), axis=2))
+    assert orange[0].size > 0
+    assert blue[0].size > 0
+    assert float(orange[0].mean()) < float(blue[0].mean())
+
+
 def test_write_xlsx_adds_parameters_sheet(tmp_path: Path) -> None:
     config = {
         "output_dir": "Single v7",

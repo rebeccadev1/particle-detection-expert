@@ -100,6 +100,25 @@ def folder_location(folder: Path) -> tuple[int, int]:
     return int(match.group(1)), int(match.group(2))
 
 
+def latest_run_folder(base: Path | None = None) -> Path | None:
+    """Newest captures/vN YYYY-MM-DD directory, or None when none exist.
+
+    Newest is the latest date, then the highest N on that date.
+    """
+    root = CAPTURES_DIR if base is None else Path(base)
+    if not root.is_dir():
+        return None
+    found: list[tuple[str, int, Path]] = []
+    for path in root.iterdir():
+        match = RUN_DIR_RE.match(path.name)
+        if match and path.is_dir():
+            found.append((match.group(2), int(match.group(1)), path))
+    if not found:
+        return None
+    found.sort()
+    return found[-1][2]
+
+
 def next_run_folder(base: Path, on: date | None = None) -> Path:
     """Path of the next captures/vN YYYY-MM-DD directory. Does not create it.
 

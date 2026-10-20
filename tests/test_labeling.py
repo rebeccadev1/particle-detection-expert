@@ -816,10 +816,11 @@ def test_empty_label_queue_hides_this_file_until_restore_or_rewrite(tmp_path: Pa
     assert not label_queue_is_cleared(csv_path, pointer_dir)
 
 
-def test_label_queue_defaults_to_last_pipeline_not_r3(tmp_path: Path) -> None:
+def test_label_queue_waits_until_load_last_run(tmp_path: Path) -> None:
     csv_path = tmp_path / "particles.csv"
     csv_path.write_text("id\n", encoding="utf-8")
-    assert use_last_pipeline_queue(None, csv_path)
+    assert not use_last_pipeline_queue(None, csv_path)
+    assert not use_last_pipeline_queue("", csv_path)
     assert use_last_pipeline_queue("last_pipeline", csv_path)
     assert not use_last_pipeline_queue("sidebar", csv_path)
     assert not use_last_pipeline_queue(None, tmp_path / "missing.csv")
@@ -1136,6 +1137,39 @@ def test_submap_folders_load_lighting_shots_only(tmp_path: Path) -> None:
         "v8/wafer_shot_0_quad0_exp200000.png",
         "v8/wafer_shot_4_all_exp200000.png",
     }
+
+
+def test_tile_folder_follows_the_latest_capture_until_the_user_picks_one() -> None:
+    from src.overall.io.tile_loader import follow_latest_capture
+
+    chosen, suggestion, seeded = follow_latest_capture(
+        "Glovebox/Not trained on 14-09",
+        None,
+        "Groundup/v2 2026-10-20",
+        seeded=False,
+    )
+    assert (chosen, suggestion, seeded) == ("Groundup/v2 2026-10-20", "Groundup/v2 2026-10-20", True)
+
+    stayed, suggestion, seeded = follow_latest_capture(
+        "Glovebox/Not trained on 14-09",
+        "Groundup/v2 2026-10-20",
+        "Groundup/v3 2026-10-20",
+        seeded=True,
+    )
+    assert stayed == "Glovebox/Not trained on 14-09"
+    assert suggestion == "Groundup/v2 2026-10-20"
+
+    followed, suggestion, seeded = follow_latest_capture(
+        "Groundup/v2 2026-10-20",
+        "Groundup/v2 2026-10-20",
+        "Groundup/v3 2026-10-20",
+        seeded=True,
+    )
+    assert (followed, suggestion, seeded) == ("Groundup/v3 2026-10-20", "Groundup/v3 2026-10-20", True)
+
+    empty, suggestion, seeded = follow_latest_capture("", suggestion, None, seeded=True)
+    assert empty == ""
+    assert seeded is True
 
 
 def test_input_folder_labels_suggest_image_folders_and_submaps(tmp_path: Path) -> None:

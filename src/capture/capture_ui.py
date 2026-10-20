@@ -255,9 +255,9 @@ def render_capture_tab() -> None:
     _hardware_strip()
     _capture_after_autofocus(cap)
     with st.container(border=True, key="block-capture"):
-        st.subheader("Lighting")
+        st.header("Lighting")
         mode = st.radio(
-            "Lighting",
+            "Select mode",
             ("Uniform", "NSEW"),
             horizontal=True,
             key="capture_mode",
@@ -281,10 +281,13 @@ def render_capture_tab() -> None:
         if ports_ready:
             _render_lighting_controls(cap, mode, nsew_style, ser)
 
-    _render_live(cap, _shutter_ms(cap))
+    live_col, last_col = st.columns(2)
+    with live_col:
+        _render_live(cap, _shutter_ms(cap))
+    with last_col:
+        _show_last_run()
     if not ports_ready:
         return
-    _show_last_run()
     _render_stage(cap)
 
 
@@ -607,13 +610,14 @@ def _capture_after_autofocus(cap) -> None:
 
 def _show_last_run(*, key: str = "block-last-capture") -> None:
     last = st.session_state.get("capture_last_run")
-    if not last:
-        return
     with st.container(border=True, key=key):
+        st.header("Last capture")
+        if not last:
+            st.caption("No capture yet.")
+            return
         folder = Path(last["folder"])
         files = last.get("files") or ([last["file"]] if last.get("file") else [])
         manual = last.get("mode") == "NSEW manual"
-        st.subheader("Last capture")
         label = last.get("mode") or "Capture"
         st.write(f"{label} — `{folder}`")
         existing = [name for name in files if (folder / name).is_file()]
@@ -650,7 +654,7 @@ def _live_feed() -> None:
 
 def _render_live(cap, shutter_ms: float) -> None:
     with st.container(border=True, key="block-live"):
-        st.subheader("Live view")
+        st.header("Live view")
         st.session_state["_capture_shutter_ms"] = float(shutter_ms)
         if scan_capture_status()["running"]:
             st.caption("The scan has the camera. The live view returns when it finishes.")
@@ -710,7 +714,7 @@ def _focus_limits() -> str | None:
 def _render_focus(locked: bool) -> None:
     """Hill-climb Z from the current height using the live image."""
     with st.container(border=True, key="block-focus"):
-        st.subheader("Focus")
+        st.header("Focus")
         st.checkbox(
             "Check and correct focus during the scan",
             value=bool(FOCUS_WIDGET_DEFAULTS["focus_during_scan"]),
@@ -1094,7 +1098,7 @@ def _jog_number(label: str, key: str, locked: bool) -> None:
 def _render_stage(cap) -> None:
     """Move the 3D-printer stage with the same serpentine as scan_40x60.gcode."""
     with st.container(border=True, key="block-stage"):
-        st.subheader("Stage")
+        st.header("Stage")
 
         info = printer_status()
         connected = info["connected"]
@@ -1245,7 +1249,6 @@ def _render_stage(cap) -> None:
             )
 
     _render_focus(scanning)
-    _show_last_run(key="block-focus-last-capture")
     with st.container(border=True, key="block-scan"):
-        st.subheader("Scan")
+        st.header("Scan")
         _stage_progress()

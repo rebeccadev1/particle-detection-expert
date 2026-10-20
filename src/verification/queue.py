@@ -338,15 +338,15 @@ def use_last_pipeline_queue(
     session_source: str | None,
     pipeline_csv: str | Path | None,
 ) -> bool:
-    """Use the latest pipeline CSV for labeling.
+    """Use the latest pipeline CSV only after Load last run.
 
-    Opening Tinder used to fall back to ``allemaal 08/09/particles.csv``, which
-    is the old R3 review set. When ``last_pipeline.json`` points at a real
-    file, that run is the queue unless the session chose something else.
+    Opening Label used to fall back to ``allemaal 08/09/particles.csv``, the
+    old R3 review set, and then to whatever ``last_pipeline.json`` pointed at.
+    Neither loads until the session asks for the last run.
     """
     if pipeline_csv is None or not Path(pipeline_csv).is_file():
         return False
-    return session_source in (None, "", "last_pipeline")
+    return session_source == "last_pipeline"
 
 
 def _label_queue_cleared_path(pointer_dir: str | Path | None = None) -> Path:

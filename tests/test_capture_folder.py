@@ -8,6 +8,7 @@ from src.capture.camera_automation_v2 import (
     CAPTURES_DIR,
     allocate_capture_folder,
     allocate_run_folder,
+    latest_run_folder,
     next_run_folder,
     folder_location,
     image_filename,
@@ -110,6 +111,17 @@ def test_captures_go_to_inputs_groundup() -> None:
     assert CAPTURES_DIR.name == "Groundup"
     assert CAPTURES_DIR.parent.name == "Inputs"
     assert (CAPTURES_DIR.parent.parent / "Outputs").is_dir()
+
+
+def test_latest_run_folder_is_the_newest_date_then_version(tmp_path) -> None:
+    assert latest_run_folder(tmp_path) is None
+    older = tmp_path / "v9 2026-10-08"
+    newer_low = tmp_path / "v1 2026-10-20"
+    newer_high = tmp_path / "v2 2026-10-20"
+    for folder in (older, newer_low, newer_high):
+        folder.mkdir()
+    (tmp_path / "notes").mkdir()
+    assert latest_run_folder(tmp_path) == newer_high
 
 
 def test_next_run_folder_does_not_create_the_directory(tmp_path) -> None:
