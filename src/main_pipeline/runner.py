@@ -38,7 +38,7 @@ from src.main_pipeline.measurement.measurer import (
     particles_to_dataframe,
     submap_id,
 )
-from src.main_pipeline.nsew import prepare_detection_paths
+from src.main_pipeline.nsew import positional_direction, prepare_detection_paths
 from src.main_pipeline.ml.infer import apply_ml_filter
 from src.main_pipeline.preprocessing.corrections import apply_corrections
 from src.main_pipeline.stitching.stitcher import (
@@ -141,6 +141,30 @@ def _placement_from_path(
     return placement_from_tile(tile, overlap, row_origin, col_origin)
 
 
+def load_report_mosaic(config: dict[str, Any]) -> LazyMosaic:
+    """Tile placements for the stitched report, without running detection."""
+    config = with_recall_profile(config)
+    folder = cfg_get(config, "input_dir", "")
+    if not folder:
+        return LazyMosaic([])
+    pattern = str(cfg_get(config, "filename_pattern"))
+    overlap = float(cfg_get(config, "overlap_fraction", 0.0))
+    run_filter = cfg_get(config, "run", None)
+    mag_filter = cfg_get(config, "magnification", None)
+    paths = matching_tile_paths(
+        folder, pattern, run_filter, mag_filter, include_unmatched=True
+    )
+    paths = prepare_detection_paths(paths)
+    row_origin, col_origin = _grid_index_origin(paths, pattern)
+    placements = [
+        placement
+        for path in paths
+        if (placement := _placement_from_path(path, pattern, overlap, row_origin, col_origin))
+        is not None
+    ]
+    return LazyMosaic(placements)
+
+
 def _grid_index_origin(paths: list[Path], pattern: str) -> tuple[int, int]:
     """Smallest row/col among tiles so the mosaic starts at the first real column."""
     rows: list[int] = []
@@ -200,9 +224,20 @@ def _process_tile(
         origin_x = float(placement.x0)
         origin_y = float(placement.y0)
     else:
+        # A side file keeps the combi's place on the wafer, and stays off the mosaic.
         placement = None
         origin_x = 0.0
         origin_y = 0.0
+        parsed = positional_direction(tile.path)
+        if parsed is not None:
+            row, col, _direction = parsed
+            combi = tile.path.with_name(f"({row},{col}){tile.path.suffix}")
+            combi_placement = _placement_from_path(
+                combi, pattern, overlap, row_origin, col_origin
+            )
+            if combi_placement is not None:
+                origin_x = float(combi_placement.x0)
+                origin_y = float(combi_placement.y0)
     corrected = apply_corrections(tile.image, config)
     ml_on = bool(cfg_get(config, "ml.enabled", False))
     score_before_structure = ml_on and bool(

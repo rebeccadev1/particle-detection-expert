@@ -1,10 +1,18 @@
-"""Capture with the four-side ring, either all on or one side at a time.
+"""Capture with the transistor-switched four-side ring.
 
-Upload arduino_camera_v2/arduino_camera_v2.ino once with the Arduino IDE.
+Upload ``Inital arduino code/arduino_camera_v3`` once with the Arduino IDE.
 After that, this script is the only program that should open the USB port.
 
-    python camera_automation_v2.py --mode uniform --total-exposure-ms 100
-    python camera_automation_v2.py --mode nsew --total-exposure-ms 100
+That sketch does not answer ``?``. On boot it prints ``READY``. This script
+waits for that line. A board that is already running does not print it again,
+so the script then sends ``x`` and expects ``OK OFF``. The next capture turns
+the quadrants back on.
+
+Quadrant 0 is N, then E, S, W, on pins 2, 3, 4, and 5. Lighting commands
+after connect are ``f`` (all on), ``0``..``3`` (one side), and ``x`` (all off).
+
+    python camera_automation.py --mode uniform --total-exposure-ms 100
+    python camera_automation.py --mode nsew --total-exposure-ms 100
 
 Total exposure is the dose from a single side, in milliseconds. Uniform
 lighting has all four sides on, so the camera shutter is that value divided
@@ -31,7 +39,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-# Side 0 is N, then clockwise E, S, W. The sketch reports this count from "?".
+# Side 0 is N, then clockwise E, S, W, on Arduino pins 2, 3, 4, and 5.
 DIRECTIONS = ("N", "E", "S", "W")
 RING_SIDES = len(DIRECTIONS)
 
@@ -46,6 +54,10 @@ BAUD = 9600
 GRAB_TIMEOUT_MS = 5000
 READY_TIMEOUT_S = 5.0
 ACK_TIMEOUT_S = 2.0
+# A resetting Uno prints READY after the bootloader, usually within a second.
+# Listen that long before probing, so the probe is not still in the buffer
+# when setup() finishes.
+BOOT_LISTEN_S = 2.0
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 # particle_detection/src/capture -> ASML SE/Inputs/Groundup.
@@ -231,20 +243,18 @@ def request_line(ser, command: str, timeout_s: float = ACK_TIMEOUT_S) -> str:
 
 
 def _handshake(ser) -> str:
-    """Return the ``QUAD <n>`` line.
+    """Return ``READY`` or ``OK OFF``.
 
-    The sketch prints ``READY ALL`` once, from ``setup()``. A CH340 that is
-    already running does not reset when the port opens, so that line is gone.
-    ``?`` is answered from ``loop()`` for as long as the sketch is up.
+    ``READY`` comes from ``setup()`` on the transistor-ring sketch. A CH340
+    that is already running does not reset when the port opens, so that line
+    is gone. ``x`` is answered from ``loop()`` and switches every quadrant off.
     """
-    deadline = time.monotonic() + READY_TIMEOUT_S
+    deadline = time.monotonic() + BOOT_LISTEN_S
     while time.monotonic() < deadline:
         remaining = deadline - time.monotonic()
         try:
             line = _read_line(ser, min(0.5, remaining))
         except TimeoutError:
-            ser.write(b"?\n")
-            ser.flush()
             continue
         except Exception as exc:
             if "multiple access" in str(exc) or "returned no data" in str(exc):
@@ -253,32 +263,24 @@ def _handshake(ser) -> str:
                     "and choose a different port."
                 ) from exc
             raise
-        if line.startswith("QUAD "):
-            return line
         if line.startswith("READY"):
-            ser.write(b"?\n")
-            ser.flush()
-            continue
+            return line
         if line.startswith("ERR"):
-            raise RuntimeError(f"command '?' got {line!r}")
-    raise TimeoutError(f"no serial reply within {READY_TIMEOUT_S:.1f}s")
+            raise RuntimeError(f"Arduino replied {line!r} during connect")
+
+    reply = request_line(ser, "x", timeout_s=READY_TIMEOUT_S)
+    if reply != "OK OFF":
+        raise RuntimeError(f"expected 'OK OFF', got {reply!r}")
+    return reply
 
 
 def open_arduino(port: str):
+    """Open the transistor-ring sketch. It always has four sides, N E S W."""
     import serial
 
     ser = serial.Serial(port, BAUD, timeout=0.2)
     try:
-        reported = _handshake(ser)
-        prefix = "QUAD "
-        if not reported.startswith(prefix):
-            raise RuntimeError(f"expected 'QUAD <n>', got {reported!r}")
-        count = int(reported[len(prefix):])
-        if count != RING_SIDES:
-            raise RuntimeError(
-                f"Arduino reports {count} sides; this setup uses {RING_SIDES} "
-                "(N, S, E, W), all on together."
-            )
+        _handshake(ser)
     except Exception:
         ser.close()
         raise

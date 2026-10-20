@@ -19,7 +19,7 @@ import time
 import warnings
 from pathlib import Path
 
-from src.capture.camera_automation_v2 import (
+from src.capture.camera_automation import (
     MOTION_PAUSE_S,
     NSEW_GAP_S,
     RING_SIDES,

@@ -4,7 +4,7 @@ from datetime import date
 
 import json
 
-from src.capture.camera_automation_v2 import (
+from src.capture.camera_automation import (
     CAPTURES_DIR,
     allocate_capture_folder,
     allocate_run_folder,

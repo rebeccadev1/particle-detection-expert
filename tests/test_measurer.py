@@ -705,3 +705,12 @@ def test_pipeline_stitches_only_patterned_tiles(tmp_path: Path) -> None:
     overlay = overlay_markers(mosaic, table, config, crop=None)
     assert overlay.shape[0] > 0
     assert overlay.shape[1] > 0
+    from src.main_pipeline.report.report_generator import overlay_rgb
+    from src.main_pipeline.runner import load_report_mosaic
+
+    report = load_report_mosaic(config)
+    assert [p.name for p in report.placements] == [p.name for p in mosaic.placements]
+    plain = overlay_rgb(report, config, crop=None)
+    orange = (overlay[:, :, 0].astype(int) - overlay[:, :, 2].astype(int)) > 80
+    plain_orange = (plain[:, :, 0].astype(int) - plain[:, :, 2].astype(int)) > 80
+    assert int(orange.sum()) > int(plain_orange.sum())

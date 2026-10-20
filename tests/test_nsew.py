@@ -13,6 +13,7 @@ from src.main_pipeline.nsew import (
     find_nsew_images,
     list_direction_images,
     nsew_output_dir,
+    positional_cell_sides,
     prepare_detection_paths,
     scale_combi_uint8,
     symmetry_signal_4way,
@@ -199,7 +200,20 @@ def test_prepare_detection_paths_keeps_combi_and_uniform(tmp_path: Path) -> None
     assert (folder / "combi_2of4.png").is_file()
 
 
-def test_prepare_detection_paths_combines_grid_sides_instead_of_loading_them(
+def test_positional_cell_sides_finds_the_four_pictures(tmp_path: Path) -> None:
+    for name in ("(1,3)_N.png", "(1,3)_S.png", "(1,3)_E.png", "(1,3)_W.png"):
+        _write_gray(tmp_path / name, 10)
+    combi = tmp_path / "(1,3).png"
+    _write_gray(combi, 20)
+    found = positional_cell_sides(combi)
+    assert set(found) == {"N", "S", "E", "W"}
+    assert found["N"].name == "(1,3)_N.png"
+    from src.verification.crops import direction_images_for_combined
+
+    assert set(direction_images_for_combined(combi)) == {"N", "S", "E", "W"}
+
+
+def test_prepare_detection_paths_combines_grid_sides_and_loads_them(
     tmp_path: Path,
 ) -> None:
     for row, col in ((1, 3), (2, 1)):
@@ -211,7 +225,19 @@ def test_prepare_detection_paths_combines_grid_sides_instead_of_loading_them(
         list(tmp_path.iterdir()),
         progress_cb=lambda cur, tot, name: events.append((cur, tot, name)),
     )
-    assert sorted(path.name for path in paths) == ["(1,1).png", "(1,3).png", "(2,1).png"]
+    assert sorted(path.name for path in paths) == [
+        "(1,1).png",
+        "(1,3).png",
+        "(1,3)_E.png",
+        "(1,3)_N.png",
+        "(1,3)_S.png",
+        "(1,3)_W.png",
+        "(2,1).png",
+        "(2,1)_E.png",
+        "(2,1)_N.png",
+        "(2,1)_S.png",
+        "(2,1)_W.png",
+    ]
     assert (tmp_path / "(1,3).png").is_file()
     assert (tmp_path / "(2,1).png").is_file()
     assert [event[0] for event in events] == [1, 2]
@@ -229,7 +255,13 @@ def test_prepare_detection_paths_keeps_a_fresh_grid_combi(tmp_path: Path) -> Non
     stamp = combi.stat().st_mtime_ns
     again = prepare_detection_paths(list(tmp_path.iterdir()))
     assert combi.stat().st_mtime_ns == stamp
-    assert [path.name for path in again] == ["(1,3).png"]
+    assert sorted(path.name for path in again) == [
+        "(1,3).png",
+        "(1,3)_E.png",
+        "(1,3)_N.png",
+        "(1,3)_S.png",
+        "(1,3)_W.png",
+    ]
 
 
 def test_prepare_detection_paths_skips_an_incomplete_grid_cell(tmp_path: Path) -> None:
@@ -285,4 +317,4 @@ def test_pipeline_detects_the_combined_grid_cell(tmp_path: Path) -> None:
     )
     assert [placement.name for placement in mosaic.placements] == ["(1,3).png"]
     found = [event for event in events if "tile" in event[2]]
-    assert found[0][1] == 1
+    assert found[0][1] == 5

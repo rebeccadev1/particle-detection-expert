@@ -22,6 +22,7 @@ from src.overall.io.tile_loader import (
     resolve_input_dir,
     try_parse_tile_filename,
 )
+from src.main_pipeline.nsew import positional_cell_sides, positional_direction
 from src.main_pipeline.measurement.measurer import (
     DISPLAY_DIRECTION_ORDER,
     DIRECTION_STEMS,
@@ -386,8 +387,11 @@ _GROUNDUP_SERIES = re.compile(r"Groundup v(\d+)", re.IGNORECASE)
 
 
 def direction_images_for_combined(tile_path: str | Path) -> dict[str, Path]:
-    """N/S/E/W files for a particles-only or staged 2-of-4 detection tile."""
+    """N/S/E/W files for a particles-only, staged, or ``(row,col)`` combi tile."""
     path = Path(tile_path)
+    sides = positional_cell_sides(path)
+    if len(sides) >= 2:
+        return sides
     beside = list_direction_images(path.parent)
     if len(beside) >= 2 and not is_direction_tile(path.name):
         return beside
@@ -1022,7 +1026,11 @@ def _placement_from_path(
     row_origin: int,
     col_origin: int,
 ) -> TilePlacement:
-    meta = try_parse_tile_filename(path.name, pattern) or {}
+    meta = dict(try_parse_tile_filename(path.name, pattern) or {})
+    if "row" not in meta or "col" not in meta:
+        parsed = positional_direction(path)
+        if parsed is not None:
+            meta["row"], meta["col"] = parsed[0], parsed[1]
     height, width = peek_tile_hw(path)
     tile = Tile(
         path=path,

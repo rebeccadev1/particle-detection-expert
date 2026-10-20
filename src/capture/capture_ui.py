@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import builtins
-import importlib.util
 from pathlib import Path
 
 import streamlit as st
 
 from src.capture.focus import autofocus_status, claim_focus_capture, start_autofocus, stop_autofocus
 from src.capture.preview import preview_snapshot, start_preview, stop_preview
-from src.capture.camera_automation_v2 import CAPTURES_DIR, next_run_folder
+from src.capture import camera_automation as _camera
 from src.capture.scan_capture import scan_capture_status, start_scan_capture, stop_scan_capture
 from src.capture.stage import (
     DEFAULT_COLUMNS,
@@ -31,7 +30,9 @@ from src.capture.stage import (
     stop_scan,
 )
 
-_CAPTURE_PATH = Path(__file__).resolve().parent / "camera_automation_v3.py"
+CAPTURES_DIR = _camera.CAPTURES_DIR
+next_run_folder = _camera.next_run_folder
+
 
 def _load_arduino_link() -> dict:
     """Keep the open Arduino across a script reload so the port is not opened twice."""
@@ -92,24 +93,8 @@ def keep_stage_inputs() -> None:
             st.session_state[key] = st.session_state[held]
 
 
-def _capture():
-    name = "camera_automation_v3"
-    spec = importlib.util.spec_from_file_location(name, _CAPTURE_PATH)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {_CAPTURE_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _capture_module():
-    global _CAP
-    if _CAP is None:
-        _CAP = _capture()
-    return _CAP
-
-
-_CAP = None
+    return _camera
 
 
 def _serial():
@@ -160,6 +145,31 @@ def _apply_mode_light(cap, mode: str):
     if mode == "Uniform":
         return _run_serial(cap.light_all)
     return _run_serial(cap.lights_off)
+
+
+def _nsew_style() -> str:
+    style = st.session_state.get("capture_nsew_style", "Automatic")
+    return style if style in ("Automatic", "Manual") else "Automatic"
+
+
+def _light_for_manual_autofocus(cap) -> bool:
+    """Set the ring before a standalone autofocus. Scan autofocus does not call this.
+
+    Uniform turns every side on. NSEW manual turns North on. Returns False when
+    the lights could not be set, so the search does not start in the dark.
+    """
+    mode = _selected_mode()
+    if mode == "NSEW" and _nsew_style() != "Manual":
+        return True
+    ser = _serial()
+    if ser is None:
+        if mode == "Uniform":
+            return True
+        st.error("Connect the Arduino first so North can turn on.")
+        return False
+    if mode == "Uniform":
+        return _run_serial(cap.light_all) is not None
+    return _run_serial(lambda port: cap.set_segment(port, 0)) is not None
 
 
 def _failure(action: str, next_step: str, exc: BaseException) -> None:
@@ -848,6 +858,8 @@ def _focus_progress() -> None:
         return
     blocked = _autofocus_block_reason(printer, snap)
     if st.button("Autofocus", type="primary", disabled=blocked is not None):
+        if not _light_for_manual_autofocus(_capture_module()):
+            return
         try:
             start_autofocus(
                 max_travel_mm=float(st.session_state["focus_max_travel_mm"]),
@@ -873,6 +885,8 @@ def _autofocus_block_reason(printer: dict, snap: dict) -> str | None:
         return "The live view is not ready."
     if _focus_limits() is not None:
         return "Coarse and fine steps have to fit inside the max travel."
+    if _selected_mode() == "NSEW" and _nsew_style() == "Manual" and _serial() is None:
+        return "NSEW manual focus needs the Arduino to light North."
     return None
 
 
@@ -1095,6 +1109,13 @@ def _jog_number(label: str, key: str, locked: bool) -> None:
     )
 
 
+@st.fragment(run_every=0.5)
+def _printer_reply() -> None:
+    """Same confirmation as the Arduino: the device answered, so it is well connected."""
+    if printer_status()["online"]:
+        st.caption("Last reply: OK ALL")
+
+
 def _render_stage(cap) -> None:
     """Move the 3D-printer stage with the same serpentine as scan_40x60.gcode."""
     with st.container(border=True, key="block-stage"):
@@ -1135,6 +1156,7 @@ def _render_stage(cap) -> None:
         if disconnect_col.button("Disconnect Printer", disabled=not connected, width="stretch"):
             disconnect_printer()
             st.rerun()
+        _printer_reply()
 
         st.divider()
         scanning = (

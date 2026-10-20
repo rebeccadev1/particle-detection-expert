@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src.capture.camera_automation_v2 import MOTION_PAUSE_S, NSEW_GAP_S, SETTLE_S
+from src.capture.camera_automation import MOTION_PAUSE_S, NSEW_GAP_S, SETTLE_S
 from src.capture.stage import (
     PAUSE_MARGIN_MS,
     build_home_gcode,

@@ -95,10 +95,11 @@ def size_distribution(
     min_um: float,
     step_um: float = SIZE_BIN_STEP_UM,
 ) -> pd.DataFrame:
-    """Particle counts in 5 µm bins starting at the minimum size.
+    """Particle counts in bins of ``step_um`` (5 µm) starting at ``min_um``.
 
-    ``size`` is equivalent circular diameter in nm. Bins are
-    ``[min, min+5)``, ``[min+5, min+10)``, and so on through the largest size.
+    ``size`` is equivalent circular diameter in nm. ``min_um`` is the minimum
+    size set for detection, not the smallest particle in the table. The first
+    bin is ``[min, min+5)``, then ``[min+5, min+10)``, through the largest size.
     """
     if df is None or df.empty or "size" not in df.columns:
         edges = size_bin_edges(min_um, min_um, step_um)
@@ -386,16 +387,17 @@ def _draw_count_table(
 ) -> int:
     left = _MARGIN
     right = _PAGE_W - _MARGIN
-    mid = left + 280
     row_h = _BODY + 14
     draw.text((left, y), "Size", fill=_MUTED, font=header)
-    draw.text((mid, y), "Particles", fill=_MUTED, font=header)
+    particles = "Particles"
+    draw.text((right - _text_width(header, particles), y), particles, fill=_MUTED, font=header)
     y += _LABEL + 10
     draw.line([(left, y), (right, y)], fill=_RULE, width=1)
     y += 8
     for _, row in counts.iterrows():
         draw.text((left, y), str(row["Size"]), fill=_INK, font=body)
-        draw.text((mid, y), str(int(row["Particles"])), fill=_INK, font=body)
+        value = str(int(row["Particles"]))
+        draw.text((right - _text_width(body, value), y), value, fill=_INK, font=body)
         y += row_h
     return y
 
@@ -454,16 +456,20 @@ def _draw_histogram(
     draw = ImageDraw.Draw(image)
     ticks_font = _font(_LABEL)
     axis_font = _font(_BODY)
-    label_w = 72
-    left = _MARGIN + 36 + label_w
-    right = _PAGE_W - _MARGIN
-    plot_top = top + 8
-    plot_bottom = bottom - _BODY - _LABEL - 28
     counts = [int(value) for value in distribution["count"].tolist()]
     labels = [str(label) for label in distribution.index]
     peak = max(counts) if counts else 0
     ticks = _axis_ticks(float(peak))
     scale = ticks[-1] if ticks[-1] > 0 else 1.0
+    axis_y = "Amount of particles"
+    y_box = axis_font.getbbox(axis_y)
+    y_title_span = int(y_box[2] - y_box[0]) + 4
+    y_title_thick = int(y_box[3] - y_box[1]) + 4
+    tick_w = max((_text_width(ticks_font, _tick_label(tick)) for tick in ticks), default=0)
+    left = _MARGIN + y_title_thick + 10 + tick_w + 12
+    right = _PAGE_W - _MARGIN
+    plot_top = top + 8
+    plot_bottom = bottom - _BODY - _LABEL - 28
     for tick in ticks:
         if tick <= 0:
             continue
@@ -481,8 +487,8 @@ def _draw_histogram(
             fill=_INK,
             font=ticks_font,
         )
-    axis_y = "Amount of particles"
-    _paste_vertical(image, axis_y, axis_font, 12, plot_top + 48)
+    title_top = plot_top + max((plot_bottom - plot_top - y_title_span) // 2, 0)
+    _paste_vertical(image, axis_y, axis_font, _MARGIN, title_top)
     if not counts:
         return
     slot = (right - left) / len(counts)
@@ -496,7 +502,8 @@ def _draw_histogram(
         center = (bar_left + bar_right) / 2
         draw.line([(center, plot_bottom), (center, plot_bottom + 6)], fill=_INK, width=2)
         text_w = _text_width(ticks_font, label)
-        draw.text((center - text_w / 2, plot_bottom + 8), label, fill=_INK, font=ticks_font)
+        label_x = min(max(center - text_w / 2, _MARGIN), right - text_w)
+        draw.text((label_x, plot_bottom + 8), label, fill=_INK, font=ticks_font)
     axis = "Size (µm)"
     draw.text(
         ((left + right) / 2 - _text_width(axis_font, axis) / 2, bottom - _BODY - 4),

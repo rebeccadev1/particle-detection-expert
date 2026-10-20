@@ -66,12 +66,12 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-`requirements.txt` installs the analysis stack (NumPy, OpenCV, scikit-image, pandas, scikit-learn), Streamlit, PyYAML, pyserial, and pypylon.
+`requirements.txt` installs the analysis stack (NumPy, OpenCV, scikit-image, pandas, scikit-learn), Streamlit, PyYAML, pyserial, Printrun, and pypylon. Printrun also installs wxPython, which `printcore` needs.
 
 Check that the app can import:
 
 ```bash
-python -c "import streamlit, cv2, yaml, serial; print('ok')"
+python -c "import streamlit, cv2, yaml, serial; from printrun.printcore import printcore; print('ok')"
 ```
 
 ### Basler pylon (only if you will use the camera)
@@ -84,16 +84,9 @@ python -c "from pypylon import pylon; print(len(pylon.TlFactory.GetInstance().En
 
 A count of `0` means the runtime is present but no camera is connected or powered. An import error means pylon or pypylon is not installed correctly.
 
-### Stage control (only if you will move the printer)
+### Stage control
 
-Printrun is **not** in `requirements.txt`. Install it into the same virtual environment:
-
-```bash
-source .venv/bin/activate
-pip install Printrun
-```
-
-The stage code also looks for a pipx Pronterface install under `~/Library/Application Support/pipx/venvs/printrun/` if the package is missing from the venv. Prefer installing it in `.venv`.
+`pip install -r requirements.txt` installs Printrun into the same virtual environment. The stage uses `printcore` from that install. If the import still fails, the stage code looks for a pipx Pronterface install under `~/Library/Application Support/pipx/venvs/printrun/`.
 
 ## 2. Start the app
 
@@ -187,7 +180,7 @@ The Capture tab opens the first camera pylon enumerates. Exposure is computed fr
 
 ### 6.2 Ring light and Arduino
 
-The Capture tab loads `src/capture/camera_automation_v3.py`. Upload this sketch once with the Arduino IDE:
+The Capture tab loads `src/capture/camera_automation.py`. Upload this sketch once with the Arduino IDE:
 
 `src/capture/Inital arduino code/arduino_camera_v3`
 
@@ -245,8 +238,8 @@ To analyze what you just captured, go to **Main Pipeline**, set the input folder
 Command-line capture (same code, no Streamlit), from `particle_detection/` with the venv active:
 
 ```bash
-python src/capture/camera_automation_v3.py --mode uniform --total-exposure-ms 100
-python src/capture/camera_automation_v3.py --mode nsew --total-exposure-ms 100
+python src/capture/camera_automation.py --mode uniform --total-exposure-ms 100
+python src/capture/camera_automation.py --mode nsew --total-exposure-ms 100
 ```
 
 ## 8. The other tabs
@@ -292,7 +285,7 @@ The wrong sketch is on the board, or another program still has the port. Upload 
 Arduino and printer were given the same device. Pick the other port.
 
 **`Printrun is not available`**  
-`pip install Printrun` inside the same `.venv` you use to launch Streamlit.
+Reinstall from `requirements.txt` inside the same `.venv` you use to launch Streamlit: `pip install -r requirements.txt`.
 
 **Camera does not open**  
 Install the Basler pylon runtime, then check `from pypylon import pylon`. The live view and a scan cannot share the camera. Wait until a scan finishes, or stop it, before opening live view. Only one camera is used: the first device pylon lists.

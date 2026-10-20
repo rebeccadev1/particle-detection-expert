@@ -32,6 +32,7 @@ from src.verification.crops import (
     config_for_hit_placement,
     crop_particle,
     nsew_direction_crops,
+    direction_images_for_combined,
     find_tile_path,
     local_px_to_global_nm,
     placement_for_tile,
@@ -311,8 +312,7 @@ def render_label_tab(
     counts = store.counts()
     labeled_n = sum(counts.values())
     remaining = len(queue)
-    load_col, empty_col = st.columns(2)
-    with load_col:
+    with st.container(horizontal=True, width="content", gap="small", key="label_queue_actions"):
         st.button(
             "Load last run",
             key="label_load_last_run",
@@ -324,7 +324,6 @@ def render_label_tab(
                 else "Run Detection first so last_pipeline.json points at an output folder."
             ),
         )
-    with empty_col:
         st.button(
             "Empty queue",
             key="label_empty_queue",
@@ -354,15 +353,15 @@ def render_label_tab(
         key="label_review_mode",
     )
 
-    marked_rejects = {
-        str(key) for key in st.session_state.get("all_hits_reject_keys", [])
+    marked_keys = {
+        str(key) for key in st.session_state.get("all_hits_marked_keys", [])
     }
-    if mode == "All hits" and marked_rejects:
+    if mode == "All hits" and marked_keys:
         labeled_ids = skip_keys
         queue = _queue_with_marked_particles(
             tables,
             labeled_ids,
-            marked_rejects,
+            marked_keys,
             radius_nm,
             size_frac,
             scene_labels,
@@ -381,7 +380,6 @@ def render_label_tab(
             queue,
             tables,
             crop_config,
-            marked_rejects,
             radius_nm,
             size_frac,
             mosaic=mosaic,
@@ -517,7 +515,7 @@ def _queue_with_marked_particles(
     size_frac: float,
     labels: pd.DataFrame | None,
 ) -> pd.DataFrame:
-    """Unlabeled hits, plus ones already pressed as not a particle."""
+    """Unlabeled hits, plus ones already pressed in the All hits grid."""
     skip = expand_labeled_keys(str(key) for key in labeled_keys)
     for key in marked_particles:
         skip.difference_update(nsew_key_aliases(key))
@@ -530,16 +528,34 @@ def _queue_with_marked_particles(
     )
 
 
-def _marked_reject_button_css(keys: set[str]) -> None:
-    rules = []
-    for key in sorted(keys):
-        rules.append(
-            f".st-key-mark_not_particle_{key} button"
-            "{background-color:#8f2d2d;border-color:#8f2d2d;color:#ffffff;}"
-        )
-    if not rules:
-        return
-    st.markdown("<style>\n" + "\n".join(rules) + "\n</style>", unsafe_allow_html=True)
+def _all_hits_mark_as() -> str:
+    """Which label the pressed hits get. The other hits get the opposite."""
+    mark_as = str(st.session_state.get("all_hits_mark_polarity") or "not_particle")
+    if mark_as not in ("not_particle", "particle"):
+        return "not_particle"
+    return mark_as
+
+
+def _all_hits_rest_label(mark_as: str) -> str:
+    return "particle" if mark_as == "not_particle" else "not_particle"
+
+
+def _widget_key_class(widget_key: str) -> str:
+    """Match Streamlit's st-key class, which turns other characters into hyphens."""
+    safe = "".join(ch if ch.isalnum() or ch in "_-" else "-" for ch in widget_key)
+    return f"st-key-{safe}"
+
+
+def _marked_hit_button_css(key: str, mark_as: str) -> None:
+    color = "#1b7a3a" if mark_as == "particle" else "#8f2d2d"
+    css_class = _widget_key_class(f"mark_hit_{key}")
+    st.markdown(
+        (
+            f"<style>.{css_class} button"
+            f"{{background-color:{color};border-color:{color};color:#ffffff;}}</style>"
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def _detection_candidates(detections: list[pd.DataFrame]) -> pd.DataFrame | None:
@@ -655,7 +671,6 @@ def _render_all_hits(
     queue: pd.DataFrame,
     detections: list[pd.DataFrame],
     crop_config: dict[str, Any],
-    marked_rejects: set[str],
     merge_radius_nm: float,
     size_match_fraction: float,
     *,
@@ -663,18 +678,42 @@ def _render_all_hits(
     cache: TileImageCache,
     origin_cache: dict,
 ) -> None:
-    """Show unlabeled hits in a grid. Not a particle marks one; All done saves the page."""
-    pressed = queue["key"].astype(str).isin(marked_rejects)
-    open_queue = queue.loc[~pressed]
-    rejected = queue.loc[pressed]
-    remaining = len(open_queue)
+    """Show unlabeled hits in a grid. A press marks one; All done saves both sides."""
+    mark_as = st.radio(
+        "Marked hits",
+        ["not_particle", "particle"],
+        format_func=lambda value: (
+            "Not a particle, the rest are particles"
+            if value == "not_particle"
+            else "Particle, the rest are not a particle"
+        ),
+        horizontal=True,
+        key="all_hits_mark_polarity",
+        on_change=_on_all_hits_polarity_changed,
+        help=(
+            "Click a hit to mark it, and click it again to clear that mark. "
+            "Switching this clears every mark. All done writes the marks and "
+            "the opposite label for every other hit, including other pages."
+        ),
+    )
+    marked_keys = {
+        str(key) for key in st.session_state.get("all_hits_marked_keys", [])
+    }
+    rest_label = _all_hits_rest_label(str(mark_as))
+    marked_phrase = "a particle" if mark_as == "particle" else "not a particle"
+    rest_phrase = "not a particle" if mark_as == "particle" else "a particle"
+    button_label = "Particle" if mark_as == "particle" else "Not a particle"
+    pressed = queue["key"].astype(str).isin(marked_keys)
+    rest_queue = queue.loc[~pressed]
+    marked_rows = queue.loc[pressed]
+    remaining = len(rest_queue)
     done = st.button(
         "All done",
         type="primary",
         key="label_all_done",
         help=(
-            f"Save {int(pressed.sum())} marked hits as not a particle and "
-            f"label the other {remaining} as particles, including other pages."
+            f"Save {int(pressed.sum())} marked hits as {marked_phrase} and "
+            f"label the other {remaining} as {rest_phrase}, including other pages."
         ),
     )
     n_pages = max(1, (len(queue) + MARK_PAGE_SIZE - 1) // MARK_PAGE_SIZE)
@@ -690,23 +729,22 @@ def _render_all_hits(
         )
     )
     st.caption(
-        f"{len(queue)} hits · {int(pressed.sum())} marked not a particle · "
+        f"{len(queue)} hits · {int(pressed.sum())} marked {marked_phrase} · "
         f"page {page} of {n_pages}. "
         "Each Groundup picture is the combi or the uniform image with the highest prominence. "
         "A letter N/S/E/W hit stays on its brightest direction. "
-        "Press Not a particle on the false ones. That only turns the button red. "
-        "All done saves the red ones as not a particle and labels every other hit "
-        "as a particle, including hits on other pages."
+        f"Press {button_label} on the ones you want. Click it again to clear that mark. "
+        f"All done saves the marked ones as {marked_phrase} and every other hit "
+        f"as {rest_phrase}, including hits on other pages."
     )
     candidates = _detection_candidates(detections)
-    _marked_reject_button_css(marked_rejects)
     if done:
         with st.spinner(
-            f"Saving {len(rejected)} not-particles and {remaining} particles…"
+            f"Saving {len(marked_rows)} marked and {remaining} of the rest…"
         ):
             items, failed = _queued_label_items(
-                rejected,
-                "not_particle",
+                marked_rows,
+                str(mark_as),
                 candidates,
                 crop_config,
                 merge_radius_nm,
@@ -716,8 +754,8 @@ def _render_all_hits(
                 origin_cache,
             )
             kept, kept_failed = _queued_label_items(
-                open_queue,
-                "particle",
+                rest_queue,
+                rest_label,
                 candidates,
                 crop_config,
                 merge_radius_nm,
@@ -734,7 +772,7 @@ def _render_all_hits(
         if failed:
             st.error("Left unlabeled: " + "; ".join(failed[:8]))
             return
-        st.session_state["all_hits_reject_keys"] = []
+        st.session_state["all_hits_marked_keys"] = []
         st.rerun()
 
     start = (page - 1) * MARK_PAGE_SIZE
@@ -785,12 +823,19 @@ def _render_all_hits(
                 _render_hit_card(key)
 
 
-def _on_mark_not_particle(key: str) -> None:
-    """Remember a reject until All done. Runs before the card redraws."""
-    marked_now = [str(item) for item in (st.session_state.get("all_hits_reject_keys") or [])]
-    if key not in marked_now:
+def _on_all_hits_polarity_changed() -> None:
+    """A new save direction starts from a clear grid."""
+    st.session_state["all_hits_marked_keys"] = []
+
+
+def _on_toggle_all_hit(key: str) -> None:
+    """Remember or forget a mark until All done. Runs before the card redraws."""
+    marked_now = [str(item) for item in (st.session_state.get("all_hits_marked_keys") or [])]
+    if key in marked_now:
+        marked_now = [item for item in marked_now if item != key]
+    else:
         marked_now.append(key)
-    st.session_state["all_hits_reject_keys"] = marked_now
+    st.session_state["all_hits_marked_keys"] = marked_now
 
 
 @st.fragment
@@ -828,23 +873,19 @@ def _render_hit_card(key: str) -> None:
             f'<p class="all-hits-caption">{caption}</p>',
             unsafe_allow_html=True,
         )
+        mark_as = _all_hits_mark_as()
         already = key in {
-            str(item) for item in (st.session_state.get("all_hits_reject_keys") or [])
+            str(item) for item in (st.session_state.get("all_hits_marked_keys") or [])
         }
+        button_label = "Particle" if mark_as == "particle" else "Not a particle"
         if already:
-            st.markdown(
-                (
-                    f"<style>.st-key-mark_not_particle_{key} button"
-                    "{background-color:#8f2d2d;border-color:#8f2d2d;color:#ffffff;}</style>"
-                ),
-                unsafe_allow_html=True,
-            )
+            _marked_hit_button_css(key, mark_as)
         st.button(
-            "Not a particle",
-            key=f"mark_not_particle_{key}",
+            button_label,
+            key=f"mark_hit_{key}",
             type="secondary" if already else "primary",
             width="stretch",
-            on_click=_on_mark_not_particle,
+            on_click=_on_toggle_all_hit,
             args=(key,),
         )
 
@@ -904,6 +945,7 @@ def request_last_run() -> None:
     """Load the saved pipeline run. Pages stay empty until this runs."""
     restore_label_queue()
     st.session_state["load_last_run"] = True
+    st.session_state["load_labeled_tiles"] = False
     st.session_state["label_source"] = "last_pipeline"
     st.session_state["label_source_notice"] = True
     st.session_state.pop("label_front_key", None)
@@ -918,7 +960,7 @@ def _on_empty_label_queue(csv_path: str) -> None:
     """Drop the remaining unlabeled hits for this results file."""
     clear_label_queue(csv_path)
     st.session_state.pop("label_front_key", None)
-    st.session_state["all_hits_reject_keys"] = []
+    st.session_state["all_hits_marked_keys"] = []
 
 
 def _advance_inspect_tile(delta: int) -> None:
@@ -1646,7 +1688,12 @@ def _render_last_run_summary(
 
 def _render_size_threshold_table(table: pd.DataFrame | None) -> None:
     st.caption("Detected particles at least this large (equivalent circular diameter).")
-    st.dataframe(particles_at_least(table), width="content", hide_index=True)
+    st.dataframe(
+        particles_at_least(table),
+        width=280,
+        height=300,
+        hide_index=True,
+    )
 
 
 def _percent_cell(value: object) -> str:
@@ -1656,6 +1703,13 @@ def _percent_cell(value: object) -> str:
     return f"{100.0 * float(number):.1f}%"
 
 
+def _count_cell(value: object) -> str:
+    number = pd.to_numeric(value, errors="coerce")
+    if pd.isna(number):
+        return "—"
+    return f"{int(number):,}"
+
+
 def _metric_row(
     tile: str,
     crop: str,
@@ -1663,6 +1717,9 @@ def _metric_row(
     precision: float | None,
     recall: float | None,
     beta: float,
+    n_detected: int | None = None,
+    n_real: int | None = None,
+    n_undetected: int | None = None,
     precision_std: float | None = None,
     recall_std: float | None = None,
     f_beta_std: float | None = None,
@@ -1675,6 +1732,9 @@ def _metric_row(
     return {
         "Tile": tile,
         "Crop": crop,
+        "Detected": _count_cell(n_detected),
+        "Real": _count_cell(n_real),
+        "Undetected": _count_cell(n_undetected),
         "P": _percent_cell(precision),
         "R": _percent_cell(recall),
         "Fβ": _percent_cell(f_beta),
@@ -1710,6 +1770,9 @@ def _render_score_table(
                 _metric_row(
                     label,
                     name,
+                    n_detected=cell.get("n_detected"),
+                    n_real=cell.get("n_real"),
+                    n_undetected=cell.get("n_undetected"),
                     precision=cell.get("precision"),
                     recall=cell.get("recall"),
                     beta=beta,
@@ -1721,6 +1784,9 @@ def _render_score_table(
             _metric_row(
                 label,
                 "All together",
+                n_detected=detected if detected else None,
+                n_real=int(record.get("n_real") or 0) if detected else None,
+                n_undetected=int(record.get("n_undetected") or 0) if detected or real_total else None,
                 precision=float(record.get("precision") or 0.0) if detected else None,
                 recall=float(record.get("recall") or 0.0) if real_total else None,
                 beta=beta,
@@ -1734,9 +1800,11 @@ def _render_score_table(
     if not rows:
         return
     st.caption(
-        "Crops are the 3×3 zoom grid of that picture, NW through SE. "
+        "Each row is one ninth of that picture, NW through SE, or the whole picture. "
+        "Detected, Real, and Undetected are the counts in that crop. "
         "All together is that tile on its own. "
-        "P std, R std, and Fβ std are the spread of its nine crops."
+        "P std, R std, and Fβ std are the spread of its nine crops. "
+        "N, S, E, and W appear when this run detected those pictures."
     )
     st.table(pd.DataFrame(rows).set_index(["Tile", "Crop"]))
 
@@ -1748,8 +1816,6 @@ def render_labeled_tiles_tab(
     table: pd.DataFrame | None = None,
 ) -> None:
     """Latest pipeline run: tiles with detector circles and zoomed crops."""
-    if not st.session_state.get("load_last_run"):
-        return
     st.header("Labeled tiles")
     run_config = dict(config)
     session_config = st.session_state.get("config")
@@ -1820,7 +1886,8 @@ def render_labeled_tiles_tab(
             names.append(name)
             listed.add(name)
     names = sorted(names, key=_review_tile_rank)
-    metric_tiles = list(recovery_tiles or names)
+    hit_tiles = tile_names_for_hits(detections)
+    metric_tiles = hit_tiles or list(recovery_tiles or names)
     label_tiles = list(scene_tiles) if scene_tiles else metric_tiles
     per_tile_table = last_run_class_counts_by_tile(
         detections,
@@ -2016,8 +2083,10 @@ def render_labeled_tiles_tab(
     if detected_hits.empty:
         st.info("No detector hits on this tile.")
         return
+    side_images = _review_side_images(tile_path, cache)
+    page_size = 6 if side_images else GALLERY_PAGE_SIZE
     n_detected = len(detected_hits)
-    n_pages = max(1, (n_detected + GALLERY_PAGE_SIZE - 1) // GALLERY_PAGE_SIZE)
+    n_pages = max(1, (n_detected + page_size - 1) // page_size)
     page = int(
         st.number_input(
             "Page",
@@ -2026,36 +2095,61 @@ def render_labeled_tiles_tab(
             key=f"labeled_review_gallery_{tile_name}",
         )
     )
-    start = (page - 1) * GALLERY_PAGE_SIZE
-    end = start + GALLERY_PAGE_SIZE
-    columns = st.columns(LAST_RUN_CROP_COLUMNS)
+    start = (page - 1) * page_size
+    end = start + page_size
     records = detected_hits.to_dict(orient="records")
+    grid = None if side_images else st.columns(LAST_RUN_CROP_COLUMNS)
     for offset, record in enumerate(records[start:end]):
-        with columns[offset % LAST_RUN_CROP_COLUMNS]:
-            x_local = x_locals[start + offset]
-            y_local = y_locals[start + offset]
-            key = str(record.get("key", ""))
-            color = label_color_for_key(key, label_map)
-            missed = record.get("missed")
-            if (missed is True or str(missed).lower() == "true") and color == LABEL_CIRCLE_COLORS["particle"]:
-                color = MISSED_PARTICLE_COLOR
-                status_override = "missed"
-            else:
-                status_override = ""
+        x_local = x_locals[start + offset]
+        y_local = y_locals[start + offset]
+        key = str(record.get("key", ""))
+        color = label_color_for_key(key, label_map)
+        missed = record.get("missed")
+        if (missed is True or str(missed).lower() == "true") and color == LABEL_CIRCLE_COLORS["particle"]:
+            color = MISSED_PARTICLE_COLOR
+            status_override = "missed"
+        else:
+            status_override = ""
+        size_nm = float(record["size"])
+        size_um = size_nm / NM_PER_UM
+        status = status_override or label_map.get(key, "unlabeled")
+        views = [("Combi", image), *side_images] if side_images else [("", image)]
+        columns = st.columns(len(views)) if side_images else None
+        target = columns if columns is not None else [grid[offset % LAST_RUN_CROP_COLUMNS]]
+        for column, (direction, frame) in zip(target, views):
             crop = preview_click_crop(
-                image,
+                frame,
                 x_local,
                 y_local,
-                float(record["size"]),
+                size_nm,
                 pixel_size,
                 color=color,
             )
-            size_um = float(record["size"]) / NM_PER_UM
-            status = status_override or label_map.get(key, "unlabeled")
-            caption = (
-                f"id {record.get('id', '')} · {size_um:.1f} µm · {status}"
-            )
-            st.image(crop, caption=caption, width="stretch")
+            where = f"{direction} · " if direction else ""
+            caption = f"{where}id {record.get('id', '')} · {size_um:.1f} µm · {status}"
+            with column:
+                st.image(crop, caption=caption, width="stretch")
+
+
+def _review_side_images(
+    tile_path: Path, cache: TileImageCache
+) -> list[tuple[str, np.ndarray]]:
+    """N, S, E, W frames beside a combined ``(row,col)`` picture."""
+    sides = direction_images_for_combined(tile_path)
+    if len(sides) < 2:
+        return []
+    if tile_path.name in {path.name for path in sides.values()}:
+        return []
+    loaded: list[tuple[str, np.ndarray]] = []
+    for direction in ("N", "S", "E", "W"):
+        path = sides.get(direction)
+        if path is None:
+            continue
+        try:
+            loaded.append((direction, cache.load(path)))
+        except OSError:
+            continue
+    return loaded if len(loaded) >= 2 else []
 
 
 def _label_rows_missing_from_hits(

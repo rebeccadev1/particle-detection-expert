@@ -7,6 +7,7 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
+import altair as alt
 import cv2
 import numpy as np
 import pandas as pd
@@ -16,14 +17,14 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import src.capture.camera_automation_v2 as _camera_v2  # noqa: E402
+import src.capture.camera_automation as _camera  # noqa: E402
 import src.overall.io.tile_loader as _tile_loader  # noqa: E402
 
 # Streamlit reruns this file but keeps already imported modules. Reload so a
 # name added after the process started, such as latest_run_folder, is present.
-importlib.reload(_camera_v2)
+importlib.reload(_camera)
 importlib.reload(_tile_loader)
-latest_run_folder = _camera_v2.latest_run_folder
+latest_run_folder = _camera.latest_run_folder
 input_folder_labels = _tile_loader.input_folder_labels
 
 from src.capture.capture_ui import keep_capture_inputs, keep_stage_inputs, render_capture_tab, suspend_live_view  # noqa: E402
@@ -114,15 +115,23 @@ st.markdown(
         font-weight: 650 !important;
         padding: 0.1rem 0 0.35rem !important;
     }
-    [data-testid="stMetricValue"],
-    [data-testid="stMetricValue"] * {
-        font-size: 1.1rem !important;
-        font-weight: 600 !important;
+    .summary-stats {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 0.85rem 2.25rem;
+        margin: 0.15rem 0 0.35rem;
     }
-    [data-testid="stMetricLabel"],
-    [data-testid="stMetricLabel"] * {
-        font-size: 0.75rem !important;
-        font-weight: 500 !important;
+    .summary-stat-label {
+        font-size: 0.95rem;
+        font-weight: 500;
+        line-height: 1.6;
+        margin: 0 0 0.25rem;
+    }
+    .summary-stat-value {
+        font-size: 1rem;
+        font-weight: 400;
+        line-height: 1.6;
     }
     [data-testid="stCaptionContainer"] p,
     [data-testid="stCaptionContainer"] span {
@@ -152,12 +161,80 @@ st.markdown(
         font-size: 0.9rem !important;
         font-weight: 400 !important;
     }
+    [class*="st-key-block-last-run"] [data-testid="stVegaLiteChart"],
+    [class*="st-key-block-last-run"] .vega-embed {
+        margin: 0 !important;
+        padding: 0 !important;
+    }
     [data-testid="stMainBlockContainer"] {
         padding-top: 3.75rem !important;
+    }
+    [data-testid="stElementContainer"]:has(#dot-decimals),
+    [data-testid="stElementContainer"]:has(#sidebar-sec-hide) {
+        display: none;
     }
     </style>
     """,
     unsafe_allow_html=True,
+)
+# Number fields are <input type="number">, so a Dutch browser paints 1,0
+# while every caption and metric already uses 1.0. Keep the field as text
+# so the printed value stays with a period. A typed comma becomes a period.
+st.html(
+    """
+    <div id="dot-decimals"></div>
+    <script>
+    (function () {
+      if (window.__dotDecimals) return;
+      window.__dotDecimals = true;
+      var typeDesc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "type");
+      Object.defineProperty(HTMLInputElement.prototype, "type", {
+        configurable: true,
+        enumerable: typeDesc.enumerable,
+        get: function () { return typeDesc.get.call(this); },
+        set: function (value) {
+          if (value === "number") {
+            typeDesc.set.call(this, "text");
+            this.setAttribute("inputmode", "decimal");
+            this.setAttribute("lang", "en");
+            return;
+          }
+          typeDesc.set.call(this, value);
+        }
+      });
+      var nativeSetAttribute = Element.prototype.setAttribute;
+      Element.prototype.setAttribute = function (name, value) {
+        if (this instanceof HTMLInputElement && name === "type" && value === "number") {
+          nativeSetAttribute.call(this, "type", "text");
+          nativeSetAttribute.call(this, "inputmode", "decimal");
+          nativeSetAttribute.call(this, "lang", "en");
+          return;
+        }
+        nativeSetAttribute.call(this, name, value);
+      };
+      document.querySelectorAll('input[type="number"]').forEach(function (input) {
+        input.type = "text";
+      });
+      document.addEventListener("beforeinput", function (event) {
+        var target = event.target;
+        if (!(target instanceof HTMLInputElement)) return;
+        if (!target.closest('[data-testid="stNumberInput"]')) return;
+        if (!event.data || event.data.indexOf(",") === -1) return;
+        event.preventDefault();
+        var start = target.selectionStart == null ? target.value.length : target.selectionStart;
+        var end = target.selectionEnd == null ? start : target.selectionEnd;
+        var insert = event.data.replace(/,/g, ".");
+        var next = target.value.slice(0, start) + insert + target.value.slice(end);
+        var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        setter.call(target, next);
+        var caret = start + insert.length;
+        target.setSelectionRange(caret, caret);
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+      }, true);
+    })();
+    </script>
+    """,
+    unsafe_allow_javascript=True,
 )
 st.title("Particle Detection Software")
 
@@ -525,9 +602,11 @@ def _render_adjust_parameters(base: dict) -> None:
     ]
     if hidden:
         selectors = ",".join(
-            f'.st-key-sidebar_sec_{name}' for name in hidden
+            f'[data-testid="stLayoutWrapper"]:has(> .st-key-sidebar_sec_{name})'
+            for name in hidden
         )
         st.markdown(
+            f'<div id="sidebar-sec-hide"></div>'
             f"<style>{selectors}{{display:none !important;}}</style>",
             unsafe_allow_html=True,
         )
@@ -971,6 +1050,7 @@ def _apply_finished_pipeline() -> None:
     st.session_state["last_pipeline_csv"] = str(csv_path)
     st.session_state["ui_show_last_run"] = True
     st.session_state["load_last_run"] = True
+    st.session_state["load_labeled_tiles"] = False
     stats = summary_stats(table)
     st.success(
         f"{stats['particle_count']} particles. Mean size {_nm_to_um(stats['size_mean']):.2f} µm."
@@ -994,7 +1074,7 @@ def _pipeline_buttons(config: dict, *, running: bool) -> None:
                 with st.expander("Error detail"):
                     st.code(detail)
             else:
-                st.rerun(scope="app")
+                st.rerun(scope="fragment")
         if st.button(
             "Stop pipeline",
             disabled=not running,
@@ -1005,27 +1085,27 @@ def _pipeline_buttons(config: dict, *, running: bool) -> None:
 
 
 @st.fragment(run_every=0.5)
-def _pipeline_running(config: dict) -> None:
-    status = pipeline_status()
-    if not status["running"]:
-        st.session_state["_pipeline_was_running"] = False
-        st.rerun(scope="app")
-        return
-    st.session_state["_pipeline_was_running"] = True
-    total = max(status["total"], 1)
-    fraction = min(status["current"], total) / total if status["total"] else 0.0
-    label = status["name"] or "Starting…"
-    if status["total"]:
-        label = f"{status['current']}/{status['total']} {label}"
-    if status["stopping"]:
-        label = f"Stopping after the current tile. {label}"
-    st.progress(fraction, text=label)
-    _pipeline_buttons(config, running=True)
-
-
 def _pipeline_controls(config: dict) -> None:
-    if pipeline_status()["running"] or st.session_state.get("_pipeline_was_running"):
-        _pipeline_running(config)
+    """Progress and the run/stop buttons stay in this fragment.
+
+    Moving the buttons out while the pipeline is idle, then back in on the
+    next run, leaves the previous row on screen for a moment.
+    """
+    status = pipeline_status()
+    if status["running"]:
+        st.session_state["_pipeline_was_running"] = True
+        total = max(status["total"], 1)
+        fraction = min(status["current"], total) / total if status["total"] else 0.0
+        label = status["name"] or "Starting…"
+        if status["total"]:
+            label = f"{status['current']}/{status['total']} {label}"
+        if status["stopping"]:
+            label = f"Stopping after the current tile. {label}"
+        st.progress(fraction, text=label)
+        _pipeline_buttons(config, running=True)
+        return
+    if st.session_state.pop("_pipeline_was_running", False):
+        st.rerun(scope="app")
         return
     _pipeline_buttons(config, running=False)
 
@@ -1157,6 +1237,47 @@ def _render_training(config: dict) -> None:
         st.caption(f"Detection model: `{active}`")
 
 
+def _write_mosaic_png(rgb: np.ndarray, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bgr = cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2BGR)
+    if not cv2.imwrite(str(path), bgr):
+        raise OSError(f"Failed to write mosaic image to {path}")
+
+
+def _saved_plain_mosaic(saved: Path, config: dict) -> np.ndarray:
+    """Unlabeled mosaic for a saved run. Stitches once, then reuses the file."""
+    plain_path = saved.parent / "mosaic_plain.png"
+    cached = st.session_state.get("saved_plain_rgb")
+    key = str(plain_path.resolve())
+    if (
+        st.session_state.get("saved_plain_key") == key
+        and isinstance(cached, np.ndarray)
+        and plain_path.is_file()
+    ):
+        return cached
+    if plain_path.is_file():
+        bgr = cv2.imread(str(plain_path), cv2.IMREAD_COLOR)
+        if bgr is None:
+            raise OSError(f"Could not read {plain_path}")
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    else:
+        import importlib
+
+        import src.main_pipeline.runner as pipeline_runner
+
+        # Streamlit keeps the runner module from when this process started.
+        if not hasattr(pipeline_runner, "load_report_mosaic"):
+            pipeline_runner = importlib.reload(pipeline_runner)
+        mosaic = pipeline_runner.load_report_mosaic(config)
+        if not mosaic.placements:
+            raise FileNotFoundError("No tiles could be placed for this mosaic.")
+        rgb = overlay_rgb(mosaic, config, crop=None)
+        _write_mosaic_png(rgb, plain_path)
+    st.session_state["saved_plain_rgb"] = rgb
+    st.session_state["saved_plain_key"] = key
+    return rgb
+
+
 def _mosaic_labels_on() -> bool:
     """Checkbox for orange detection circles on the stitched mosaic. On by default."""
     return st.checkbox(
@@ -1217,29 +1338,80 @@ def _finished_run_state(config: dict) -> tuple[pd.DataFrame | None, object, dict
 def _render_size_threshold_table(table: pd.DataFrame) -> None:
     """Detected particles with equivalent diameter at least 10, 20, 25, 50, 75 µm."""
     st.caption("Detected particles at least this large (equivalent circular diameter).")
-    st.dataframe(particles_at_least(table), width="content", hide_index=True)
-
-
-def _render_size_bins(table: pd.DataFrame, min_size_um: float) -> None:
-    st.header("Size distribution (µm)")
-    if table.empty or "size" not in table.columns:
-        st.info("This run has no particle sizes to bin.")
-        return
-    st.bar_chart(
-        size_distribution(table, min_size_um),
-        x_label="Size (µm)",
-        y_label="Amount of particles",
-        sort=False,
+    st.dataframe(
+        particles_at_least(table),
+        width=250,
+        height=300,
+        hide_index=True,
     )
 
 
-def _render_finished_run(config: dict) -> None:
+def _render_size_bins(table: pd.DataFrame, min_size_um: float) -> None:
+    st.subheader("Size distribution (µm)")
+    if table.empty or "size" not in table.columns:
+        st.info("This run has no particle sizes to bin.")
+        return
+    frame = size_distribution(table, min_size_um).rename_axis("size").reset_index()
+    chart = (
+        alt.Chart(frame)
+        .mark_bar(color="#0F238C")
+        .encode(
+            x=alt.X(
+                "size:N",
+                sort=None,
+                title="Size (µm)",
+                axis=alt.Axis(labelAngle=-40, labelPadding=4, titlePadding=8, labelLimit=90),
+            ),
+            y=alt.Y(
+                "count:Q",
+                title="Amount of particles",
+                axis=alt.Axis(labelPadding=8, titlePadding=12),
+            ),
+        )
+        .properties(height=320, padding={"left": 10, "right": 10, "top": 6, "bottom": 6})
+        .configure_view(stroke=None)
+    )
+    st.altair_chart(chart, width="stretch", theme=None)
+
+
+def _render_summary_stats(stats: dict) -> None:
+    """Label above value, same arrangement as the Settings profile control."""
+    items = (
+        ("Particles", f"{int(stats['particle_count'])}"),
+        ("Mean size (µm)", f"{_nm_to_um(stats['size_mean']):.2f}"),
+        ("Min size (µm)", f"{_nm_to_um(stats['size_min']):.2f}"),
+        ("Max size (µm)", f"{_nm_to_um(stats['size_max']):.2f}"),
+    )
+    cells = "".join(
+        "<div class='summary-stat'>"
+        f"<div class='summary-stat-label'>{label}</div>"
+        f"<div class='summary-stat-value'>{value}</div>"
+        "</div>"
+        for label, value in items
+    )
+    st.markdown(f"<div class='summary-stats'>{cells}</div>", unsafe_allow_html=True)
+
+
+def _summary_heading(config: dict) -> str:
+    """``Summary of {input folder name}``, or ``Last run`` when no folder is known."""
+    raw = str(config.get("input_dir") or "").strip().strip('"').strip("'").rstrip("/\\")
+    name = Path(raw).name if raw else ""
+    if not name:
+        return "Last run"
+    return f"Summary of {name}"
+
+
+def _request_labeled_tiles() -> None:
+    st.session_state["load_labeled_tiles"] = True
+
+
+def _render_finished_run(config: dict) -> bool:
     """Table, size bins, and mosaic from the latest finished pipeline run."""
     table, mosaic, active_config = _finished_run_state(config)
     if table is None:
         with st.container(border=True, key="block-last-run"):
-            st.header("Last run")
-            saved_csv, _saved_config = load_last_pipeline(config)
+            saved_csv, saved_config = load_last_pipeline(config)
+            st.header(_summary_heading(saved_config))
             st.button(
                 "Load last run",
                 key="run_load_last_run",
@@ -1247,17 +1419,47 @@ def _render_finished_run(config: dict) -> None:
                 disabled=saved_csv is None or not Path(saved_csv).is_file(),
             )
             st.caption("Last run stays unloaded until you click Load last run.")
-        return
+        return False
 
     with st.container(border=True, key="block-last-run"):
-        st.header("Last run")
+        st.header(_summary_heading(active_config))
         stats = summary_stats(table)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Particles", stats["particle_count"])
-        c2.metric("Mean size (µm)", f"{_nm_to_um(stats['size_mean']):.2f}")
-        c3.metric("Min size (µm)", f"{_nm_to_um(stats['size_min']):.2f}")
-        c4.metric("Max size (µm)", f"{_nm_to_um(stats['size_max']):.2f}")
+        _render_summary_stats(stats)
         _render_size_threshold_table(table)
+        detect_min_nm = float((active_config.get("detection") or {}).get("min_size_nm") or 0.0)
+        _render_size_bins(table, _nm_to_um(detect_min_nm))
+
+    with st.container(border=True, key="block-results"):
+        st.header("All particles")
+        display = result_table(table)
+        preview_rows = 100
+        if len(display) > preview_rows:
+            st.caption(
+                f"Showing the first {preview_rows:,} of {len(display):,} rows. "
+                "Download the CSV or Excel file for the full table."
+            )
+            st.dataframe(display.head(preview_rows), width="stretch", hide_index=True)
+        else:
+            st.dataframe(display, width="stretch", hide_index=True)
+    
+
+        dl_csv, dl_xlsx = st.columns(2)
+        with dl_csv:
+            st.download_button(
+                "Download CSV",
+                data=result_table(table).to_csv(index=False).encode("utf-8"),
+                file_name="particles.csv",
+                mime="text/csv",
+                key="last_run_download_csv",
+            )
+        with dl_xlsx:
+            st.download_button(
+                "Download Excel",
+                data=excel_bytes(table, active_config),
+                file_name="particles.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="last_run_download_xlsx",
+            )
 
     with st.container(border=True, key="block-mosaic"):
         placements = getattr(mosaic, "placements", None)
@@ -1266,24 +1468,48 @@ def _render_finished_run(config: dict) -> None:
             st.header("Stitched mosaic")
             if saved is not None:
                 show_labels = _mosaic_labels_on()
-                plain = saved.parent / "mosaic_plain.png"
-                showing_labels = show_labels or not plain.is_file()
-                if not show_labels and not plain.is_file():
-                    st.caption("This saved run has only the mosaic with labels.")
-                shown = saved if showing_labels else plain
-                caption = (
-                    "Saved mosaic with labels"
-                    if showing_labels
-                    else "Saved mosaic without labels"
-                )
-                st.image(str(shown), caption=caption, width="stretch")
-                st.download_button(
-                    "Download stitched mosaic",
-                    data=shown.read_bytes(),
-                    file_name=shown.name,
-                    mime="image/png" if shown.suffix.lower() == ".png" else "image/jpeg",
-                    key="last_run_download_saved_mosaic",
-                )
+                if show_labels:
+                    st.image(
+                        str(saved),
+                        caption="Saved mosaic with labels",
+                        width="stretch",
+                    )
+                    download_name = saved.name
+                    download_bytes = saved.read_bytes()
+                    download_mime = (
+                        "image/png" if saved.suffix.lower() == ".png" else "image/jpeg"
+                    )
+                else:
+                    try:
+                        if not (saved.parent / "mosaic_plain.png").is_file():
+                            with st.spinner("Stitching the mosaic without labels…"):
+                                plain_rgb = _saved_plain_mosaic(saved, active_config)
+                        else:
+                            plain_rgb = _saved_plain_mosaic(saved, active_config)
+                    except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
+                        st.error("The mosaic without labels could not be built.")
+                        with st.expander("Error detail"):
+                            st.code(str(exc))
+                        plain_rgb = None
+                    if plain_rgb is None:
+                        download_bytes = None
+                    else:
+                        st.image(
+                            plain_rgb,
+                            caption="Saved mosaic without labels",
+                            width="stretch",
+                        )
+                        download_name = "mosaic_plain.jpg"
+                        download_bytes = encode_overlay_jpeg(plain_rgb)
+                        download_mime = "image/jpeg"
+                if download_bytes is not None:
+                    st.download_button(
+                        "Download stitched mosaic",
+                        data=download_bytes,
+                        file_name=download_name,
+                        mime=download_mime,
+                        key="last_run_download_saved_mosaic",
+                    )
             else:
                 st.info(
                     "No tiles had row/column (or x/y) in the filename, so nothing was "
@@ -1350,7 +1576,20 @@ def _render_finished_run(config: dict) -> None:
                             st.error(f"Failed to write mosaic image to {out_dir / name}")
             labeled = st.session_state.get("overlay")
             plain = st.session_state.get("overlay_plain")
-            overlay = labeled if show_labels or plain is None else plain
+            if not show_labels and plain is None and labeled is not None:
+                try:
+                    with st.spinner("Stitching the mosaic without labels…"):
+                        plain = overlay_rgb(mosaic, active_config, crop=None)
+                    st.session_state["overlay_plain"] = plain
+                    plain_path = (
+                        resolve_output_dir(active_config.get("output_dir")) / "mosaic_plain.png"
+                    )
+                    _write_mosaic_png(plain, plain_path)
+                except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
+                    st.error("The mosaic without labels could not be built.")
+                    with st.expander("Error detail"):
+                        st.code(str(exc))
+            overlay = labeled if show_labels else plain
             if overlay is not None:
                 caption = (
                     "All tiles, stitched at reduced resolution, with labels"
@@ -1389,45 +1628,7 @@ def _render_finished_run(config: dict) -> None:
                         else "Cropped region without labels"
                     )
                     st.image(cropped, caption=caption, width="stretch")
-
-    with st.container(border=True, key="block-results"):
-        st.header("Results")
-        display = result_table(table)
-        preview_rows = 5_000
-        if len(display) > preview_rows:
-            st.caption(
-                f"Showing the first {preview_rows:,} of {len(display):,} rows. "
-                "Download the CSV or Excel file for the full table."
-            )
-            st.dataframe(display.head(preview_rows), width="stretch", hide_index=True)
-        else:
-            st.dataframe(display, width="stretch", hide_index=True)
-        st.caption(
-            "`x_global_um` and `y_global_um` are microns from the top-left of the mosaic "
-            "(x right, y down). `size_um` is equivalent circular diameter in µm."
-        )
-
-        dl_csv, dl_xlsx = st.columns(2)
-        with dl_csv:
-            st.download_button(
-                "Download CSV",
-                data=result_table(table).to_csv(index=False).encode("utf-8"),
-                file_name="particles.csv",
-                mime="text/csv",
-                key="last_run_download_csv",
-            )
-        with dl_xlsx:
-            st.download_button(
-                "Download Excel",
-                data=excel_bytes(table, active_config),
-                file_name="particles.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="last_run_download_xlsx",
-            )
-
-    min_size_nm = float((active_config.get("detection") or {}).get("min_size_nm") or 0.0)
-    with st.container(border=True, key="block-size"):
-        _render_size_bins(table, _nm_to_um(min_size_nm))
+    return True
 
 
 def _render_detection(config: dict) -> None:
@@ -1474,15 +1675,24 @@ if page == "Analyse":
     with st.container(border=True, key="block-run"):
         st.header("Run/stop pipeline")
         _render_detection(config)
-    _render_finished_run(config)
-    if st.session_state.get("load_last_run"):
+    run_loaded = _render_finished_run(config)
+    if run_loaded:
         with st.container(border=True, key="block-review"):
-            render_labeled_tiles_tab(
-                config,
-                ROOT,
-                st.session_state.get("mosaic"),
-                st.session_state.get("table"),
-            )
+            if not st.session_state.get("load_labeled_tiles"):
+                st.header("Labeled tiles")
+                st.button(
+                    "Load labeled tiles",
+                    key="run_load_labeled_tiles",
+                    on_click=_request_labeled_tiles,
+                )
+                st.caption("Labeled tiles stay unloaded until you click Load labeled tiles.")
+            else:
+                render_labeled_tiles_tab(
+                    config,
+                    ROOT,
+                    st.session_state.get("mosaic"),
+                    st.session_state.get("table"),
+                )
 else:
     config = _config_from_state(base_config)
 

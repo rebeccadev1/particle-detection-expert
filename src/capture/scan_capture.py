@@ -6,7 +6,7 @@ import threading
 import time
 from pathlib import Path
 
-from src.capture.camera_automation_v2 import (
+from src.capture.camera_automation import (
     CAPTURES_DIR,
     MOTION_PAUSE_S,
     RING_SIDES,
@@ -291,7 +291,7 @@ def _scan_thread(
     return_moves: list[tuple[str, float]],
     stage: dict | None,
 ) -> None:
-    from src.capture.camera_automation_v2 import shutdown
+    from src.capture.camera_automation import shutdown
     from src.capture.preview import stop_preview
 
     camera = None

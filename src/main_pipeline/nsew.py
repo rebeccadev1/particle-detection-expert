@@ -24,6 +24,7 @@ _POSITIONAL_DIRECTION = re.compile(
     r"^\((?P<row>\d+),(?P<col>\d+)\)_(?P<direction>[NSEW])$",
     re.IGNORECASE,
 )
+_POSITIONAL_COMBI = re.compile(r"^\((?P<row>\d+),(?P<col>\d+)\)$")
 # Adjacent compass pairs only (not opposite N–S or E–W).
 ORTHOGONAL_PAIRS = (("N", "E"), ("N", "W"), ("S", "E"), ("S", "W"))
 IMAGE_EXTS = {".bmp", ".png", ".tif", ".tiff", ".jpg", ".jpeg"}
@@ -366,6 +367,31 @@ def positional_direction(path: str | Path) -> tuple[int, int, str] | None:
     )
 
 
+def positional_cell_sides(tile_path: str | Path) -> dict[str, Path]:
+    """N, S, E, and W files for ``(row,col).png`` or ``(row,col)_N.png``.
+
+    Missing sides are left out. An unrelated filename returns an empty dict.
+    """
+    path = Path(tile_path)
+    parsed = positional_direction(path)
+    if parsed is not None:
+        row, col, _direction = parsed
+    else:
+        match = _POSITIONAL_COMBI.fullmatch(path.stem)
+        if match is None:
+            return {}
+        row, col = int(match.group("row")), int(match.group("col"))
+    found: dict[str, Path] = {}
+    suffixes = (path.suffix.lower(), *(ext for ext in IMAGE_EXTS if ext != path.suffix.lower()))
+    for direction in DIRECTIONS:
+        for suffix in suffixes:
+            candidate = path.parent / f"({int(row)},{int(col)})_{direction}{suffix}"
+            if candidate.is_file():
+                found[direction] = candidate
+                break
+    return found
+
+
 def positional_combi_path(
     folder: str | Path,
     row: int,
@@ -438,12 +464,13 @@ def prepare_detection_paths(
     shots, including the uniform ``all`` image when the folder has one.
 
     A map of ``(row,col)_N`` shots is different: each cell's four sides are
-    combined into ``(row,col).png`` first, and those side files are not loaded.
-    A cell missing a side is left out. Folders without a full set of plain
-    N/S/E/W names are otherwise unchanged.
+    combined into ``(row,col).png`` first. Detection then loads that combi
+    and the four side files. A cell missing a side is left out. Folders
+    without a full set of plain N/S/E/W names are otherwise unchanged.
     """
     rest, groups = _positional_groups(paths)
     extras: list[Path] = []
+    side_files: list[Path] = []
     pending = [
         (folder, row, col, found)
         for (folder, row, col), found in groups.items()
@@ -456,6 +483,7 @@ def prepare_detection_paths(
             progress_cb(index, n_cells, f"Combining ({row},{col})")
         sources = [found[direction] for direction in DIRECTIONS]
         out = positional_combi_path(folder, row, col, found)
+        side_files.extend(found[direction] for direction in DIRECTIONS)
         if combi_is_current(out, sources):
             extras.append(out)
             continue
@@ -472,7 +500,7 @@ def prepare_detection_paths(
             progress_cb(1, 1, f"Combining {folder.name}")
     kept: list[Path] = []
     seen: set[Path] = set()
-    for path in list(rest) + extras:
+    for path in list(rest) + extras + side_files:
         resolved = path.resolve()
         if resolved in seen:
             continue

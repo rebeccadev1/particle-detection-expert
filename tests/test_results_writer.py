@@ -184,6 +184,15 @@ def test_size_distribution_steps_from_min_size() -> None:
     assert list(counts) == [2, 1, 1, 1]
 
 
+def test_size_distribution_starts_at_detection_floor() -> None:
+    from src.main_pipeline.report.report_generator import size_distribution
+
+    table = pd.DataFrame({"size": [23_200.0, 26_000.0, 31_000.0]})
+    counts = size_distribution(table, min_um=20.0)["count"]
+    assert list(counts.index) == ["20–25", "25–30", "30–35"]
+    assert list(counts) == [1, 1, 1]
+
+
 def test_excel_bytes_includes_parameters_sheet() -> None:
     book = pd.ExcelFile(BytesIO(excel_bytes(_particles(), {"input_dir": "tiles"})))
     assert book.sheet_names == [PARTICLES_SHEET, PARAMETERS_SHEET]

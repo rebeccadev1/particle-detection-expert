@@ -18,7 +18,7 @@ from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS, Parti
 DIRECTION_STEMS = ("N", "S", "E", "W")
 DISPLAY_DIRECTION_ORDER = ("N", "W", "E", "S")
 LIGHTING_ROLES = ("quad0", "quad1", "quad2", "quad3", "all")
-# Ring command 0..3 in arduino_camera_v2.ino, clockwise from the top of the image.
+# Ring command 0..3 in arduino_camera_v3, clockwise from the top of the image.
 QUAD_DIRECTIONS = ("N", "E", "S", "W")
 DEFAULT_NSEW_MERGE_RADIUS_PX = 24.0
 DEFAULT_NSEW_SIZE_MATCH_FRACTION = 0.4
