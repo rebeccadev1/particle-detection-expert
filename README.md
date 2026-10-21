@@ -1,8 +1,6 @@
 # Particle detection software (TL;DR)
 
-This app finds particles on darkfield images of a patterned wafer, then lets you review the hits. You need a folder of tile images (TIFF, BMP, PNG, or JPEG). The setup (camera, ring light, and stage) is only needed when you are taking new pictures.
-
-How the detector actually works is all written down in the [HOW_IT_WORKS.md](HOW_IT_WORKS.md), if you're interested :).
+This app finds particles on darkfield images of a patterned wafer, then lets you review the hits. How the detector actually works is all written down in the [HOW_IT_WORKS.md](HOW_IT_WORKS.md), if you're interested :).
 
 ## Install
 
