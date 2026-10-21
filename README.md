@@ -15,7 +15,7 @@ cd particle-detection
 
 **Download ZIP**
 
-On [the GitHub page](https://github.com/rebeccadev1/particle-detection), click **Code**, then **Download ZIP**. Unzip it. The folder is named `particle-detection-main`. It should contain `app.py` and `requirements.txt`.
+On this GitHub page, click **Code**, then **Download ZIP**. Unzip it. The folder is named `particle-detection-main`. It should contain `app.py` and `requirements.txt`.
 
 **Mac:** press Command-Space, type `Terminal`, and press Return. Type `cd ` with a space after it, then drag the `particle-detection-main` folder from Finder onto the Terminal window. Press Return.
 
