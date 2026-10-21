@@ -36,8 +36,6 @@ pip install -r requirements.txt
 
 On Windows: Activate with `.venv\Scripts\activate` instead of `source .venv/bin/activate`.
 
-## Install
-
 With the virtual environment active, from this folder:
 
 ```bash
