@@ -2,14 +2,14 @@
 
 This app finds contaminant particles on optical-microscope images of a patterned wafer, then lets you review, label, and optionally retrain a filter on those hits. Image analysis runs on a folder of tiles. Camera capture, the ring light, and the motorized stage are optional and only needed when you are taking new pictures.
 
-Algorithm detail lives in [HOW_IT_WORKS.md](HOW_IT_WORKS.md). This file is the setup and operating guide.
+Algorithm detail lives in [HOW_IT_WORKS.md](HOW_IT_WORKS.md). This README is the setup and operating guide.
 
 ## What you need
 
 **To analyze images you already have**
 
 - macOS (this setup is what the capture code expects; the analysis itself is ordinary Python)
-- Python 3.11 or newer (this project has been run on 3.13)
+- Python 3.11 or newer
 - A folder of tile images: TIFF, BMP, PNG, or JPEG
 
 **To capture new images** (Capture tab only)
