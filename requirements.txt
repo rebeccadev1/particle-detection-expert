@@ -10,7 +10,6 @@ xlsxwriter>=3.2
 openpyxl>=3.1
 streamlit>=1.28
 pyserial>=3.5
-Printrun>=2.2
 pypylon>=26.8
 streamlit-image-coordinates>=0.1.9
 streamlit-drawable-canvas==0.9.3
