@@ -100,7 +100,7 @@ def test_write_parameters_json_keeps_nested_settings(tmp_path: Path) -> None:
     assert payload["preprocessing"]["contrast_percentiles"] == [1.0, 99.0]
 
 
-def test_pdf_header_is_title_then_path_then_folder(tmp_path: Path) -> None:
+def test_pdf_header_is_title_then_path(tmp_path: Path) -> None:
     from src.main_pipeline.report.report_generator import pdf_header_lines
 
     lines = pdf_header_lines({"input_dir": str(tmp_path)})
@@ -108,7 +108,6 @@ def test_pdf_header_is_title_then_path_then_folder(tmp_path: Path) -> None:
         "Particle Detection Output",
         "Path to analysed image(s):",
         str(tmp_path.resolve()),
-        tmp_path.name,
     ]
 
 

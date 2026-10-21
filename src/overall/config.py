@@ -58,6 +58,34 @@ def next_versioned_output_name(
     return f"{name} v{highest + 1}"
 
 
+def advance_versioned_output_name(
+    input_folder: str | Path | None,
+    current: str | Path | None,
+    outputs: str | Path | None = None,
+) -> str:
+    """``{input folder} vN`` one past the version a run just used.
+
+    ``current`` is the output folder of that run. A blank current is treated
+    as the next free version, then moved one further. A name that is not
+    ``{input folder} vN`` is left unchanged.
+    """
+    fresh = next_versioned_output_name(input_folder, outputs)
+    label = output_choice_label(current).strip()
+    if not fresh:
+        return label
+    name = Path(
+        str(input_folder or "").strip().strip('"').strip("'").rstrip("/\\")
+    ).name
+    pattern = re.compile(rf"^{re.escape(name)} v(\d+)$")
+    used = pattern.fullmatch(label)
+    if label and used is None:
+        return label
+    used_n = int(used.group(1)) if used else 0
+    fresh_match = pattern.fullmatch(fresh)
+    fresh_n = int(fresh_match.group(1)) if fresh_match else 1
+    return f"{name} v{max(fresh_n, used_n + 1)}"
+
+
 def output_choice_label(folder: str | Path | None) -> str:
     """Folder name under Outputs, or the original text when it points elsewhere.
 

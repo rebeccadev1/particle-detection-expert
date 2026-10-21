@@ -89,6 +89,29 @@ def test_next_versioned_output_name_uses_input_folder(tmp_path: Path) -> None:
     assert next_versioned_output_name("R3 04-08", outputs) == "R3 04-08 v1"
 
 
+def test_advance_versioned_output_name_bumps_each_run(tmp_path: Path) -> None:
+    from src.overall.config import advance_versioned_output_name
+
+    outputs = tmp_path / "Outputs"
+    outputs.mkdir()
+    (outputs / "v7 2026-10-16 v1").mkdir()
+
+    assert (
+        advance_versioned_output_name(
+            "Groundup/v7 2026-10-16", "v7 2026-10-16 v1", outputs
+        )
+        == "v7 2026-10-16 v2"
+    )
+    assert (
+        advance_versioned_output_name("R3 04-08", "R3 04-08 v1", outputs)
+        == "R3 04-08 v2"
+    )
+    assert (
+        advance_versioned_output_name("R3 04-08", "kept-name", outputs)
+        == "kept-name"
+    )
+
+
 def test_output_folder_choices_keep_current_and_standard_name(tmp_path: Path) -> None:
     from src.overall.config import output_choice_label, output_folder_choices, output_folder_labels
 

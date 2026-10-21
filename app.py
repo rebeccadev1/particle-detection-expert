@@ -34,6 +34,7 @@ from src.overall.config import (  # noqa: E402
     beta_preset_rows,
     load_config,
     preset_for_beta,
+    advance_versioned_output_name,
     next_versioned_output_name,
     output_choice_label,
     output_folder_choices,
@@ -1063,6 +1064,20 @@ def _apply_finished_pipeline() -> None:
     st.caption(f"Saved to {out_dir}.")
 
 
+def _advance_output_folder(config: dict) -> None:
+    """Point Output folder at the next ``{tile folder} vN`` after this run."""
+    nxt = advance_versioned_output_name(
+        config.get("input_dir"),
+        config.get("output_dir"),
+    )
+    if not nxt or nxt == output_choice_label(config.get("output_dir")):
+        return
+    live = _live_key("ui_output_dir")
+    st.session_state[live] = nxt
+    st.session_state["ui_output_dir"] = nxt
+    st.session_state[_hold_key("ui_output_dir")] = nxt
+
+
 def _pipeline_buttons(config: dict, *, running: bool) -> None:
     with st.container(horizontal=True):
         if st.button(
@@ -1079,7 +1094,13 @@ def _pipeline_buttons(config: dict, *, running: bool) -> None:
                 with st.expander("Error detail"):
                     st.code(detail)
             else:
-                st.rerun(scope="fragment")
+                _advance_output_folder(config)
+                # A run can finish before this fragment draws progress. A full
+                # rerun is what shows the table or the error.
+                if pipeline_status()["pending"]:
+                    st.rerun(scope="app")
+                else:
+                    st.rerun(scope="fragment")
         if st.button(
             "Stop pipeline",
             disabled=not running,
@@ -1098,7 +1119,6 @@ def _pipeline_controls(config: dict) -> None:
     """
     status = pipeline_status()
     if status["running"]:
-        st.session_state["_pipeline_was_running"] = True
         total = max(status["total"], 1)
         fraction = min(status["current"], total) / total if status["total"] else 0.0
         label = status["name"] or "Starting…"
@@ -1109,7 +1129,10 @@ def _pipeline_controls(config: dict) -> None:
         st.progress(fraction, text=label)
         _pipeline_buttons(config, running=True)
         return
-    if st.session_state.pop("_pipeline_was_running", False):
+    # pending stays set until the full page claims the result. Retry the full
+    # rerun on every tick so a missed refresh cannot leave the page blank.
+    if status["pending"]:
+        st.caption("Updating results…")
         st.rerun(scope="app")
         return
     _pipeline_buttons(config, running=False)

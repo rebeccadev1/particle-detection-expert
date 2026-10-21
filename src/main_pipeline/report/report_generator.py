@@ -25,11 +25,9 @@ from src.main_pipeline.stitching.stitcher import (
     downsample_image,
 )
 
-
 SIZE_COUNT_THRESHOLDS_UM = (10, 20, 25, 50, 75)
 SIZE_BIN_STEP_UM = 5.0
 NM_PER_UM = 1000.0
-
 
 def summary_stats(df: pd.DataFrame) -> dict[str, Any]:
     """Return count and size-distribution summary for a particle table."""
@@ -50,7 +48,6 @@ def summary_stats(df: pd.DataFrame) -> dict[str, Any]:
         "size_max": float(sizes.max()),
     }
 
-
 def particles_at_least(
     df: pd.DataFrame | None,
     thresholds_um: tuple[float, ...] = SIZE_COUNT_THRESHOLDS_UM,
@@ -70,7 +67,6 @@ def particles_at_least(
         counts = [int(np.sum(sizes_um >= float(threshold))) for threshold in thresholds_um]
     return pd.DataFrame({"Size": labels, "Particles": counts})
 
-
 def size_bin_edges(
     min_um: float,
     max_um: float,
@@ -89,7 +85,6 @@ def size_bin_edges(
         steps = 1
     return start + np.arange(steps + 1, dtype=float) * step
 
-
 def _size_bin_label(left: float, right: float) -> str:
     def fmt(value: float) -> str:
         rounded = round(value)
@@ -98,7 +93,6 @@ def _size_bin_label(left: float, right: float) -> str:
         return f"{value:.2f}"
 
     return f"{fmt(left)}–{fmt(right)}"
-
 
 def size_distribution(
     df: pd.DataFrame | None,
@@ -142,7 +136,6 @@ def overlay_downsample(
     target_mb = float(cfg_get(config, "report.target_mb", 20.0))
     return downsample_for_target(height, width, target_mb=target_mb, channels=3)
 
-
 def overlay_rgb(
     mosaic: LazyMosaic,
     config: dict[str, Any],
@@ -157,7 +150,6 @@ def overlay_rgb(
     downsample = overlay_downsample(mosaic, config, crop=crop)
     preview = mosaic.preview(downsample=downsample, crop=crop, progress_cb=progress_cb)
     return _to_display_rgb(preview)
-
 
 def draw_overlay_markers(
     rgb: np.ndarray,
@@ -206,7 +198,6 @@ def draw_overlay_markers(
         )
     return marked
 
-
 def overlay_markers(
     mosaic: LazyMosaic,
     particles: pd.DataFrame,
@@ -223,7 +214,6 @@ def overlay_markers(
     rgb = overlay_rgb(mosaic, config, crop=crop, progress_cb=progress_cb)
     return draw_overlay_markers(rgb, mosaic, particles, config, crop=crop)
 
-
 def _to_display_rgb(image: np.ndarray) -> np.ndarray:
     array = np.asarray(image, dtype=np.float64)
     if array.size == 0:
@@ -235,15 +225,23 @@ def _to_display_rgb(image: np.ndarray) -> np.ndarray:
     gray = (scaled * 255).astype(np.uint8)
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
 
+# Pages are a JPEG of an A4 raster. 150 dpi at Pillow's default JPEG
+# quality is what made the type look soft; 220 dpi keeps the same layout.
+_DPI = 220.0
+_BASE_DPI = 150.0
 
-_PAGE_W = 1240
-_PAGE_H = 1754
-_MARGIN = 64
+def _s(px: float) -> int:
+    """Scale a length chosen for the 150 dpi page."""
+    return max(1, round(px * _DPI / _BASE_DPI))
+
+_PAGE_W = _s(1240)
+_PAGE_H = _s(1754)
+_MARGIN = _s(64)
 _INK = (28, 32, 38)
 _MUTED = (90, 98, 110)
-_BAR = (31, 111, 184)
+_ACCENT = (0x0F, 0x23, 0x8C)
+_BAR = _ACCENT
 _RULE = (220, 224, 230)
-
 
 def write_last_run_pdf(
     table: pd.DataFrame,
@@ -268,10 +266,10 @@ def write_last_run_pdf(
         "PDF",
         save_all=True,
         append_images=pages[1:],
-        resolution=150.0,
+        resolution=_DPI,
+        quality=95,
     )
     return destination
-
 
 def _last_run_pages(
     table: pd.DataFrame,
@@ -284,12 +282,12 @@ def _last_run_pages(
     if mosaic_rgb is not None and np.asarray(mosaic_rgb).size > 0:
         pages.append(_mosaic_page(np.asarray(mosaic_rgb), mosaic_plain))
     if unstitched:
-        pages.extend(_unstitched_pages(unstitched))
+        _path, folder = _input_path_and_folder(config)
+        pages.extend(_unstitched_pages(unstitched, folder))
     return pages
 
-
-# Page pixels are A4 at 150 dpi, so 1 pt is 150/72 px.
-_PT_PX = 150.0 / 72.0
+# 1 pt in page pixels. Font sizes stay in points and track ``_DPI``.
+_PT_PX = _DPI / 72.0
 _H1 = round(18 * _PT_PX)
 _H2 = round(14 * _PT_PX)
 _FIGURE = round(13 * _PT_PX)
@@ -309,8 +307,12 @@ _FONT_BOLD = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
 )
+_FONT_ITALIC = (
+    "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+)
 _FONT_FILE: dict[bool, str | None] = {False: None, True: None}
-
 
 def _font_file(*, bold: bool = False) -> str | None:
     cached = _FONT_FILE[bold]
@@ -323,7 +325,6 @@ def _font_file(*, bold: bool = False) -> str | None:
     _FONT_FILE[bold] = ""
     return None
 
-
 def _font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
     path = _font_file(bold=bold)
     if path:
@@ -334,17 +335,20 @@ def _font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
         return ImageFont.load_default()
 
 
+def _italic_font(size: int) -> ImageFont.ImageFont:
+    for candidate in _FONT_ITALIC:
+        if Path(candidate).is_file():
+            return ImageFont.truetype(candidate, size=size)
+    return _font(size)
+
 def pdf_header_lines(config: Mapping[str, Any]) -> list[str]:
-    """Title, the path label, the input path, then the folder name."""
+    """Title, the path label, then the input path."""
     lines = ["Particle Detection Output"]
-    path, folder = _input_path_and_folder(config)
+    path, _folder = _input_path_and_folder(config)
     if path:
         lines.append("Path to analysed image(s):")
         lines.append(path)
-    if folder:
-        lines.append(folder)
     return lines
-
 
 def summary_pdf_name(config: Mapping[str, Any]) -> str:
     """``Summary of {input folder}.pdf``."""
@@ -354,7 +358,6 @@ def summary_pdf_name(config: Mapping[str, Any]) -> str:
         label = label.replace(char, " ")
     label = " ".join(label.split()) or "run"
     return f"Summary of {label}.pdf"
-
 
 def _input_path_and_folder(config: Mapping[str, Any]) -> tuple[str, str]:
     raw = str(config.get("input_dir") or "").strip().strip('"').strip("'").rstrip("/\\")
@@ -366,11 +369,9 @@ def _input_path_and_folder(config: Mapping[str, Any]) -> tuple[str, str]:
         return raw, Path(raw).name
     return str(resolved), resolved.name
 
-
 def _text_width(font: ImageFont.ImageFont, text: str) -> int:
     box = font.getbbox(text)
     return int(box[2] - box[0])
-
 
 def _wrap_text(text: str, font: ImageFont.ImageFont, max_w: int) -> list[str]:
     """Break ``text`` so each line fits ``max_w``, preferring ``/`` and spaces."""
@@ -396,7 +397,6 @@ def _wrap_text(text: str, font: ImageFont.ImageFont, max_w: int) -> list[str]:
         rest = rest[split:]
     return lines
 
-
 def _summary_page(table: pd.DataFrame, config: Mapping[str, Any]) -> Image.Image:
     image = Image.new("RGB", (_PAGE_W, _PAGE_H), "white")
     draw = ImageDraw.Draw(image)
@@ -407,16 +407,23 @@ def _summary_page(table: pd.DataFrame, config: Mapping[str, Any]) -> Image.Image
     y = _MARGIN
     title = _font(_H1, bold=True)
     body = _font(_BODY)
-    header_lines = pdf_header_lines(config)
-    draw.text((_MARGIN, y), header_lines[0], fill=_INK, font=title)
-    y += _H1 + 14
+    path_font = _italic_font(_BODY)
+    path, _folder = _input_path_and_folder(config)
     max_text = _PAGE_W - 2 * _MARGIN
-    for line in header_lines[1:]:
-        for wrapped in _wrap_text(line, body, max_text):
-            draw.text((_MARGIN, y), wrapped, fill=_INK, font=body)
-            y += _BODY + 6
-    if len(header_lines) > 1:
-        y += 12
+    draw.text((_MARGIN, y), "Particle Detection Output", fill=_INK, font=title)
+    y += _H1 + _s(14)
+    if path:
+        draw.text((_MARGIN, y), "Path to analysed image(s):", fill=_INK, font=body)
+        y += _BODY + _s(6)
+        path_box = path_font.getbbox("Hg/()")
+        path_step = int(path_box[3] - path_box[1]) + _s(8)
+        for wrapped in _wrap_text(path, path_font, max_text):
+            draw.text((_MARGIN, y), wrapped, fill=_ACCENT, font=path_font)
+            y += path_step
+        y += _s(8)
+        draw.line([(_MARGIN, y), (_PAGE_W - _MARGIN, y)], fill=_RULE, width=_s(2))
+        y += _s(14)
+        y += _s(12)
 
     stats = summary_stats(table)
     metrics = (
@@ -429,23 +436,25 @@ def _summary_page(table: pd.DataFrame, config: Mapping[str, Any]) -> Image.Image
     for index, (label, value) in enumerate(metrics):
         x = _MARGIN + index * slot
         draw.text((x, y), label, fill=_MUTED, font=metric_label)
-        draw.text((x, y + _LABEL + 6), value, fill=_INK, font=metric_value)
-    y += _LABEL + 6 + _FIGURE + 22
-    draw.line([(_MARGIN, y), (_PAGE_W - _MARGIN, y)], fill=_RULE, width=2)
-    y += 22
+        draw.text((x, y + _LABEL + _s(6)), value, fill=_INK, font=metric_value)
+    y += _LABEL + _s(6) + _FIGURE + _s(22)
+    draw.line([(_MARGIN, y), (_PAGE_W - _MARGIN, y)], fill=_RULE, width=_s(2))
+    y += _s(22)
 
     caption = "Detected particles at least this large (equivalent circular diameter)."
     draw.text((_MARGIN, y), caption, fill=_INK, font=body)
-    y += _BODY + 14
+    y += _BODY + _s(14)
     counts = particles_at_least(table)
     y = _draw_count_table(draw, counts, y, body, header)
-    y += 28
+    y += _s(16)
+    draw.line([(_MARGIN, y), (_PAGE_W - _MARGIN, y)], fill=_RULE, width=_s(2))
+    y += _s(22)
 
     draw.text((_MARGIN, y), "Size distribution (µm)", fill=_INK, font=_font(_H2, bold=True))
-    y += _H2 + 16
+    y += _H2 + _s(16)
     min_size_nm = float((config.get("detection") or {}).get("min_size_nm") or 0.0)
     distribution = size_distribution(table, min_size_nm / NM_PER_UM)
-    _draw_histogram(image, distribution, y, y + 640)
+    _draw_histogram(image, distribution, y, y + _s(640))
     return image
 
 
@@ -461,9 +470,8 @@ def _count_table_edges(
         size_w = max(size_w, _text_width(body, str(row["Size"])))
         count_w = max(count_w, _text_width(body, str(int(row["Particles"]))))
     left = _MARGIN
-    right = min(left + size_w + 36 + count_w, _PAGE_W - _MARGIN)
+    right = min(left + size_w + _s(36) + count_w, _PAGE_W - _MARGIN)
     return left, right
-
 
 def _draw_count_table(
     draw: ImageDraw.ImageDraw,
@@ -473,20 +481,19 @@ def _draw_count_table(
     header: ImageFont.ImageFont,
 ) -> int:
     left, right = _count_table_edges(counts, body, header)
-    row_h = _BODY + 14
+    row_h = _BODY + _s(14)
     draw.text((left, y), "Size", fill=_MUTED, font=header)
     particles = "Particles"
     draw.text((right - _text_width(header, particles), y), particles, fill=_MUTED, font=header)
-    y += _LABEL + 10
-    draw.line([(left, y), (right, y)], fill=_RULE, width=1)
-    y += 8
+    y += _LABEL + _s(10)
+    draw.line([(left, y), (right, y)], fill=_RULE, width=_s(1))
+    y += _s(8)
     for _, row in counts.iterrows():
         draw.text((left, y), str(row["Size"]), fill=_INK, font=body)
         value = str(int(row["Particles"]))
         draw.text((right - _text_width(body, value), y), value, fill=_INK, font=body)
         y += row_h
     return y
-
 
 def _axis_ticks(peak: float, count: int = 4) -> list[float]:
     if peak <= 0:
@@ -508,13 +515,11 @@ def _axis_ticks(peak: float, count: int = 4) -> list[float]:
             break
     return ticks
 
-
 def _tick_label(value: float) -> str:
     rounded = round(value)
     if abs(value - rounded) < 1e-6:
         return str(int(rounded))
     return f"{value:.1f}"
-
 
 def _paste_vertical(
     image: Image.Image,
@@ -532,7 +537,6 @@ def _paste_vertical(
     rotated = plate.rotate(90, expand=True)
     image.paste(rotated, (x, y), rotated)
 
-
 def _draw_histogram(
     image: Image.Image,
     distribution: pd.DataFrame,
@@ -549,26 +553,26 @@ def _draw_histogram(
     scale = ticks[-1] if ticks[-1] > 0 else 1.0
     axis_y = "Amount of particles"
     y_box = axis_font.getbbox(axis_y)
-    y_title_span = int(y_box[2] - y_box[0]) + 4
-    y_title_thick = int(y_box[3] - y_box[1]) + 4
+    y_title_span = int(y_box[2] - y_box[0]) + _s(4)
+    y_title_thick = int(y_box[3] - y_box[1]) + _s(4)
     tick_w = max((_text_width(ticks_font, _tick_label(tick)) for tick in ticks), default=0)
-    left = _MARGIN + y_title_thick + 10 + tick_w + 12
+    left = _MARGIN + y_title_thick + _s(10) + tick_w + _s(12)
     right = _PAGE_W - _MARGIN
-    plot_top = top + 8
-    plot_bottom = bottom - _BODY - _LABEL - 28
+    plot_top = top + _s(8)
+    plot_bottom = bottom - _BODY - _LABEL - _s(28)
     for tick in ticks:
         if tick <= 0:
             continue
         y = plot_bottom - (tick / scale) * (plot_bottom - plot_top)
-        draw.line([(left, y), (right, y)], fill=_RULE, width=1)
-    draw.line([(left, plot_top), (left, plot_bottom)], fill=_INK, width=2)
-    draw.line([(left, plot_bottom), (right, plot_bottom)], fill=_INK, width=2)
+        draw.line([(left, y), (right, y)], fill=_RULE, width=_s(1))
+    draw.line([(left, plot_top), (left, plot_bottom)], fill=_INK, width=_s(2))
+    draw.line([(left, plot_bottom), (right, plot_bottom)], fill=_INK, width=_s(2))
     for tick in ticks:
         y = plot_bottom - (tick / scale) * (plot_bottom - plot_top)
-        draw.line([(left - 6, y), (left, y)], fill=_INK, width=2)
+        draw.line([(left - _s(6), y), (left, y)], fill=_INK, width=_s(2))
         label = _tick_label(tick)
         draw.text(
-            (left - 10 - _text_width(ticks_font, label), y - _LABEL // 2),
+            (left - _s(10) - _text_width(ticks_font, label), y - _LABEL // 2),
             label,
             fill=_INK,
             font=ticks_font,
@@ -578,7 +582,7 @@ def _draw_histogram(
     if not counts:
         return
     slot = (right - left) / len(counts)
-    gap = min(10, max(2, slot * 0.25))
+    gap = min(_s(10), max(_s(2), slot * 0.25))
     for index, (count, label) in enumerate(zip(counts, labels)):
         bar_left = left + index * slot + gap / 2
         bar_right = left + (index + 1) * slot - gap / 2
@@ -586,25 +590,23 @@ def _draw_histogram(
         bar_top = plot_bottom - height
         draw.rectangle([bar_left, bar_top, bar_right, plot_bottom], fill=_BAR)
         center = (bar_left + bar_right) / 2
-        draw.line([(center, plot_bottom), (center, plot_bottom + 6)], fill=_INK, width=2)
+        draw.line([(center, plot_bottom), (center, plot_bottom + _s(6))], fill=_INK, width=_s(2))
         text_w = _text_width(ticks_font, label)
         label_x = min(max(center - text_w / 2, _MARGIN), right - text_w)
-        draw.text((label_x, plot_bottom + 8), label, fill=_INK, font=ticks_font)
+        draw.text((label_x, plot_bottom + _s(8)), label, fill=_INK, font=ticks_font)
     axis = "Size (µm)"
     draw.text(
-        ((left + right) / 2 - _text_width(axis_font, axis) / 2, bottom - _BODY - 4),
+        ((left + right) / 2 - _text_width(axis_font, axis) / 2, bottom - _BODY - _s(4)),
         axis,
         fill=_INK,
         font=axis_font,
     )
-
 
 def _rgb_tile(mosaic_rgb: np.ndarray) -> Image.Image:
     rgb = np.asarray(mosaic_rgb)
     if rgb.ndim == 2:
         rgb = cv2.cvtColor(rgb, cv2.COLOR_GRAY2RGB)
     return Image.fromarray(np.ascontiguousarray(rgb[:, :, :3].astype(np.uint8)), mode="RGB")
-
 
 def _paste_fitted(page: Image.Image, tile: Image.Image, top: int, max_h: int) -> int:
     max_w = _PAGE_W - 2 * _MARGIN
@@ -616,7 +618,6 @@ def _paste_fitted(page: Image.Image, tile: Image.Image, top: int, max_h: int) ->
     page.paste(resized, ((_PAGE_W - resized.width) // 2, top))
     return top + resized.height
 
-
 def _mosaic_page(
     mosaic_rgb: np.ndarray,
     mosaic_plain: np.ndarray | None = None,
@@ -624,7 +625,7 @@ def _mosaic_page(
     image = Image.new("RGB", (_PAGE_W, _PAGE_H), "white")
     draw = ImageDraw.Draw(image)
     draw.text((_MARGIN, _MARGIN), "Stitched mosaic", fill=_INK, font=_font(_H1, bold=True))
-    y = _MARGIN + _H1 + 12
+    y = _MARGIN + _H1 + _s(12)
     plain = None if mosaic_plain is None or np.asarray(mosaic_plain).size == 0 else mosaic_plain
     if plain is None:
         draw.text(
@@ -633,12 +634,12 @@ def _mosaic_page(
             fill=_MUTED,
             font=_font(_BODY),
         )
-        y += _BODY + 20
+        y += _BODY + _s(20)
         _paste_fitted(image, _rgb_tile(mosaic_rgb), y, _PAGE_H - y - _MARGIN)
         return image
 
-    caption_h = _BODY + 10
-    gap = 28
+    caption_h = _BODY + _s(10)
+    gap = _s(28)
     available = _PAGE_H - y - _MARGIN - 2 * caption_h - gap
     slot = max(available // 2, 1)
     draw.text((_MARGIN, y), "With labels", fill=_MUTED, font=_font(_BODY))
@@ -650,7 +651,6 @@ def _mosaic_page(
     _paste_fitted(image, _rgb_tile(plain), y, slot)
     return image
 
-
 def _filename_is_placeable(filename: str, pattern: str) -> bool:
     """True when the name has row/column or x/y, so it can join the mosaic."""
     meta = try_parse_tile_filename(filename, pattern)
@@ -659,7 +659,6 @@ def _filename_is_placeable(filename: str, pattern: str) -> bool:
     if "x" in meta and "y" in meta:
         return True
     return "row" in meta and "col" in meta
-
 
 def unstitched_tile_paths(config: Mapping[str, Any]) -> list[Path]:
     """Images in the input folder whose names have no grid pattern.
@@ -683,7 +682,6 @@ def unstitched_tile_paths(config: Mapping[str, Any]) -> list[Path]:
         return []
     return [path for path in paths if not _filename_is_placeable(path.name, pattern)]
 
-
 def _particles_for_path(table: pd.DataFrame, path: Path) -> pd.DataFrame:
     if table is None or table.empty or "source_tile" not in table.columns:
         return table.iloc[0:0] if isinstance(table, pd.DataFrame) else pd.DataFrame()
@@ -697,7 +695,6 @@ def _particles_for_path(table: pd.DataFrame, path: Path) -> pd.DataFrame:
     )
     return table.loc[mask]
 
-
 def _tile_preview_factor(height: int, width: int, config: Mapping[str, Any]) -> int:
     """Downsample one loose tile. An explicit factor wins; otherwise cap the preview."""
     settings = dict(config)
@@ -708,7 +705,6 @@ def _tile_preview_factor(height: int, width: int, config: Mapping[str, Any]) -> 
     return downsample_for_target(
         height, width, target_mb=min(target_mb, 8.0), channels=3
     )
-
 
 def _draw_local_markers(
     rgb: np.ndarray,
@@ -742,7 +738,6 @@ def _draw_local_markers(
         )
     return marked
 
-
 def unstitched_tile_pair(
     path: str | Path,
     table: pd.DataFrame,
@@ -759,7 +754,6 @@ def unstitched_tile_pair(
     )
     return labeled, plain
 
-
 def unstitched_tile_rgb(
     path: str | Path,
     table: pd.DataFrame,
@@ -771,40 +765,34 @@ def unstitched_tile_rgb(
     labeled, plain = unstitched_tile_pair(path, table, config)
     return labeled if labels else plain
 
-
 def _unstitched_pages(
     tiles: Sequence[tuple[str, np.ndarray, np.ndarray]],
+    folder: str = "",
 ) -> list[Image.Image]:
     """Pages of images that were not stitched, with and without labels."""
     pages: list[Image.Image] = []
     image = Image.new("RGB", (_PAGE_W, _PAGE_H), "white")
     draw = ImageDraw.Draw(image)
     y = _MARGIN
-    draw.text((_MARGIN, y), "Images", fill=_INK, font=_font(_H1, bold=True))
-    y += _H1 + 16
+    title = f"Stitches of {folder.strip()}" if str(folder).strip() else "Stitches"
+    draw.text((_MARGIN, y), title, fill=_INK, font=_font(_H1, bold=True))
+    y += _H1 + _s(16)
     caption_font = _font(_BODY)
     first_on_page = True
-    max_text = _PAGE_W - 2 * _MARGIN
-    for name, labeled_rgb, plain_rgb in tiles:
+    for _name, labeled_rgb, plain_rgb in tiles:
         if np.asarray(labeled_rgb).size == 0 and np.asarray(plain_rgb).size == 0:
             continue
-        caption_lines = _wrap_text(str(name), caption_font, max_text)
-        caption_h = len(caption_lines) * (_BODY + 4) + 8
-        room = _PAGE_H - _MARGIN - y - caption_h
-        if room < 320 and not first_on_page:
+        label_h = _BODY + _s(8)
+        gap = _s(16)
+        room = _PAGE_H - _MARGIN - y
+        if room < _s(320) and not first_on_page:
             pages.append(image)
             image = Image.new("RGB", (_PAGE_W, _PAGE_H), "white")
             draw = ImageDraw.Draw(image)
             y = _MARGIN
             first_on_page = True
-            room = _PAGE_H - _MARGIN - y - caption_h
-        for line in caption_lines:
-            draw.text((_MARGIN, y), line, fill=_INK, font=caption_font)
-            y += _BODY + 4
-        y += 8
-        label_h = _BODY + 8
-        gap = 16
-        slot = max((min(room, 900) - 2 * label_h - gap) // 2, 1)
+            room = _PAGE_H - _MARGIN - y
+        slot = max((min(room, _s(900)) - 2 * label_h - gap) // 2, 1)
         plain = None if np.asarray(plain_rgb).size == 0 else plain_rgb
         if plain is None:
             draw.text((_MARGIN, y), "With labels", fill=_MUTED, font=caption_font)
@@ -818,11 +806,10 @@ def _unstitched_pages(
             draw.text((_MARGIN, y), "Without labels", fill=_MUTED, font=caption_font)
             y += label_h
             y = _paste_fitted(image, _rgb_tile(plain), y, slot)
-        y += 28
+        y += _s(28)
         first_on_page = False
     pages.append(image)
     return pages
-
 
 def encode_overlay_jpeg(rgb: np.ndarray, quality: int = 90) -> bytes:
     """JPEG bytes for download; ``rgb`` is uint8 RGB."""
@@ -833,7 +820,6 @@ def encode_overlay_jpeg(rgb: np.ndarray, quality: int = 90) -> bytes:
     if not ok:
         raise RuntimeError("Failed to encode mosaic JPEG.")
     return buffer.tobytes()
-
 
 def write_overlay_image(
     mosaic: LazyMosaic,

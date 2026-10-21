@@ -34,6 +34,7 @@ def pipeline_status() -> dict[str, Any]:
         return {
             "running": bool(_JOB["running"]),
             "stopping": bool(_JOB["stopping"]),
+            "pending": bool(_JOB["pending"]),
             "current": int(_JOB["current"]),
             "total": int(_JOB["total"]),
             "name": str(_JOB["name"]),

@@ -100,6 +100,12 @@ streamlit run app.py
 
 The browser opens on **Particle Detection Software**. Leave that terminal running. Stop the app with Ctrl+C in that terminal.
 
+### Launch from the Dock or taskbar
+
+Double-click **Particle Detection.app** on a Mac, or **Start Particle Detection.bat** on Windows. The Mac app can stay in this folder or in `/Applications`. The `/Applications` copy opens a Terminal window to start this project, because macOS will not let that copy run files on the Desktop. Close that Terminal window to stop Streamlit. Drag the app to the Dock. The first Mac launch may need Control-click → Open. On Windows, pin the **Particle Detection** shortcut on the Desktop to the taskbar.
+
+The launcher serves Streamlit only at <http://127.0.0.1:8501> and opens the browser when the port is up. A second launch only opens the browser. Quit the Mac app from the Dock, or close the minimized Windows console, to stop Streamlit. Mac logs: `~/Library/Logs/ParticleDetection.log`. Windows logs: `%USERPROFILE%\AppData\Local\ParticleDetection\launcher.log`.
+
 The window has six tabs: **Main Pipeline**, **Verification**, **Training**, **Shadow**, **Redirector**, and **Capture**. Settings for a detection run live in the left sidebar and come from `config.yaml`.
 
 ## 3. Run detection on an existing folder
