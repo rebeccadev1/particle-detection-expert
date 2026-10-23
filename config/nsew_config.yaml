@@ -49,11 +49,11 @@ detection:
   structure_line_max_gap_px: 48.0
 ml:
   enabled: true
-  model_path: models/particle_clf_v8.joblib
+  model_path: src/analyse/models/particle_clf_v8.joblib
   threshold: 0.37
 report:
   f_beta: 1.0
   beta_presets:
     - beta: 1.0
-      model_path: models/particle_clf_v8.joblib
+      model_path: src/analyse/models/particle_clf_v8.joblib
       threshold: 0.37

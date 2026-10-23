@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from src.main_pipeline.nsew import (
+from src.analyse.nsew import (
     MIN_COUNTS,
     combine_nsew_folder,
     combine_worker_count,
@@ -110,7 +110,7 @@ def test_combine_matches_png_inputs(tmp_path: Path) -> None:
 
 
 def test_nsew_output_dir_uses_workspace_outputs(tmp_path: Path, monkeypatch) -> None:
-    from src.main_pipeline import nsew as nsew_mod
+    from src.analyse import nsew as nsew_mod
 
     inputs = tmp_path / "Inputs"
     outputs = tmp_path / "Outputs"
@@ -164,11 +164,11 @@ def test_scale_combi_uint8_keeps_a_flat_field_at_the_source_gray() -> None:
 
 
 def test_combine_worker_count_caps_at_ten_cores(monkeypatch) -> None:
-    monkeypatch.setattr("src.main_pipeline.nsew.cpu_count", lambda: 10)
+    monkeypatch.setattr("src.analyse.nsew.cpu_count", lambda: 10)
     assert combine_worker_count(1) == 1
     assert combine_worker_count(4) == 4
     assert combine_worker_count(70) == 10
-    monkeypatch.setattr("src.main_pipeline.nsew.cpu_count", lambda: 4)
+    monkeypatch.setattr("src.analyse.nsew.cpu_count", lambda: 4)
     assert combine_worker_count(70) == 4
 
 
@@ -303,7 +303,7 @@ def test_combi_beside_letters_uses_nsew_keys(tmp_path: Path) -> None:
 
 
 def test_pipeline_detects_the_combined_grid_cell(tmp_path: Path) -> None:
-    from src.main_pipeline.runner import run_pipeline
+    from src.analyse.runner import run_pipeline
     from tests.fixtures.synthetic import detector_test_config
 
     for name in ("N", "S", "E", "W"):

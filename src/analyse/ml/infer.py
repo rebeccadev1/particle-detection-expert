@@ -8,16 +8,16 @@ from typing import Any
 import numpy as np
 
 from src.overall.config import PACKAGE_ROOT, cfg_get
-from src.main_pipeline.detection.detector import ParticleCandidate, compute_tile_residual
+from src.analyse.detection.detector import ParticleCandidate, compute_tile_residual
 from src.overall.io.tile_loader import DEFAULT_FILENAME_PATTERN
-from src.main_pipeline.ml.features import FEATURE_COLUMNS, candidates_to_matrix
-from src.main_pipeline.ml.patch_features import layout_from_candidate, patches_to_matrix
-from src.main_pipeline.ml.patches import PATCH_SIZE, extract_unmarked_channels
+from src.analyse.ml.features import FEATURE_COLUMNS, candidates_to_matrix
+from src.analyse.ml.patch_features import layout_from_candidate, patches_to_matrix
+from src.analyse.ml.patches import PATCH_SIZE, extract_unmarked_channels
 
 KIND_RESIDUAL = "residual"
 KIND_PATCH = "patch"
 
-DEFAULT_MODEL_PATH = "models/particle_clf_v4_residual.joblib"
+DEFAULT_MODEL_PATH = "src/analyse/models/particle_clf_v4_residual.joblib"
 
 _WORKER_MODEL: dict[str, Any] = {"path": None, "artifact": None}
 
@@ -160,7 +160,7 @@ def apply_ml_filter(
     if not path.is_file():
         raise FileNotFoundError(
             f"ml.enabled is true but the classifier was not found at {path}. "
-            "Point ml.model_path at a model in models/ or turn ml.enabled off."
+            "Point ml.model_path at a model in src/analyse/models/ or turn ml.enabled off."
         )
     artifact = cached_artifact(path)
     threshold = cfg_get(config, "ml.threshold", None)

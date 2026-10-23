@@ -325,7 +325,7 @@ def _scan_thread(
     sharpness_stops: list[dict] = []
     try:
         sides_on = RING_SIDES if mode == "Uniform" else 1
-        shutter = shutter_ms(total_exposure_ms, sides_on)
+        shutter = shutter_ms(total_exposure_ms)
         exposure_us = shutter * 1000.0
         timeout_ms = grab_timeout_ms(exposure_us)
         stop_preview()

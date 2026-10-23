@@ -4,7 +4,7 @@ The shadow is the dark region (below background − k·σ) connected to the
 particle on the side away from the light. Height = length × light height /
 horizontal distance to the light, which depends on where the particle sits
 in the field (see ``light_distance_mm``). Used by the **Shadow** tab and
-``scripts/shadow_check.py``.
+``src/shadow/shadow_check.py``.
 """
 
 from __future__ import annotations
@@ -31,8 +31,8 @@ from src.verification.crops import (
 from src.verification.inspect import candidate_placements
 from src.verification.queue import detection_key
 from src.verification.store import LabelStore, crop_source_folder
-from src.main_pipeline.preprocessing.corrections import apply_corrections, denoise, to_float
-from src.main_pipeline.report.report_generator import to_display_rgb
+from src.analyse.preprocessing.corrections import apply_corrections, denoise, to_float
+from src.analyse.report.report_generator import to_display_rgb
 
 PICK_MAX_SIDE = 960
 

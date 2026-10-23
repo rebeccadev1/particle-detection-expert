@@ -7,20 +7,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.main_pipeline.detection.detector import ParticleCandidate, compute_tile_residual
-from src.main_pipeline.ml.infer import apply_ml_filter
-from src.main_pipeline.ml.patch_features import (
+from src.analyse.detection.detector import ParticleCandidate, compute_tile_residual
+from src.analyse.ml.infer import apply_ml_filter
+from src.analyse.ml.patch_features import (
     PATCH_FEATURE_NAMES,
     patch_feature_vector,
     patches_to_matrix,
 )
-from src.main_pipeline.ml.patches import (
+from src.analyse.ml.patches import (
     PATCH_SIZE,
     extract_centered,
     extract_unmarked_channels,
     stack_channels,
 )
-from src.main_pipeline.preprocessing.corrections import apply_corrections
+from src.analyse.preprocessing.corrections import apply_corrections
 from tests.fixtures.synthetic import detector_test_config
 
 

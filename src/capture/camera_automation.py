@@ -1,33 +1,4 @@
-"""Capture with the transistor-switched four-side ring.
 
-Upload ``Inital arduino code/arduino_camera_v3`` once with the Arduino IDE.
-After that, this script is the only program that should open the USB port.
-
-That sketch does not answer ``?``. On boot it prints ``READY``. This script
-waits for that line. A board that is already running does not print it again,
-so the script then sends ``x`` and expects ``OK OFF``. The next capture turns
-the quadrants back on.
-
-Quadrant 0 is N, then E, S, W, on pins 2, 3, 4, and 5. Lighting commands
-after connect are ``f`` (all on), ``0``..``3`` (one side), and ``x`` (all off).
-
-    python camera_automation.py --mode uniform --total-exposure-ms 100
-    python camera_automation.py --mode nsew --total-exposure-ms 100
-
-Total exposure is the dose from a single side, in milliseconds. Uniform
-lighting has all four sides on, so the camera shutter is that value divided
-by 4. NSEW lights one side, so the shutter equals the total. Side 0 is N,
-then E, S, W clockwise.
-
-Each capture and each scan gets ASML SE/Inputs/Groundup/vN YYYY-MM-DD.
-N is how many runs already exist for that date, starting
-at 1. Pictures in that folder are named by grid position, such as (1,1).png,
-or (1,1)_N.png for one ring side. One capture.json in the run folder records
-every stop. Odd rows run left to right. Even rows start at the right edge
-and walk back. The folder is created only after the camera has accepted
-setup. Pass --no-ring to leave the lights as they are. NSEW still needs the
-Arduino, because each frame has to switch sides.
-"""
 
 from __future__ import annotations
 
@@ -43,6 +14,7 @@ DIRECTIONS = ("N", "E", "S", "W")
 RING_SIDES = len(DIRECTIONS)
 
 TOTAL_EXPOSURE_MS = 100.0
+NSEW_TOTAL_EXPOSURE_MS = 8 * TOTAL_EXPOSURE_MS
 SETTLE_S = 0.05
 NSEW_GAP_S = 0.05
 MOTION_PAUSE_S = 0.5
@@ -241,18 +213,19 @@ def lights_off(ser) -> None:
         raise RuntimeError(f"expected 'OK OFF', got {reply!r}")
 
 
-def shutter_ms(total_exposure_ms: float, sides_on: int) -> float:
-    """Camera shutter for a dose of ``total_exposure_ms`` from one side.
+def standard_total_exposure_ms(mode: str) -> float:
+    """Standard shutter. NSEW is eight times the uniform standard."""
+    if str(mode).lower() == "nsew":
+        return float(NSEW_TOTAL_EXPOSURE_MS)
+    return float(TOTAL_EXPOSURE_MS)
 
-    ``sides_on`` sides are lit together, so each millisecond of shutter
-    collects that many times more light.
-    """
-    if sides_on < 1:
-        raise ValueError("sides_on must be at least 1")
+
+def shutter_ms(total_exposure_ms: float) -> float:
+    """Camera shutter. Total exposure is that shutter time, in milliseconds."""
     total = float(total_exposure_ms)
     if total <= 0:
         raise ValueError("total exposure must be positive")
-    return total / sides_on
+    return total
 
 
 def grab_timeout_ms(exposure_us: float) -> int:
@@ -291,12 +264,12 @@ def _open_device():
 
     now = time.monotonic()
     if now < _NO_CAMERA_UNTIL:
-        raise RuntimeError("no Basler camera found")
+        raise RuntimeError("No Basler camera found")
     factory = pylon.TlFactory.GetInstance()
     devices = factory.EnumerateDevices()
     if len(devices) == 0:
         _NO_CAMERA_UNTIL = now + _NO_CAMERA_BACKOFF_S
-        raise RuntimeError("no Basler camera found")
+        raise RuntimeError("No Basler camera found")
     _NO_CAMERA_UNTIL = 0.0
     camera = pylon.InstantCamera(factory.CreateDevice(devices[0]))
     camera.Open()
@@ -588,7 +561,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Do not open the Arduino. Leave the ring as it is. Uniform only.",
     )
     parser.add_argument("--mode", choices=("uniform", "nsew"), default="uniform")
-    parser.add_argument("--total-exposure-ms", type=float, default=TOTAL_EXPOSURE_MS)
+    parser.add_argument(
+        "--total-exposure-ms",
+        type=float,
+        default=None,
+        help="Shutter in milliseconds. Standard is 100 for uniform and 800 for nsew.",
+    )
     parser.add_argument(
         "--columns",
         type=int,
@@ -601,7 +579,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     sides_on = RING_SIDES if args.mode == "uniform" else 1
-    exposure_ms = shutter_ms(args.total_exposure_ms, sides_on)
+    total_exposure_ms = (
+        standard_total_exposure_ms(args.mode)
+        if args.total_exposure_ms is None
+        else args.total_exposure_ms
+    )
+    exposure_ms = shutter_ms(total_exposure_ms)
     exposure_us = exposure_ms * 1000.0
 
     camera = None
@@ -615,7 +598,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             port = args.port or find_arduino_port()
             print(f"Arduino port: {port}")
-        print(f"{args.mode}: shutter {exposure_ms:.1f} ms from total {args.total_exposure_ms:.1f} ms")
+        print(f"{args.mode}: total exposure {exposure_ms:.1f} ms")
         if port is not None:
             ser = open_arduino(port)
         camera, converter = open_camera(exposure_us)
@@ -633,7 +616,7 @@ def main(argv: list[str] | None = None) -> int:
                 "mode": args.mode,
                 "row": row,
                 "col": col,
-                "total_exposure_ms": args.total_exposure_ms,
+                "total_exposure_ms": total_exposure_ms,
                 "shutter_ms": exposure_ms,
                 "exposure_us": exposure_us,
                 "sides_on": sides_on,

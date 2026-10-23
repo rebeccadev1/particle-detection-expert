@@ -1,10 +1,10 @@
 @echo off
 setlocal EnableExtensions
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
-set "LOGDIR=%USERPROFILE%\AppData\Local\ParticleDetection"
+set "LOGDIR=%USERPROFILE%\AppData\Local\ParticleDetectionExpert"
 set "LOG=%LOGDIR%\launcher.log"
-set "STREAMLIT=%~dp0.venv\Scripts\streamlit.exe"
+set "STREAMLIT=%CD%\.venv\Scripts\streamlit.exe"
 set "URL=http://127.0.0.1:8501"
 
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
@@ -20,7 +20,7 @@ if not errorlevel 1 (
   exit /b 0
 )
 
-start /b "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$deadline = (Get-Date).AddSeconds(30); while ((Get-Date) -lt $deadline) { try { $c = New-Object System.Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8501); $c.Close(); Start-Process 'http://127.0.0.1:8501'; exit 0 } catch { Start-Sleep -Milliseconds 500 } }; Add-Content -LiteralPath (Join-Path $env:USERPROFILE 'AppData\Local\ParticleDetection\launcher.log') -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' Streamlit did not accept connections on 127.0.0.1:8501 within 30 seconds')"
+start /b "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$deadline = (Get-Date).AddSeconds(30); while ((Get-Date) -lt $deadline) { try { $c = New-Object System.Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8501); $c.Close(); Start-Process 'http://127.0.0.1:8501'; exit 0 } catch { Start-Sleep -Milliseconds 500 } }; Add-Content -LiteralPath (Join-Path $env:USERPROFILE 'AppData\Local\ParticleDetectionExpert\launcher.log') -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' Streamlit did not accept connections on 127.0.0.1:8501 within 30 seconds')"
 
 >>"%LOG%" echo %DATE% %TIME% starting Streamlit on %URL%
 "%STREAMLIT%" run app.py --server.headless true --server.address 127.0.0.1 --server.port 8501 >> "%LOG%" 2>&1

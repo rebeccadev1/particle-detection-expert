@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from src.overall.config import DEFAULT_INPUT_DIR, cfg_get, resolve_output_dir
-from src.main_pipeline.detection.detector import blob_footprint
+from src.analyse.detection.detector import blob_footprint
 from src.overall.io.tile_loader import (
     DEFAULT_FILENAME_PATTERN,
     TILE_SUFFIXES,
@@ -58,7 +58,7 @@ from src.overall.io.naming import (
     submap_id,
 )
 from src.overall.io.placement import TilePlacement
-from src.main_pipeline.stitching.stitcher import LazyMosaic
+from src.analyse.stitching.stitcher import LazyMosaic
 
 LABEL_CIRCLE_COLORS: dict[str, tuple[int, int, int]] = {
     "particle": (40, 180, 70),
@@ -607,13 +607,13 @@ def write_marked_mosaic(
     if not output_dir:
         return None
     if mosaic is None or not getattr(mosaic, "placements", None):
-        from src.main_pipeline.runner import load_report_mosaic
+        from src.analyse.runner import load_report_mosaic
 
         mosaic = load_report_mosaic(settings)
     if not getattr(mosaic, "placements", None) or int(mosaic.full_width) < 1:
         return None
 
-    from src.main_pipeline.report.report_generator import (
+    from src.analyse.report.report_generator import (
         draw_overlay_markers,
         overlay_rgb,
     )

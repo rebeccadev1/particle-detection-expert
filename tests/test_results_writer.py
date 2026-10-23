@@ -82,7 +82,7 @@ def test_result_table_keeps_only_reported_columns() -> None:
 
 
 def test_count_table_is_only_as_wide_as_its_text() -> None:
-    from src.main_pipeline.report.report_generator import (
+    from src.analyse.report.report_generator import (
         _BODY,
         _LABEL,
         _MARGIN,
@@ -98,7 +98,7 @@ def test_count_table_is_only_as_wide_as_its_text() -> None:
 
 
 def test_unstitched_paths_are_names_without_a_grid(tmp_path: Path) -> None:
-    from src.main_pipeline.report.report_generator import unstitched_tile_paths
+    from src.analyse.report.report_generator import unstitched_tile_paths
 
     (tmp_path / "loose.png").write_bytes(b"")
     (tmp_path / "R1_2_3.png").write_bytes(b"")
@@ -134,7 +134,7 @@ def test_unstitched_paths_are_names_without_a_grid(tmp_path: Path) -> None:
 def test_pdf_puts_unstitched_images_on_their_own_page(tmp_path: Path) -> None:
     import numpy as np
 
-    from src.main_pipeline.report.report_generator import write_last_run_pdf
+    from src.analyse.report.report_generator import write_last_run_pdf
 
     path = write_last_run_pdf(
         pd.DataFrame({"size": [10_000.0]}),
@@ -149,7 +149,7 @@ def test_pdf_puts_unstitched_images_on_their_own_page(tmp_path: Path) -> None:
         ],
     )
     assert path.read_bytes().count(b"/Type /Page") >= 2
-    from src.main_pipeline.report.report_generator import _unstitched_pages
+    from src.analyse.report.report_generator import _unstitched_pages
 
     page = np.asarray(
         _unstitched_pages(
@@ -172,7 +172,7 @@ def test_pdf_puts_unstitched_images_on_their_own_page(tmp_path: Path) -> None:
 def test_last_run_pdf_includes_summary_and_mosaic(tmp_path: Path) -> None:
     import numpy as np
 
-    from src.main_pipeline.report.report_generator import write_last_run_pdf
+    from src.analyse.report.report_generator import write_last_run_pdf
 
     table = pd.DataFrame(
         {
@@ -199,7 +199,7 @@ def test_last_run_pdf_includes_summary_and_mosaic(tmp_path: Path) -> None:
 def test_mosaic_page_puts_labels_above_the_plain_mosaic() -> None:
     import numpy as np
 
-    from src.main_pipeline.report.report_generator import _mosaic_page
+    from src.analyse.report.report_generator import _mosaic_page
 
     labeled = np.full((30, 60, 3), (255, 140, 40), dtype=np.uint8)
     plain = np.full((30, 60, 3), (20, 40, 80), dtype=np.uint8)
@@ -230,7 +230,7 @@ def test_write_xlsx_adds_parameters_sheet(tmp_path: Path) -> None:
 
 
 def test_particles_at_least_counts_cumulative_sizes() -> None:
-    from src.main_pipeline.report.report_generator import particles_at_least
+    from src.analyse.report.report_generator import particles_at_least
 
     table = pd.DataFrame({"size": [9_000.0, 10_000.0, 20_000.0, 25_000.0, 49_999.0, 75_000.0]})
     counts = dict(zip(particles_at_least(table)["Size"], particles_at_least(table)["Particles"]))
@@ -245,7 +245,7 @@ def test_particles_at_least_counts_cumulative_sizes() -> None:
 
 
 def test_size_distribution_steps_from_min_size() -> None:
-    from src.main_pipeline.report.report_generator import size_distribution
+    from src.analyse.report.report_generator import size_distribution
 
     table = pd.DataFrame({"size": [20_000.0, 24_999.0, 25_000.0, 34_000.0, 40_000.0]})
     counts = size_distribution(table, min_um=20.0)["count"]
@@ -254,7 +254,7 @@ def test_size_distribution_steps_from_min_size() -> None:
 
 
 def test_size_distribution_starts_at_detection_floor() -> None:
-    from src.main_pipeline.report.report_generator import size_distribution
+    from src.analyse.report.report_generator import size_distribution
 
     table = pd.DataFrame({"size": [23_200.0, 26_000.0, 31_000.0]})
     counts = size_distribution(table, min_um=20.0)["count"]

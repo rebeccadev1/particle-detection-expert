@@ -5,8 +5,8 @@ __pycache__/
 output/
 .streamlit/*
 !.streamlit/config.toml
-models/*.joblib
-!models/particle_clf_v*.joblib
+src/analyse/models/*.joblib
+!src/analyse/models/particle_clf_v*.joblib
 .DS_Store
 labels/
 src/capture/captures/

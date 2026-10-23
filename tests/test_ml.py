@@ -8,9 +8,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
-from src.main_pipeline.ml.features import FEATURE_COLUMNS
-from src.main_pipeline.ml.infer import apply_ml_filter, load_artifact
+from src.analyse.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
+from src.analyse.ml.features import FEATURE_COLUMNS
+from src.analyse.ml.infer import apply_ml_filter, load_artifact
 
 
 def _feature_table(n_pos: int = 12, n_neg: int = 24) -> pd.DataFrame:
@@ -79,7 +79,7 @@ def test_apply_ml_filter_errors_when_enabled_without_model(tmp_path: Path) -> No
 def test_nsew_v8_is_a_combi_residual_model() -> None:
     from src.overall.config import PACKAGE_ROOT
 
-    artifact = load_artifact(PACKAGE_ROOT / "models" / "particle_clf_v8.joblib")
+    artifact = load_artifact(PACKAGE_ROOT / "src" / "analyse" / "models" / "particle_clf_v8.joblib")
     assert artifact["kind"] == "residual"
     assert artifact["feature_names"] == FEATURE_COLUMNS
     assert artifact["threshold"] == pytest.approx(0.37)

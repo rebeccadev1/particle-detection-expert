@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from src.overall.config import cfg_get, resolve_output_dir
-from src.main_pipeline.detection.detector import (
+from src.analyse.detection.detector import (
     apply_structure_filters,
     build_fft_notch_mask,
     detect_particles,
@@ -33,22 +33,22 @@ from src.overall.io.naming import (
     lighting_source_name,
     submap_id,
 )
-from src.main_pipeline.measurement.measurer import (
+from src.analyse.measurement.measurer import (
     Particle,
     measure_and_dedupe,
     measure_candidates,
     particles_to_dataframe,
 )
-from src.main_pipeline.nsew import positional_direction, prepare_detection_paths
-from src.main_pipeline.ml.infer import apply_ml_filter
-from src.main_pipeline.preprocessing.corrections import apply_corrections
+from src.analyse.nsew import positional_direction, prepare_detection_paths
+from src.analyse.ml.infer import apply_ml_filter
+from src.analyse.preprocessing.corrections import apply_corrections
 from src.overall.io.placement import (
     TilePlacement,
     grid_index_origin,
     placement_from_path,
     placement_from_tile,
 )
-from src.main_pipeline.stitching.stitcher import (
+from src.analyse.stitching.stitcher import (
     LazyMosaic,
     downsample_for_target,
     downsample_image,
@@ -464,7 +464,7 @@ def _write_run_outputs(
     if not str(cfg_get(config, "output_dir", "") or "").strip():
         return
     from src.overall.io.results_writer import write_csv, write_run_settings, write_xlsx
-    from src.main_pipeline.report.report_generator import (
+    from src.analyse.report.report_generator import (
         draw_overlay_markers,
         overlay_rgb,
         summary_pdf_name,

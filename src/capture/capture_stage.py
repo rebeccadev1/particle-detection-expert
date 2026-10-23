@@ -16,6 +16,7 @@ from src.capture.capture_ui import (
     _run_serial,
     _selected_mode,
     _serial,
+    total_exposure_ms,
 )
 from src.capture.focus import autofocus_status, start_autofocus, stop_autofocus
 from src.capture.preview import preview_snapshot
@@ -92,9 +93,8 @@ def _light_for_manual_autofocus(cap) -> bool:
 
 
 def _stage_pause() -> dict:
-    mode = st.session_state.get("capture_mode", "Uniform")
-    total_ms = float(st.session_state.get("capture_total_ms", 100.0))
-    return pause_plan(total_ms, mode)
+    mode = _selected_mode()
+    return pause_plan(total_exposure_ms(mode), mode)
 
 
 def _stage_step_mm() -> float:
@@ -396,7 +396,7 @@ def _stage_progress() -> None:
             start_scan_capture(
                 ser=_serial(),
                 mode=_selected_mode(),
-                total_exposure_ms=float(st.session_state["capture_total_ms"]),
+                total_exposure_ms=total_exposure_ms(),
                 step_mm=_stage_step_mm(),
                 stage=_stage_record(),
                 columns=int(st.session_state["stage_columns"]),

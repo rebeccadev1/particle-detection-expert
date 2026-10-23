@@ -81,7 +81,7 @@ measurement:
 # ExtraTrees post-filter on DoG hits. Switch versions here; do not overwrite a vN file.
 ml:
   enabled: true
-  model_path: models/particle_clf_v4_residual.joblib
+  model_path: src/analyse/models/particle_clf_v4_residual.joblib
   # Uniform beta-1 preset. NSEW overlay uses v8 at 0.37.
   threshold: 0.23
   # Off: cluster/line first, then ML. On can add lattice neighbors that cluster-kill flakes.
@@ -97,5 +97,5 @@ report:
   f_beta: 1.0
   beta_presets:
     - beta: 1.0
-      model_path: models/particle_clf_v4_residual.joblib
+      model_path: src/analyse/models/particle_clf_v4_residual.joblib
       threshold: 0.23

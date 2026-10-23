@@ -13,10 +13,10 @@ import numpy as np
 from skimage.feature import hog, local_binary_pattern
 from skimage.morphology import skeletonize
 
-from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
+from src.analyse.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
 from src.overall.io.tile_loader import DEFAULT_FILENAME_PATTERN
-from src.main_pipeline.ml.features import size_um_from_px
-from src.main_pipeline.ml.patches import tile_row_col
+from src.analyse.ml.features import size_um_from_px
+from src.analyse.ml.patches import tile_row_col
 
 HOG_SIZE = 64
 LBP_POINTS = 8

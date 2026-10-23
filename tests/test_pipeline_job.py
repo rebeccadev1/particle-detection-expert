@@ -5,8 +5,8 @@ from __future__ import annotations
 import threading
 import time
 
-from src.main_pipeline.job import claim_pipeline_result, pipeline_status, start_pipeline, stop_pipeline
-from src.main_pipeline.runner import PipelineStopped
+from src.analyse.job import claim_pipeline_result, pipeline_status, start_pipeline, stop_pipeline
+from src.analyse.runner import PipelineStopped
 
 
 def test_stop_pipeline_finishes_without_a_result(monkeypatch) -> None:
@@ -19,7 +19,7 @@ def test_stop_pipeline_finishes_without_a_result(monkeypatch) -> None:
             time.sleep(0.01)
         raise PipelineStopped("Pipeline stopped.")
 
-    monkeypatch.setattr("src.main_pipeline.job.run_pipeline", fake_run)
+    monkeypatch.setattr("src.analyse.job.run_pipeline", fake_run)
     start_pipeline({"input_dir": "tiles"})
     assert started.wait(2)
     stop_pipeline()
@@ -44,7 +44,7 @@ def test_fast_failure_stays_pending_until_claimed(monkeypatch) -> None:
         del progress_cb, write_outputs, should_stop
         raise FileNotFoundError("No image tiles in tiles")
 
-    monkeypatch.setattr("src.main_pipeline.job.run_pipeline", fake_run)
+    monkeypatch.setattr("src.analyse.job.run_pipeline", fake_run)
     start_pipeline({"input_dir": "tiles"})
 
     deadline = time.time() + 2

@@ -1208,8 +1208,8 @@ def test_growing_the_click_includes_the_dim_edge() -> None:
 
 
 def test_mosaic_uses_this_folders_review_color() -> None:
-    from src.main_pipeline.report.report_generator import draw_overlay_markers
-    from src.main_pipeline.stitching.stitcher import LazyMosaic
+    from src.analyse.report.report_generator import draw_overlay_markers
+    from src.analyse.stitching.stitcher import LazyMosaic
     from src.verification.inspect import LABEL_CIRCLE_COLORS, label_colors_for_hits
 
     tile = "Groundup/wafer-a/(1,1).png"
@@ -1274,7 +1274,7 @@ def test_mosaic_uses_this_folders_review_color() -> None:
 def test_write_marked_mosaic_saves_review_and_inspect_circles(tmp_path: Path) -> None:
     import cv2
 
-    from src.main_pipeline.stitching.stitcher import LazyMosaic
+    from src.analyse.stitching.stitcher import LazyMosaic
     from src.verification.inspect import (
         LABEL_CIRCLE_COLORS,
         MARKED_MOSAIC_NAME,
@@ -1369,7 +1369,7 @@ def test_write_marked_mosaic_saves_review_and_inspect_circles(tmp_path: Path) ->
 
 
 def test_write_marked_mosaic_skips_a_run_with_no_tiles(tmp_path: Path) -> None:
-    from src.main_pipeline.stitching.stitcher import LazyMosaic
+    from src.analyse.stitching.stitcher import LazyMosaic
     from src.verification.inspect import MARKED_MOSAIC_NAME, write_marked_mosaic
 
     out = tmp_path / "out"

@@ -46,7 +46,7 @@ def test_apply_nsew_settings_reads_overlay_file(tmp_path: Path) -> None:
 def test_uniform_and_nsew_list_the_same_preprocess_and_detect_keys() -> None:
     from src.overall.config import load_config
 
-    uniform = load_config(PACKAGE_ROOT / "config.yaml")
+    uniform = load_config(PACKAGE_ROOT / "config" / "config.yaml")
     nsew = load_nsew_overlay()
     assert set(nsew["preprocessing"]) == set(uniform["preprocessing"])
     assert set(nsew["detection"]) == set(uniform["detection"])

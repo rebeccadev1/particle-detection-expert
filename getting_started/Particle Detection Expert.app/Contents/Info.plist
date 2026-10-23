@@ -5,15 +5,15 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Particle Detection</string>
+	<string>Particle Detection Expert</string>
 	<key>CFBundleExecutable</key>
 	<string>launch</string>
 	<key>CFBundleIdentifier</key>
-	<string>local.asmlse.particle-detection</string>
+	<string>local.asmlse.particle-detection-expert</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Particle Detection</string>
+	<string>Particle Detection Expert</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

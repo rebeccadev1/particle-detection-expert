@@ -19,8 +19,8 @@ from src.overall.io.tile_loader import (
     resolve_input_dir,
     try_parse_tile_filename,
 )
-from src.main_pipeline.nsew import prepare_detection_paths
-from src.main_pipeline.stitching.stitcher import (
+from src.analyse.nsew import prepare_detection_paths
+from src.analyse.stitching.stitcher import (
     LazyMosaic,
     downsample_for_target,
     downsample_image,
@@ -411,7 +411,7 @@ def _summary_page(table: pd.DataFrame, config: Mapping[str, Any]) -> Image.Image
     path_font = _italic_font(_BODY)
     path, _folder = _input_path_and_folder(config)
     max_text = _PAGE_W - 2 * _MARGIN
-    draw.text((_MARGIN, y), "Particle Detection Output", fill=_INK, font=title)
+    draw.text((_MARGIN, y), "Particle Detection Expert Output", fill=_INK, font=title)
     y += _H1 + _s(14)
     if path:
         draw.text((_MARGIN, y), "Path to analysed image(s):", fill=_INK, font=body)

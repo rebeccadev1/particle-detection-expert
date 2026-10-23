@@ -4,11 +4,11 @@
 # copy asks Terminal to start the same project.
 set -u
 
-LOG="${HOME}/Library/Logs/ParticleDetection.log"
+LOG="${HOME}/Library/Logs/ParticleDetectionExpert.log"
 URL="http://127.0.0.1:8501"
 HOST="127.0.0.1"
 PORT=8501
-PROJECT_FILE="${HOME}/Library/Application Support/ParticleDetection/project_dir"
+PROJECT_FILE="${HOME}/Library/Application Support/ParticleDetectionExpert/project_dir"
 
 mkdir -p "$(dirname "$LOG")"
 
@@ -19,7 +19,7 @@ log() {
 notify() {
   /usr/bin/osascript - "$1" >/dev/null 2>&1 <<'APPLESCRIPT' || true
 on run argv
-  display alert "Particle Detection" message (item 1 of argv)
+  display alert "Particle Detection Expert" message (item 1 of argv)
 end run
 APPLESCRIPT
 }
@@ -77,9 +77,15 @@ reclaim_port() {
 }
 
 BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)" || fail "could not locate the app bundle"
+# The .app lives in getting_started/. app.py and .venv stay in the project root.
+if [[ -f "${BUNDLE_DIR}/app.py" ]]; then
+  PROJECT_DIR="$BUNDLE_DIR"
+else
+  PROJECT_DIR="$(cd "${BUNDLE_DIR}/.." && pwd)" || fail "could not locate the project folder"
+fi
 
-if [[ -x "${BUNDLE_DIR}/.venv/bin/streamlit" && -f "${BUNDLE_DIR}/app.py" ]]; then
-  APP_DIR="$BUNDLE_DIR"
+if [[ -x "${PROJECT_DIR}/.venv/bin/streamlit" && -f "${PROJECT_DIR}/app.py" ]]; then
+  APP_DIR="$PROJECT_DIR"
   mkdir -p "$(dirname "$PROJECT_FILE")"
   printf '%s\n' "$APP_DIR" > "$PROJECT_FILE"
 elif [[ -f "$PROJECT_FILE" ]]; then
@@ -87,10 +93,10 @@ elif [[ -f "$PROJECT_FILE" ]]; then
   if [[ -n "${SAVED_PROJECT}" && -x "${SAVED_PROJECT}/.venv/bin/streamlit" && -f "${SAVED_PROJECT}/app.py" ]]; then
     APP_DIR="$SAVED_PROJECT"
   else
-    fail "missing .venv/bin/streamlit (looked in ${BUNDLE_DIR} and ${SAVED_PROJECT:-$PROJECT_FILE})"
+    fail "missing .venv/bin/streamlit (looked in ${PROJECT_DIR} and ${SAVED_PROJECT:-$PROJECT_FILE})"
   fi
 else
-  fail "missing .venv/bin/streamlit (looked in ${BUNDLE_DIR}; run the in-project .app once to remember the folder)"
+  fail "missing .venv/bin/streamlit (looked in ${PROJECT_DIR}; run the in-project .app once to remember the folder)"
 fi
 
 STREAMLIT="${APP_DIR}/.venv/bin/streamlit"
@@ -102,12 +108,12 @@ reclaim_port
 
 # The python symlink lives in Homebrew, which is allowed. The Streamlit
 # script itself is in the project; /Applications cannot execute that.
-perm_file="$(mktemp /tmp/particle-detection-perm.XXXXXX)"
+perm_file="$(mktemp /tmp/particle-detection-expert-perm.XXXXXX)"
 if ! "$STREAMLIT" --version >"$perm_file" 2>&1; then
   if grep -q "Operation not permitted" "$perm_file"; then
     rm -f "$perm_file"
     log "macOS blocked this app from running the project; starting Terminal"
-    runner="$(mktemp /tmp/ParticleDetection.XXXXXX).command"
+    runner="$(mktemp /tmp/ParticleDetectionExpert.XXXXXX).command"
     cat > "$runner" << EOF
 #!/bin/bash
 set -u

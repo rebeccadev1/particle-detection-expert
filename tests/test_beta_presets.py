@@ -58,8 +58,8 @@ def test_beta_preset_rows_require_a_complete_list() -> None:
 def test_shipped_config_default_beta_has_a_preset() -> None:
     from src.overall.config import PACKAGE_ROOT, load_config
 
-    config = load_config(PACKAGE_ROOT / "config.yaml")
+    config = load_config(PACKAGE_ROOT / "config" / "config.yaml")
     rows = beta_preset_rows(config)
     chosen = preset_for_beta(rows, config["report"]["f_beta"])
-    assert chosen["model_path"] == "models/particle_clf_v4_residual.joblib"
+    assert chosen["model_path"] == "src/analyse/models/particle_clf_v4_residual.joblib"
     assert chosen["threshold"] == 0.23

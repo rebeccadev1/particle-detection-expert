@@ -17,7 +17,7 @@ from src.overall.io.naming import (
     is_submap_lighting_tile,
     lighting_role,
 )
-from src.main_pipeline.report.report_generator import encode_overlay_jpeg
+from src.analyse.report.report_generator import encode_overlay_jpeg
 
 LABEL_VALUES = ("particle", "not_sure", "not_particle")
 DATABASES = ("uniform", "nsew", "glovebox")

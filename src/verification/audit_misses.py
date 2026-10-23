@@ -1,6 +1,6 @@
 """Explain why labeled flakes are missing from the current detector run.
 
-``python scripts/audit_misses.py`` maps particle / tile_inspect labels
+``python tests/audit_misses.py`` maps particle / tile_inspect labels
 onto the input tiles, keeps those with no nearby detection, and runs
 ``trace_locations`` so each miss shows the first dropping gate.
 
@@ -16,8 +16,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import pandas as pd
 
-from src.overall.config import PACKAGE_ROOT, cfg_get, load_config
-from src.main_pipeline.detection.detector import trace_locations
+from src.overall.config import DEFAULT_CONFIG_PATH, PACKAGE_ROOT, cfg_get, load_config
+from src.analyse.detection.detector import trace_locations
 from src.overall.io.tile_loader import input_tile_names, peek_tile_hw
 from src.verification.crops import (
     TileImageCache,
@@ -34,7 +34,7 @@ from src.verification.inspect import (
 )
 from src.verification.queue import load_particles_csv
 from src.verification.store import LabelStore
-from src.main_pipeline.preprocessing.corrections import apply_corrections
+from src.analyse.preprocessing.corrections import apply_corrections
 
 NEAR_PX = 20.0
 
@@ -264,7 +264,7 @@ def default_label_path() -> Path:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=PACKAGE_ROOT / "config.yaml")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--labels", type=Path, default=default_label_path())
     parser.add_argument(
         "--detections",

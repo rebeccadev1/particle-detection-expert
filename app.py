@@ -18,6 +18,7 @@ from src.capture.camera_automation import latest_run_folder
 from src.overall.io.tile_loader import input_folder_labels
 from src.capture.capture_ui import keep_capture_inputs, keep_stage_inputs, render_capture_tab, suspend_live_view
 from src.overall.config import (
+    DEFAULT_CONFIG_PATH,
     DEFAULT_INPUT_DIR,
     apply_nsew_settings,
     beta_preset_rows,
@@ -41,9 +42,9 @@ from src.verification.ui import (
     request_last_run,
 )
 from src.verification.queue import load_last_pipeline, load_particles_csv, write_last_pipeline
-from src.main_pipeline.job import claim_pipeline_result, pipeline_status, start_pipeline, stop_pipeline
+from src.analyse.job import claim_pipeline_result, pipeline_status, start_pipeline, stop_pipeline
 from src.redirector.redirector import render_redirector_tab
-from src.main_pipeline.report.report_generator import (
+from src.analyse.report.report_generator import (
     draw_overlay_markers,
     encode_overlay_jpeg,
     overlay_downsample,
@@ -55,11 +56,11 @@ from src.main_pipeline.report.report_generator import (
     unstitched_tile_paths,
     unstitched_tile_rgb,
 )
-from src.main_pipeline.runner import load_report_mosaic
+from src.analyse.runner import load_report_mosaic
 from src.shadow.shadow import keep_shadow_inputs, render_shadow_tab
 
 st.set_page_config(
-    page_title="Particle Detection Software",
+    page_title="Particle Detection Expert",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -228,7 +229,7 @@ st.html(
     """,
     unsafe_allow_javascript=True,
 )
-st.title("Particle Detection Software")
+st.title("Particle Detection Expert")
 
 NM_PER_UM = 1000.0
 UI_SCHEMA = "mixed_layout_v28"
@@ -240,7 +241,7 @@ def _um_to_nm(um: float) -> float:
     return float(um) * NM_PER_UM
 
 def _base_config() -> dict:
-    path = ROOT / "config.yaml"
+    path = DEFAULT_CONFIG_PATH
     try:
         stamp = path.stat().st_mtime_ns
     except OSError:

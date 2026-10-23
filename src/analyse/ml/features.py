@@ -10,7 +10,7 @@ from typing import Sequence
 
 import numpy as np
 
-from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
+from src.analyse.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
 
 NM_PER_UM = 1000.0
 FEATURE_COLUMNS = ("size_um", "confidence") + CANDIDATE_FEATURE_FIELDS

@@ -932,8 +932,8 @@ def test_input_folder_labels_suggest_image_folders_and_submaps(tmp_path: Path) -
 
 
 def test_pipeline_merges_one_submap_and_keeps_the_next() -> None:
-    from src.main_pipeline.measurement.measurer import Particle
-    from src.main_pipeline.runner import _combine_particle_tables
+    from src.analyse.measurement.measurer import Particle
+    from src.analyse.runner import _combine_particle_tables
 
     def particle(set_id: str, role: str, x: float) -> Particle:
         shot = _submap_shot(set_id, role, x, 200.0, 1)
@@ -966,8 +966,8 @@ def test_pipeline_merges_one_submap_and_keeps_the_next() -> None:
 
 
 def test_pipeline_gives_combi_and_uniform_one_id_drawn_on_both() -> None:
-    from src.main_pipeline.measurement.measurer import Particle
-    from src.main_pipeline.runner import _combine_particle_tables
+    from src.analyse.measurement.measurer import Particle
+    from src.analyse.runner import _combine_particle_tables
     from src.verification.inspect import detections_on_review_picture
     from src.verification.queue import collapse_submap_review_detections
 

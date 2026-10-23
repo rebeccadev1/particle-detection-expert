@@ -7,7 +7,7 @@ import traceback
 from copy import deepcopy
 from typing import Any
 
-from src.main_pipeline.runner import PipelineStopped, run_pipeline
+from src.analyse.runner import PipelineStopped, run_pipeline
 
 _LOCK = threading.Lock()
 _JOB: dict[str, Any] = {

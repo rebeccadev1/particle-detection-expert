@@ -107,13 +107,13 @@ from src.overall.io.naming import (
     lighting_tile_id,
     submap_id,
 )
-from src.main_pipeline.measurement.measurer import (
+from src.analyse.measurement.measurer import (
     DEFAULT_NSEW_MERGE_RADIUS_PX,
     DEFAULT_NSEW_SIZE_MATCH_FRACTION,
 )
 from src.verification.store import LabelStore, crop_source_folder, rows_for_campaign
-from src.main_pipeline.report.report_generator import particles_at_least
-from src.main_pipeline.stitching.stitcher import LazyMosaic
+from src.analyse.report.report_generator import particles_at_least
+from src.analyse.stitching.stitcher import LazyMosaic
 
 try:
     from streamlit_image_coordinates import streamlit_image_coordinates
@@ -291,7 +291,6 @@ def render_label_tab(
                 else "Run the pipeline first."
             ),
         )
-        st.caption("Last run stays unloaded until you click Load last run.")
         return
     last_csv = pipeline_csv
     crop_config = pipeline_config
@@ -1076,7 +1075,6 @@ def render_tile_inspect_tab(
             disabled=pipeline_csv is None or not Path(pipeline_csv).is_file(),
             on_click=request_last_run,
         )
-        st.caption("Last run stays unloaded until you click Load last run.")
         return
 
     try:

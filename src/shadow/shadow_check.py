@@ -2,7 +2,7 @@
 
 Example::
 
-    python scripts/shadow_check.py --key R3_1_17_5X_42943680_1240320 --light-from N
+    python src/shadow/shadow_check.py --key R3_1_17_5X_42943680_1240320 --light-from N
 
 ``--csv`` is ``labels/all_labels.csv`` (ID = ``particle_id``) or a run's
 ``particles.csv`` (ID = ``id``). Label IDs repeat across runs: narrow them
@@ -20,11 +20,11 @@ from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.overall.config import PACKAGE_ROOT, load_config
+from src.overall.config import DEFAULT_CONFIG_PATH, PACKAGE_ROOT, load_config
 from src.shadow.shadow import (
     DEFAULT_OUT,
     LIGHT_HEIGHT_MM,
@@ -47,7 +47,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="all_labels.csv (default) or a run's particles.csv.",
     )
     parser.add_argument("--run", default=None, help="Substring of source_csv to narrow labels.")
-    parser.add_argument("--config", type=Path, default=ROOT / "config.yaml")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument(
         "--input-dir",
         default=None,

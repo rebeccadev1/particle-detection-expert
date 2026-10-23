@@ -11,7 +11,7 @@ from scipy.spatial import cKDTree
 
 from src.overall.config import cfg_get
 from src.overall.io.naming import DIRECTION_STEMS, nsew_merge_stem
-from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
+from src.analyse.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
 
 DEFAULT_NSEW_MERGE_RADIUS_PX = 24.0
 DEFAULT_NSEW_SIZE_MATCH_FRACTION = 0.4

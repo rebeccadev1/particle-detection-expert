@@ -10,16 +10,16 @@ import pandas as pd
 import pytest
 import tifffile
 
-from src.main_pipeline.detection.detector import ParticleCandidate
+from src.analyse.detection.detector import ParticleCandidate
 from src.overall.io.tile_loader import parse_tile_filename, try_parse_tile_filename
-from src.main_pipeline.measurement.measurer import (
+from src.analyse.measurement.measurer import (
     Particle,
     deduplicate,
     local_to_global,
     measure_and_dedupe,
     measure_candidates,
 )
-from src.main_pipeline.runner import PipelineStopped, run_pipeline
+from src.analyse.runner import PipelineStopped, run_pipeline
 from src.overall.io.placement import tile_origin_px
 from src.overall.io.tile_loader import Tile
 from tests.fixtures.synthetic import detector_test_config, make_structured_tile, write_tile_tiff
@@ -283,7 +283,7 @@ def test_nsew_does_not_merge_two_hits_on_the_same_tile() -> None:
     west = Particle(
         id=0, x_global=104.0, y_global=201.0, size=13.0, confidence=0.7, source_tile="W.bmp"
     )
-    from src.main_pipeline.measurement.measurer import deduplicate_nsew
+    from src.analyse.measurement.measurer import deduplicate_nsew
 
     merged = deduplicate_nsew(
         [first, second, west],
@@ -298,7 +298,7 @@ def test_nsew_does_not_merge_two_hits_on_the_same_tile() -> None:
 
 
 def test_combine_tables_merges_directional_unplaced_tiles() -> None:
-    from src.main_pipeline.runner import _combine_particle_tables
+    from src.analyse.runner import _combine_particle_tables
 
     north = Particle(id=0, x_global=10.0, y_global=12.0, size=8.0, confidence=0.9, source_tile="N.tif")
     south = Particle(id=0, x_global=11.0, y_global=12.0, size=30.0, confidence=0.4, source_tile="S.tif")
@@ -318,7 +318,7 @@ def test_combine_tables_merges_directional_unplaced_tiles() -> None:
 
 
 def test_combine_tables_merges_particles_only_versions() -> None:
-    from src.main_pipeline.runner import _combine_particle_tables
+    from src.analyse.runner import _combine_particle_tables
 
     two = Particle(
         id=0,
@@ -464,7 +464,7 @@ def test_pipeline_runs_on_bmp_tiles(tmp_path: Path) -> None:
         "source_tile",
         "confidence",
     ]
-    from src.main_pipeline.report.report_generator import summary_pdf_name
+    from src.analyse.report.report_generator import summary_pdf_name
 
     assert (tmp_path / "out" / summary_pdf_name(config)).read_bytes().startswith(b"%PDF")
     assert (tmp_path / "out" / "mosaic_overlay.png").is_file()
@@ -508,7 +508,7 @@ def test_pipeline_stop_skips_later_tiles_and_skips_outputs(tmp_path: Path) -> No
     assert not (tmp_path / "out" / "particles.csv").exists()
     assert not (tmp_path / "out" / "particles.xlsx").exists()
     assert not (tmp_path / "out" / "last_pipeline.json").exists()
-    from src.main_pipeline.report.report_generator import summary_pdf_name
+    from src.analyse.report.report_generator import summary_pdf_name
 
     assert not (tmp_path / "out" / summary_pdf_name(config)).exists()
 
@@ -569,7 +569,7 @@ def test_pipeline_caches_mosaic_thumbnails(tmp_path: Path) -> None:
 
 
 def test_photo_mosaic_keeps_saved_brightness() -> None:
-    from src.main_pipeline.report.report_generator import photo_display_rgb
+    from src.analyse.report.report_generator import photo_display_rgb
 
     dark = np.full((8, 8), 20, np.float32)
     assert int(photo_display_rgb(dark).mean()) == 20
@@ -625,7 +625,7 @@ def test_pipeline_seam_on_synthetic_tiffs(tmp_path: Path) -> None:
 
 
 def test_downsample_for_target_caps_mosaic_bytes() -> None:
-    from src.main_pipeline.stitching.stitcher import downsample_for_target
+    from src.analyse.stitching.stitcher import downsample_for_target
 
     height, width = 9549, 86464
     target_mb = 20.0
@@ -638,7 +638,7 @@ def test_downsample_for_target_caps_mosaic_bytes() -> None:
 
 def test_preview_downsizes_tiles_then_pastes_on_canvas(tmp_path: Path) -> None:
     from src.overall.io.placement import TilePlacement
-    from src.main_pipeline.stitching.stitcher import LazyMosaic
+    from src.analyse.stitching.stitcher import LazyMosaic
 
     height, width, factor = 16, 16, 4
     left_path = tmp_path / "R3_0_0_5X.tif"
@@ -658,9 +658,9 @@ def test_preview_downsizes_tiles_then_pastes_on_canvas(tmp_path: Path) -> None:
 
 
 def test_full_mosaic_preview_downsamples_tiles_before_stitch(tmp_path: Path) -> None:
-    from src.main_pipeline.report.report_generator import draw_overlay_markers, overlay_downsample, overlay_rgb
+    from src.analyse.report.report_generator import draw_overlay_markers, overlay_downsample, overlay_rgb
     from src.overall.io.placement import TilePlacement
-    from src.main_pipeline.stitching.stitcher import LazyMosaic
+    from src.analyse.stitching.stitcher import LazyMosaic
 
     height, width = 80, 120
     left = make_structured_tile((height, width), particles=[(20.0, 30.0, 3.0)])
@@ -685,7 +685,7 @@ def test_full_mosaic_preview_downsamples_tiles_before_stitch(tmp_path: Path) -> 
 
 
 def test_pipeline_table_includes_feature_columns(tmp_path: Path) -> None:
-    from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS
+    from src.analyse.detection.detector import CANDIDATE_FEATURE_FIELDS
     from src.overall.io.results_writer import write_csv
 
     image = make_structured_tile((64, 64), particles=[(32.0, 30.0, 3.5)])
@@ -724,7 +724,7 @@ def test_pipeline_detects_only_the_combi(tmp_path: Path) -> None:
     assert not table.empty
     sources = {Path(name).name for name in table["source_tile"].astype(str)}
     assert sources == {"combi_2of4.tif"}
-    from src.main_pipeline.report.report_generator import unstitched_tile_paths
+    from src.analyse.report.report_generator import unstitched_tile_paths
 
     assert [path.name for path in unstitched_tile_paths(config)] == ["combi_2of4.tif"]
     dirs = {
@@ -750,7 +750,7 @@ def test_pipeline_detects_unmatched_names_without_stitching(tmp_path: Path) -> N
 
 
 def test_pipeline_stitches_only_patterned_tiles(tmp_path: Path) -> None:
-    from src.main_pipeline.report.report_generator import draw_overlay_markers, overlay_rgb
+    from src.analyse.report.report_generator import draw_overlay_markers, overlay_rgb
 
     patterned = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])
     loose = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])
@@ -766,7 +766,7 @@ def test_pipeline_stitches_only_patterned_tiles(tmp_path: Path) -> None:
     overlay = draw_overlay_markers(overlay_rgb(mosaic, config, crop=None), mosaic, table, config, crop=None)
     assert overlay.shape[0] > 0
     assert overlay.shape[1] > 0
-    from src.main_pipeline.runner import load_report_mosaic
+    from src.analyse.runner import load_report_mosaic
 
     report = load_report_mosaic(config)
     assert [p.name for p in report.placements] == [p.name for p in mosaic.placements]

@@ -93,25 +93,37 @@ def test_summary_counts_stops() -> None:
 def test_uniform_pause_fits_one_frame() -> None:
     plan = pause_plan(100.0, "Uniform")
     assert plan["frames"] == 1
-    assert plan["shutter_ms"] == pytest.approx(25.0)
+    assert plan["shutter_ms"] == pytest.approx(100.0)
     assert plan["motion_ms"] == pytest.approx(MOTION_PAUSE_S * 1000)
     assert plan["dwell_ms"] == int(
-        MOTION_PAUSE_S * 1000 + SETTLE_S * 1000 + 25 + PAUSE_MARGIN_MS
+        MOTION_PAUSE_S * 1000 + SETTLE_S * 1000 + 100 + PAUSE_MARGIN_MS
     )
 
 
 def test_nsew_pause_fits_four_frames() -> None:
-    plan = pause_plan(100.0, "NSEW")
+    plan = pause_plan(800.0, "NSEW")
     assert plan["frames"] == 4
-    assert plan["shutter_ms"] == pytest.approx(100.0)
+    assert plan["shutter_ms"] == pytest.approx(800.0)
     assert plan["gaps"] == 3
     assert plan["gap_ms"] == pytest.approx(NSEW_GAP_S * 1000)
     assert plan["dwell_ms"] == int(
         MOTION_PAUSE_S * 1000
-        + 4 * (SETTLE_S * 1000 + 100 + PAUSE_MARGIN_MS)
+        + 4 * (SETTLE_S * 1000 + 800 + PAUSE_MARGIN_MS)
         + 3 * NSEW_GAP_S * 1000
     )
     assert plan["dwell_ms"] > pause_plan(100.0, "Uniform")["dwell_ms"]
+
+
+def test_nsew_standard_exposure_is_eight_times_uniform() -> None:
+    from src.capture.camera_automation import (
+        NSEW_TOTAL_EXPOSURE_MS,
+        TOTAL_EXPOSURE_MS,
+        standard_total_exposure_ms,
+    )
+
+    assert NSEW_TOTAL_EXPOSURE_MS == pytest.approx(8 * TOTAL_EXPOSURE_MS)
+    assert standard_total_exposure_ms("Uniform") == pytest.approx(100.0)
+    assert standard_total_exposure_ms("NSEW") == pytest.approx(800.0)
 
 
 def test_rejects_a_zero_step() -> None:

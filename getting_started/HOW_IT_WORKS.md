@@ -1,4 +1,4 @@
-# Particle detection software
+# Particle Detection Expert
 
 This app photographs a patterned wafer, finds contaminant particles on those images, and lets you review the hits. The surface is periodic, so detection has to ignore the repeating layout and keep compact debris.
 
@@ -23,7 +23,7 @@ Capture drives three devices, shown on one status line: the **Arduino** (ring li
 
 **Uniform** turns on all four sides of the ring. **NSEW** lights one side at a time: N, then E, then S, then W (Arduino pins 2–5, commands `0`–`3`). Automatic NSEW is one click that saves all four frames, with a short gap between sides. Manual NSEW lights and saves one side when you press that side.
 
-**Total exposure (ms)** is the dose from a single side. Uniform has all four sides on, so the shutter is that value divided by 4. NSEW lights one side, so the shutter equals the total.
+**Total exposure** is the camera shutter, in milliseconds. The standard is 100 ms for Uniform and 800 ms for NSEW, eight times the uniform standard. Uniform has all four sides on for that shutter. NSEW lights one side at a time, and each of those frames uses its own total exposure.
 
 ### Live view and a single frame
 
@@ -58,7 +58,7 @@ Analyse places those names on a grid. The overlap you set here should match `ove
 
 ### What you do
 
-**Adjust parameters** holds the detector settings. The profile is **Uniform** or **NSEW**. Uniform loads `config.yaml`. NSEW overlays `nsew_config.yaml` on top of it. **Reset to standard values** restores the selected profile and keeps the folder you just chose.
+**Adjust parameters** holds the detector settings. The profile is **Uniform** or **NSEW**. Uniform loads `config/config.yaml`. NSEW overlays `config/nsew_config.yaml` on top of it. **Reset to standard values** restores the selected profile and keeps the folder you just chose.
 
 **Run/stop pipeline** detects on the input folder and writes the output folder. When it finishes, the page shows the particle table, a size histogram in micrometres, the mosaic, and any image that was detected but could not be placed on the grid. **Labeled tiles** stay unloaded until you click **Load labeled tiles**.
 
@@ -83,14 +83,14 @@ Circle radius is the measured radius in display pixels, plus 10, and at least 14
 
 ### How a hit is found
 
-Detection runs **one tile at a time**, on threads (`pipeline.workers`, **10** in `config.yaml`; `0` means every core). The mosaic is built afterwards from thumbnails. It is a report, not an input.
+Detection runs **one tile at a time**, on threads (`pipeline.workers`, **10** in `config/config.yaml`; `0` means every core). The mosaic is built afterwards from thumbnails. It is a report, not an input.
 
 Before detection, a complete N/S/E/W set is combined and the four source images are left out:
 
 - Files named `N`, `S`, `E`, `W` (or Groundup `quad0`–`quad3`) become `combi_2of4` beside them.
 - Files named `(row,col)_N` and the other three sides become `(row,col)`, which is placed on the grid.
 
-The combi keeps pixels that are bright in at least two of the four angles, after a wide illumination flatten (σ 120, only in this combine step). `python scripts/nsew_to_combi.py` is separate: it writes 2-of-4, 3-of-4, and 4-of-4 combi and symmetry maps under `Outputs/Output {folder}`.
+The combi keeps pixels that are bright in at least two of the four angles, after a wide illumination flatten (σ 120, only in this combine step). `python src/analyse/nsew_to_combi.py` is separate: it writes 2-of-4, 3-of-4, and 4-of-4 combi and symmetry maps under `Outputs/Output {folder}`.
 
 On each image the worker:
 
@@ -101,17 +101,17 @@ On each image the worker:
 5. Finds blobs with difference-of-Gaussians (LoG if `blob_method` is `log`).
 6. Drops peaks that fail, in order: residual prominence, confidence, distance to a border, circularity, a local peak on the preprocessed tile, compact support, then measured size.
 7. Drops clusters and long axis-aligned rows of equal-sized hits. A blob much larger than its neighbours is kept.
-8. Optionally scores the survivors with a frozen ExtraTrees model. Uniform uses residual features (`models/particle_clf_v4_residual.joblib`, threshold **0.23**). The NSEW profile uses `models/particle_clf_v8.joblib` at **0.37**. A missing joblib raises. The app does not train.
+8. Optionally scores the survivors with a frozen ExtraTrees model. Uniform uses residual features (`src/analyse/models/particle_clf_v4_residual.joblib`, threshold **0.23**). The NSEW profile uses `src/analyse/models/particle_clf_v8.joblib` at **0.37**. A missing joblib raises. The app does not train.
 
 Reported **size** is the equivalent circular diameter of the footprint on the **raw photo**, not the DoG sigma. Pixels that stand out from the local background by `size_mass_fraction` (0.4) of the peak contrast form that footprint. The keep window is **20–100 µm**.
 
 DoG itself searches pixel scales σ **3.7–36** (about 10–100 px across). Those sigmas were chosen when 1 px was 0.96 µm. At the current `pixel_size_nm: 3610` (3.61 µm/px) the same sigmas search about **38–368 µm**, so the 20 µm floor sits below the search and the 100 µm ceiling still cuts large DoG hits.
 
-Placeable names match `filename_pattern`. Current `config.yaml` is `(row,col)` plus an image suffix. The mosaic origin is the smallest row and column in the folder, stepped by tile size times `(1 − overlap_fraction)`. Current overlap is **0.1**. Files that do not match are still detected. They are omitted from the stitch and shown on their own PDF pages. Overlapping grid tiles that report the same particle are merged (8 px, about 29 µm at 3.61 µm/px). The highest-confidence hit keeps the position. Cluster size is the max of the members.
+Placeable names match `filename_pattern`. Current `config/config.yaml` is `(row,col)` plus an image suffix. The mosaic origin is the smallest row and column in the folder, stepped by tile size times `(1 − overlap_fraction)`. Current overlap is **0.1**. Files that do not match are still detected. They are omitted from the stitch and shown on their own PDF pages. Overlapping grid tiles that report the same particle are merged (8 px, about 29 µm at 3.61 µm/px). The highest-confidence hit keeps the position. Cluster size is the max of the members.
 
 The two profiles differ in a few gates. Everything else is shared.
 
-| | Uniform (`config.yaml`) | NSEW (`nsew_config.yaml`) |
+| | Uniform (`config/config.yaml`) | NSEW (`config/nsew_config.yaml`) |
 |--|-------------------------|---------------------------|
 | Model | v4 residual at 0.23 | v8 at 0.37 |
 | Border drop | 8 px | 12 px |
@@ -179,7 +179,7 @@ Saved crops, split into **Uniform**, **NSEW**, and **Glovebox**. Each campaign s
 
 Measures the dark region beside an already found particle, on the side away from the light. Height is shadow length times light height, divided by the horizontal distance from that particle to the ring. That distance depends on where the particle sits in the field.
 
-**From database** takes label keys (the key printed under each crop). **From uploaded image** measures a picture you provide, and you can draw the particle outline instead of the automatic mask. Pixel size comes from Adjust parameters on Analyse. `scripts/shadow_check.py` is the same measurement from the command line.
+**From database** takes label keys (the key printed under each crop). **From uploaded image** measures a picture you provide, and you can draw the particle outline instead of the automatic mask. Pixel size comes from Adjust parameters on Analyse. `src/shadow/shadow_check.py` is the same measurement from the command line.
 
 ### Redirector
 
@@ -192,11 +192,11 @@ The page draws the section and reports the exit angles below horizontal, the sha
 ## How to run
 
 ```bash
-cd particle_detection
+cd particle-detection-expert
 streamlit run app.py
 ```
 
-Python 3.11 or newer. Setup is in `README.md`. On a Mac you can also open **Particle Detection.app**. On Windows, **Start Particle Detection.bat**.
+Python 3.11 or newer. Setup is in [README.md](../README.md). On a Mac you can also open **getting_started/Particle Detection Expert.app**. On Windows, **getting_started/Start Particle Detection Expert.bat**.
 
 | Module | Use |
 |--------|-----|
@@ -210,12 +210,12 @@ Python 3.11 or newer. Setup is in `README.md`. On a Mac you can also open **Part
 Command-line helpers, from this folder:
 
 ```bash
-python scripts/nsew_to_combi.py [folder]
-python scripts/audit_misses.py
-python scripts/shadow_check.py --ids …
+python src/analyse/nsew_to_combi.py [folder]
+python tests/audit_misses.py
+python src/shadow/shadow_check.py --ids …
 ```
 
-Tests are `pytest` after `pip install -r requirements-dev.txt`.
+Tests are `pytest` after `pip install -r getting_started/requirements-dev.txt`.
 
 ---
 
@@ -224,26 +224,23 @@ Tests are `pytest` after `pip install -r requirements-dev.txt`.
 This is the GitHub repository. Photos, detection runs, and labels are created on your machine and are not in the clone.
 
 ```
-particle_detection/
+particle-detection-expert/
 ├── app.py                               Streamlit app: the four modules
 ├── README.md                            install and launch
-├── HOW_IT_WORKS.md                      this document
-├── config.yaml                          Analyse → Uniform settings
-├── nsew_config.yaml                     Analyse → NSEW settings, overlaid on config.yaml
-├── requirements.txt                     packages to run the app
-├── requirements-dev.txt                 packages for the tests
-├── pytest.ini
-├── Start Particle Detection.bat         Windows launcher
-├── Particle Detection.app               Mac launcher
-├── models/
-│   └── particle_clf_v*.joblib           frozen classifiers (v3 through v8)
-├── scripts/
-│   ├── nsew_to_combi.py                 write 2/3/4-of-4 combi and symmetry maps
-│   ├── audit_misses.py                  why a clicked speck was not a hit
-│   └── shadow_check.py                  shadow height from the command line
+├── getting_started/
+│   ├── HOW_IT_WORKS.md                  this document
+│   ├── requirements.txt                 packages to run the app
+│   ├── requirements-dev.txt             packages for the tests
+│   ├── Start Particle Detection Expert.bat   Windows launcher
+│   └── Particle Detection Expert.app/        Mac launcher
+├── config/
+│   ├── config.yaml                      Analyse → Uniform settings
+│   └── nsew_config.yaml                 Analyse → NSEW settings, overlaid on config.yaml
+├── .streamlit/config.toml               app theme
 ├── src/
 │   ├── capture/                         ring light, camera, stage, focus, scan
-│   ├── main_pipeline/                   detect, measure, combine NSEW, write the report
+│   ├── analyse/                         detect, measure, combine NSEW, write the report
+│   │   └── models/                      frozen classifiers (v3 through v8)
 │   ├── verification/                    Label, Inspect, Database
 │   ├── shadow/                          shadow height
 │   ├── redirector/                      plexiglass ring ray trace

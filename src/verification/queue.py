@@ -22,7 +22,7 @@ from src.overall.io.naming import (
     nsew_merge_stem,
     submap_id,
 )
-from src.main_pipeline.measurement.measurer import (
+from src.analyse.measurement.measurer import (
     DEFAULT_NSEW_MERGE_RADIUS_PX,
     DEFAULT_NSEW_SIZE_MATCH_FRACTION,
     Particle,

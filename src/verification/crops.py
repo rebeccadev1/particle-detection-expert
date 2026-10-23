@@ -21,7 +21,7 @@ from src.overall.io.tile_loader import (
     resolve_input_dir,
     try_parse_tile_filename,
 )
-from src.main_pipeline.nsew import positional_cell_sides, positional_direction
+from src.analyse.nsew import positional_cell_sides, positional_direction
 from src.overall.io.naming import (
     DIRECTION_STEMS,
     is_combi_tile,
@@ -39,7 +39,7 @@ from src.overall.io.placement import (
     grid_index_origin,
     placement_from_path,
 )
-from src.main_pipeline.stitching.stitcher import LazyMosaic
+from src.analyse.stitching.stitcher import LazyMosaic
 
 MIN_HALF_PX = 96
 WINDOW_SCALE = 1.8

@@ -165,17 +165,15 @@ def build_scan_gcode(
 def pause_plan(total_exposure_ms: float, mode: str) -> dict:
     """How long the stage holds still so the pictures at one stop can finish.
 
-    Uniform takes one frame. The shutter is the total exposure divided by the
-    four sides, because they are on together. NSEW takes four frames, and each
-    shutter is the full total exposure. Every frame also waits for the lights
-    to settle, plus a fixed margin. Automatic NSEW waits ``NSEW_GAP_S`` between
-    sides. Each stop also waits ``MOTION_PAUSE_S`` after the move.
+    Uniform takes one frame. NSEW takes four frames, and each shutter is the
+    total exposure. Every frame also waits for the lights to settle, plus a
+    fixed margin. Automatic NSEW waits ``NSEW_GAP_S`` between sides. Each stop
+    also waits ``MOTION_PAUSE_S`` after the move.
     """
     uniform = mode != "NSEW"
     frames = 1 if uniform else RING_SIDES
     gaps = 0 if uniform else frames - 1
-    sides_on = RING_SIDES if uniform else 1
-    shutter = shutter_ms(total_exposure_ms, sides_on)
+    shutter = shutter_ms(total_exposure_ms)
     settle_ms = SETTLE_S * 1000.0
     gap_ms = 0.0 if uniform else NSEW_GAP_S * 1000.0
     motion_ms = MOTION_PAUSE_S * 1000.0

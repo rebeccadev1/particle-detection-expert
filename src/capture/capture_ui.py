@@ -31,7 +31,8 @@ _LINK = _load_arduino_link()
 CAPTURE_WIDGET_DEFAULTS: dict = {
     "capture_mode": "Uniform",
     "capture_nsew_style": "Automatic",
-    "capture_total_ms": 100.0,
+    "capture_total_uniform": _camera.TOTAL_EXPOSURE_MS,
+    "capture_total_nsew": _camera.NSEW_TOTAL_EXPOSURE_MS,
 }
 
 
@@ -91,6 +92,18 @@ def _run_serial(action):
 def _selected_mode() -> str:
     mode = st.session_state.get("capture_mode", "Uniform")
     return mode if mode in ("Uniform", "NSEW") else "Uniform"
+
+
+def _total_exposure_key(mode: str) -> str:
+    return "capture_total_nsew" if mode == "NSEW" else "capture_total_uniform"
+
+
+def total_exposure_ms(mode: str | None = None) -> float:
+    """Shutter for this lighting mode. NSEW's standard is eight times Uniform."""
+    mode = _selected_mode() if mode is None else mode
+    key = _total_exposure_key(mode)
+    default = CAPTURE_WIDGET_DEFAULTS[key]
+    return float(st.session_state.get(key, default))
 
 
 def _apply_mode_light(cap, mode: str):
@@ -298,17 +311,17 @@ def _render_lighting_controls(cap, mode: str, nsew_style: str, ser) -> None:
         if _apply_mode_light(cap, mode):
             st.session_state["capture_lit_mode"] = mode
 
+    total_key = _total_exposure_key(mode)
     total_ms = st.number_input(
-        "Total exposure (ms)",
-        min_value=4.0,
+        "Total exposure",
+        min_value=1.0,
         max_value=4000.0,
-        value=float(CAPTURE_WIDGET_DEFAULTS["capture_total_ms"]),
+        value=float(CAPTURE_WIDGET_DEFAULTS[total_key]),
         step=1.0,
-        key="capture_total_ms",
-        help="Dose from a single side. The camera time is calculated from this and the lighting mode.",
+        key=total_key,
+        help="Shutter in milliseconds. Standard is 100 for Uniform and 800 for NSEW.",
     )
-    sides_on = cap.RING_SIDES if mode == "Uniform" else 1
-    shutter = cap.shutter_ms(float(total_ms), sides_on)
+    shutter = cap.shutter_ms(float(total_ms))
 
     if mode == "Uniform":
         on_col, off_col = st.columns(2)
@@ -376,7 +389,7 @@ def _capture_one_side(cap, index: int, shutter_ms: float) -> None:
                     "mode": "nsew",
                     "row": row,
                     "col": col,
-                    "total_exposure_ms": float(st.session_state["capture_total_ms"]),
+                    "total_exposure_ms": total_exposure_ms(),
                     "shutter_ms": shutter_ms,
                     "exposure_us": exposure_us,
                     "sides_on": 1,
@@ -427,7 +440,7 @@ def _capture_run(cap, mode: str, shutter_ms: float, *, label: str | None = None)
                     "mode": "uniform" if mode == "Uniform" else "nsew",
                     "row": row,
                     "col": col,
-                    "total_exposure_ms": float(st.session_state["capture_total_ms"]),
+                    "total_exposure_ms": total_exposure_ms(),
                     "shutter_ms": shutter_ms,
                     "exposure_us": exposure_us,
                     "sides_on": cap.RING_SIDES if mode == "Uniform" else 1,
@@ -531,10 +544,7 @@ def _render_manual_sides(cap, shutter_ms: float) -> None:
 
 
 def _shutter_ms(cap) -> float:
-    mode = _selected_mode()
-    total_ms = float(st.session_state.get("capture_total_ms", CAPTURE_WIDGET_DEFAULTS["capture_total_ms"]))
-    sides_on = cap.RING_SIDES if mode == "Uniform" else 1
-    return float(cap.shutter_ms(total_ms, sides_on))
+    return float(cap.shutter_ms(total_exposure_ms()))
 
 
 def _capture_after_autofocus(cap) -> None:
@@ -579,7 +589,9 @@ def _live_feed() -> None:
     snap = preview_snapshot()
     frame = snap["frame"]
     if frame is None:
-        if snap["error"]:
+        if snap["error"] == "No Basler camera found":
+            st.caption(snap["error"])
+        elif snap["error"]:
             st.error(snap["error"])
         else:
             st.info("Opening the camera…")

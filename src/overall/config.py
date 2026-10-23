@@ -11,6 +11,8 @@ import yaml
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_ROOT = PACKAGE_ROOT.parent
+CONFIG_DIR = PACKAGE_ROOT / "config"
+DEFAULT_CONFIG_PATH = CONFIG_DIR / "config.yaml"
 DEFAULT_OUTPUT_DIR = WORKSPACE_ROOT / "Outputs"
 DEFAULT_INPUT_DIR = WORKSPACE_ROOT / "Inputs"
 
@@ -19,7 +21,7 @@ def resolve_output_dir(folder: str | Path | None = None) -> Path:
     """Map ``output_dir`` onto ``ASML SE/Outputs`` unless an absolute path is given.
 
     Bare names such as ``Single v6`` become ``Outputs/Single v6``. Relative
-    paths that start with ``.`` or ``..`` are resolved from ``particle_detection/``.
+    paths that start with ``.`` or ``..`` are resolved from the project folder.
     """
     text = str(folder or "").strip().strip('"').strip("'")
     if not text:
@@ -174,7 +176,7 @@ def nsew_config_path(path: str | Path | None = None) -> Path:
     """``nsew_config.yaml`` next to ``config.yaml`` unless ``path`` is given."""
     if path is not None:
         return Path(path)
-    return PACKAGE_ROOT / "nsew_config.yaml"
+    return CONFIG_DIR / "nsew_config.yaml"
 
 
 def load_nsew_overlay(path: str | Path | None = None) -> dict[str, Any]:
