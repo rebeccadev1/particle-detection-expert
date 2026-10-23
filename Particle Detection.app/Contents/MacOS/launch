@@ -8,7 +8,7 @@ LOG="${HOME}/Library/Logs/ParticleDetection.log"
 URL="http://127.0.0.1:8501"
 HOST="127.0.0.1"
 PORT=8501
-SAVED_PROJECT="/Users/rebeccajekel/Desktop/ASML SE/particle_detection"
+PROJECT_FILE="${HOME}/Library/Application Support/ParticleDetection/project_dir"
 
 mkdir -p "$(dirname "$LOG")"
 
@@ -80,10 +80,17 @@ BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)" || fail "cou
 
 if [[ -x "${BUNDLE_DIR}/.venv/bin/streamlit" && -f "${BUNDLE_DIR}/app.py" ]]; then
   APP_DIR="$BUNDLE_DIR"
-elif [[ -x "${SAVED_PROJECT}/.venv/bin/streamlit" && -f "${SAVED_PROJECT}/app.py" ]]; then
-  APP_DIR="$SAVED_PROJECT"
+  mkdir -p "$(dirname "$PROJECT_FILE")"
+  printf '%s\n' "$APP_DIR" > "$PROJECT_FILE"
+elif [[ -f "$PROJECT_FILE" ]]; then
+  SAVED_PROJECT="$(head -n 1 "$PROJECT_FILE" || true)"
+  if [[ -n "${SAVED_PROJECT}" && -x "${SAVED_PROJECT}/.venv/bin/streamlit" && -f "${SAVED_PROJECT}/app.py" ]]; then
+    APP_DIR="$SAVED_PROJECT"
+  else
+    fail "missing .venv/bin/streamlit (looked in ${BUNDLE_DIR} and ${SAVED_PROJECT:-$PROJECT_FILE})"
+  fi
 else
-  fail "missing .venv/bin/streamlit (looked in ${BUNDLE_DIR} and ${SAVED_PROJECT})"
+  fail "missing .venv/bin/streamlit (looked in ${BUNDLE_DIR}; run the in-project .app once to remember the folder)"
 fi
 
 STREAMLIT="${APP_DIR}/.venv/bin/streamlit"
