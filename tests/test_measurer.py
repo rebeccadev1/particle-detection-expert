@@ -47,19 +47,26 @@ def test_blank_filename_pattern_does_not_match_quad_shots() -> None:
     assert try_parse_tile_filename(name, r"R(?P<run>\d+)") is None
 
 
-def test_resolve_input_dir_finds_workspace_tile_folder() -> None:
-    from src.overall.config import DEFAULT_INPUT_DIR
-    from src.overall.io.tile_loader import resolve_input_dir
+def test_resolve_input_dir_finds_workspace_tile_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.overall import config as config_mod
+    from src.overall.io import tile_loader
 
-    found = resolve_input_dir("R3 04-08")
-    assert found.is_dir()
-    assert found.name == "R3 04-08"
-    assert DEFAULT_INPUT_DIR.resolve() in found.parents
+    inputs = tmp_path / "Inputs"
+    folder = inputs / "R3 04-08"
+    folder.mkdir(parents=True)
+    (folder / "R3_1_26_5X.tif").write_bytes(b"placeholder")
+
+    monkeypatch.setattr(config_mod, "DEFAULT_INPUT_DIR", inputs)
+    monkeypatch.setattr(tile_loader, "DEFAULT_INPUT_DIR", inputs)
+
+    found = tile_loader.resolve_input_dir("R3 04-08")
+    assert found == folder.resolve()
     assert (found / "R3_1_26_5X.tif").is_file()
 
-    via_dotdot = resolve_input_dir("../Single image test big boy")
-    assert via_dotdot.name == "Single image test big boy"
-    assert DEFAULT_INPUT_DIR.resolve() in via_dotdot.parents
+    via_dotdot = tile_loader.resolve_input_dir("../R3 04-08")
+    assert via_dotdot == folder.resolve()
 
 
 def test_resolve_output_dir_uses_workspace_outputs(tmp_path: Path) -> None:
