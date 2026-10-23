@@ -234,8 +234,7 @@ particle_detection/
 ├── requirements-dev.txt                 packages for the tests
 ├── pytest.ini
 ├── Start Particle Detection.bat         Windows launcher
-├── Particle Detection.app/              Mac launcher
-├── .streamlit/config.toml
+├── Particle Detection.app               Mac launcher
 ├── models/
 │   └── particle_clf_v*.joblib           frozen classifiers (v3 through v8)
 ├── scripts/
