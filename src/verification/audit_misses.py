@@ -1,6 +1,6 @@
 """Explain why labeled flakes are missing from the current detector run.
 
-``python -m src.verification.audit_misses`` maps particle / tile_inspect labels
+``python scripts/audit_misses.py`` maps particle / tile_inspect labels
 onto the input tiles, keeps those with no nearby detection, and runs
 ``trace_locations`` so each miss shows the first dropping gate.
 
@@ -18,17 +18,7 @@ import pandas as pd
 
 from src.overall.config import PACKAGE_ROOT, cfg_get, load_config
 from src.main_pipeline.detection.detector import trace_locations
-from src.overall.io.naming import (
-    is_combi_tile,
-    is_submap_lighting_tile,
-    lighting_source_name,
-    lighting_tile_id,
-)
-from src.overall.io.tile_loader import (
-    DEFAULT_FILENAME_PATTERN,
-    matching_tile_paths,
-    peek_tile_hw,
-)
+from src.overall.io.tile_loader import input_tile_names, peek_tile_hw
 from src.verification.crops import (
     TileImageCache,
     find_tile_path,
@@ -83,24 +73,6 @@ def trace_click(
             "nearest_kept_px": float("nan"),
         }
     return dict(rows[0])
-
-
-def input_tile_names(config: Mapping[str, Any]) -> set[str]:
-    """Basenames of TIFFs in ``config.input_dir``."""
-    folder = cfg_get(dict(config), "input_dir", "")
-    if not folder:
-        return set()
-    pattern = str(cfg_get(dict(config), "filename_pattern", DEFAULT_FILENAME_PATTERN))
-    try:
-        paths = matching_tile_paths(folder, pattern, include_unmatched=True)
-    except FileNotFoundError:
-        return set()
-    return {
-        lighting_tile_id(path)
-        if is_combi_tile(path.name) or is_submap_lighting_tile(path.name)
-        else lighting_source_name(path)
-        for path in paths
-    }
 
 
 def particle_label_rows(
@@ -362,5 +334,3 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())

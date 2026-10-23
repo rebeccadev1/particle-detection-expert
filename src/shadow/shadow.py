@@ -4,7 +4,7 @@ The shadow is the dark region (below background − k·σ) connected to the
 particle on the side away from the light. Height = length × light height /
 horizontal distance to the light, which depends on where the particle sits
 in the field (see ``light_distance_mm``). Used by the **Shadow** tab and
-``src/shadow/shadow_check.py``.
+``scripts/shadow_check.py``.
 """
 
 from __future__ import annotations

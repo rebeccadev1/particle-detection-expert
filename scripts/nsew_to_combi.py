@@ -1,14 +1,19 @@
+"""Combine N/S/E/W directional images in a folder."""
+
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.main_pipeline.nsew import combine_nsew_folder, find_nsew_images
 
-if __name__ == "__main__":
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Combine N/S/E/W directional images in a folder."
     )
@@ -18,7 +23,7 @@ if __name__ == "__main__":
         default=".",
         help="Folder containing images named N, S, E, W (default: current directory)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     folder = Path(args.folder).expanduser().resolve()
 
     nsew = find_nsew_images(folder)
@@ -35,3 +40,8 @@ if __name__ == "__main__":
         )
     for out_path in result["outputs"]:
         print(f"Wrote {out_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

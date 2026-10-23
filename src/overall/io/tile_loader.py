@@ -8,13 +8,19 @@ import struct
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, Mapping
 
 import cv2
 import numpy as np
 import tifffile
 
-from src.overall.config import DEFAULT_INPUT_DIR, PACKAGE_ROOT, WORKSPACE_ROOT
-from src.overall.io.naming import is_combi_tile, is_submap_lighting_tile
+from src.overall.config import DEFAULT_INPUT_DIR, PACKAGE_ROOT, WORKSPACE_ROOT, cfg_get
+from src.overall.io.naming import (
+    is_combi_tile,
+    is_submap_lighting_tile,
+    lighting_source_name,
+    lighting_tile_id,
+)
 
 _IMAGE_SUFFIX = r"(?:tiff?|bmp|png|jpe?g)"
 DEFAULT_FILENAME_PATTERN = (
@@ -143,6 +149,24 @@ def list_tile_paths(folder: str | Path) -> list[Path]:
             unique.append(path)
     _append_submap_lighting(directory, unique, seen)
     return unique
+
+
+def input_tile_names(config: Mapping[str, Any]) -> set[str]:
+    """Basenames of images in ``config.input_dir``, with submap ids when needed."""
+    folder = cfg_get(dict(config), "input_dir", "")
+    if not folder:
+        return set()
+    pattern = str(cfg_get(dict(config), "filename_pattern", DEFAULT_FILENAME_PATTERN))
+    try:
+        paths = matching_tile_paths(folder, pattern, include_unmatched=True)
+    except FileNotFoundError:
+        return set()
+    return {
+        lighting_tile_id(path)
+        if is_combi_tile(path.name) or is_submap_lighting_tile(path.name)
+        else lighting_source_name(path)
+        for path in paths
+    }
 
 
 def _append_submap_lighting(directory: Path, unique: list[Path], seen: set[Path]) -> None:

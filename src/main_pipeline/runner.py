@@ -71,7 +71,7 @@ _WORKER_STATE: dict[str, Any] = {
 
 @dataclass(frozen=True)
 class _TileWorkResult:
-    """Lightweight per-tile output returned from worker processes."""
+    """Lightweight per-tile output returned from a thread worker."""
 
     particles: list[Particle]
     placement: TilePlacement | None
@@ -175,7 +175,7 @@ def _process_tile(
     row_origin: int = 0,
     col_origin: int = 0,
 ) -> _TileWorkResult:
-    """Load and process one tile. Top-level for ProcessPoolExecutor pickling."""
+    """Load and process one tile. Top-level so ThreadPoolExecutor can call it."""
     tile = _tile_from_path(Path(path_str), pattern)
     if _tile_is_placeable(tile):
         placement = placement_from_tile(tile, overlap, row_origin, col_origin)

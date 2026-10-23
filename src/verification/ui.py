@@ -22,7 +22,11 @@ def _failure(action: str, next_step: str, exc: BaseException) -> None:
 
 
 from src.overall.config import cfg_get
-from src.overall.io.tile_loader import DEFAULT_FILENAME_PATTERN, matching_tile_paths
+from src.overall.io.tile_loader import (
+    DEFAULT_FILENAME_PATTERN,
+    input_tile_names,
+    matching_tile_paths,
+)
 from src.verification.crops import (
     TileImageCache,
     combi_or_uniform_crop,
@@ -35,7 +39,6 @@ from src.verification.crops import (
     placement_for_tile,
     ParticleCrop,
 )
-from src.verification.audit_misses import input_tile_names
 from src.verification.inspect import (
     CELL_NAMES,
     DEFAULT_MISS_SIZE_UM,
