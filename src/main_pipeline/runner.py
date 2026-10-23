@@ -23,31 +23,36 @@ from src.overall.io.tile_loader import (
     Tile,
     load_tile_image,
     matching_tile_paths,
-    peek_tile_hw,
     try_parse_tile_filename,
 )
-from src.main_pipeline.measurement.measurer import (
-    Particle,
+from src.overall.io.naming import (
     combi_source_name,
     is_combi_tile,
     is_nsew_family_tile,
     is_submap_lighting_tile,
     lighting_source_name,
+    submap_id,
+)
+from src.main_pipeline.measurement.measurer import (
+    Particle,
     measure_and_dedupe,
     measure_candidates,
     particles_to_dataframe,
-    submap_id,
 )
 from src.main_pipeline.nsew import positional_direction, prepare_detection_paths
 from src.main_pipeline.ml.infer import apply_ml_filter
 from src.main_pipeline.preprocessing.corrections import apply_corrections
+from src.overall.io.placement import (
+    TilePlacement,
+    grid_index_origin,
+    placement_from_path,
+    placement_from_tile,
+)
 from src.main_pipeline.stitching.stitcher import (
     LazyMosaic,
-    TilePlacement,
     downsample_for_target,
     downsample_image,
     mosaic_shape,
-    placement_from_tile,
 )
 
 
@@ -110,36 +115,6 @@ def _tile_is_placeable(tile: Tile) -> bool:
     return tile.row is not None and tile.col is not None
 
 
-def _placement_from_path(
-    path: Path,
-    pattern: str,
-    overlap: float,
-    row_origin: int,
-    col_origin: int,
-) -> TilePlacement | None:
-    """Grid placement from filename + TIFF header (no pixel decode)."""
-    meta = try_parse_tile_filename(path.name, pattern)
-    if meta is None:
-        return None
-    height, width = peek_tile_hw(path)
-    tile = Tile(
-        path=path,
-        name=path.name,
-        image=np.empty((0, 0), dtype=np.uint8),
-        row=int(meta["row"]) if "row" in meta else None,
-        col=int(meta["col"]) if "col" in meta else None,
-        run=int(meta["run"]) if "run" in meta else None,
-        magnification=float(meta["mag"]) if "mag" in meta else None,
-        x_origin=float(meta["x"]) if "x" in meta else None,
-        y_origin=float(meta["y"]) if "y" in meta else None,
-        height=height,
-        width=width,
-    )
-    if not _tile_is_placeable(tile):
-        return None
-    return placement_from_tile(tile, overlap, row_origin, col_origin)
-
-
 def load_report_mosaic(config: dict[str, Any]) -> LazyMosaic:
     """Tile placements for the stitched report, without running detection."""
     folder = cfg_get(config, "input_dir", "")
@@ -153,29 +128,14 @@ def load_report_mosaic(config: dict[str, Any]) -> LazyMosaic:
         folder, pattern, run_filter, mag_filter, include_unmatched=True
     )
     paths = prepare_detection_paths(paths)
-    row_origin, col_origin = _grid_index_origin(paths, pattern)
+    row_origin, col_origin = grid_index_origin(paths, pattern)
     placements = [
         placement
         for path in paths
-        if (placement := _placement_from_path(path, pattern, overlap, row_origin, col_origin))
+        if (placement := placement_from_path(path, pattern, overlap, row_origin, col_origin))
         is not None
     ]
     return LazyMosaic(placements)
-
-
-def _grid_index_origin(paths: list[Path], pattern: str) -> tuple[int, int]:
-    """Smallest row/col among tiles so the mosaic starts at the first real column."""
-    rows: list[int] = []
-    cols: list[int] = []
-    for path in paths:
-        meta = try_parse_tile_filename(path.name, pattern)
-        if meta is None:
-            continue
-        if "row" in meta:
-            rows.append(int(meta["row"]))
-        if "col" in meta:
-            cols.append(int(meta["col"]))
-    return (min(rows) if rows else 0, min(cols) if cols else 0)
 
 
 def _prepare_fft_mask(paths: list[Path], config: dict[str, Any]) -> np.ndarray | None:
@@ -229,7 +189,7 @@ def _process_tile(
         if parsed is not None:
             row, col, _direction = parsed
             combi = tile.path.with_name(f"({row},{col}){tile.path.suffix}")
-            combi_placement = _placement_from_path(
+            combi_placement = placement_from_path(
                 combi, pattern, overlap, row_origin, col_origin
             )
             if combi_placement is not None:
@@ -412,11 +372,11 @@ def run_pipeline(
     _raise_if_stopped(should_stop)
 
     workers = _worker_count(config, total)
-    row_origin, col_origin = _grid_index_origin(paths, pattern)
+    row_origin, col_origin = grid_index_origin(paths, pattern)
     placements_plan = [
         placement
         for path in paths
-        if (placement := _placement_from_path(path, pattern, overlap, row_origin, col_origin))
+        if (placement := placement_from_path(path, pattern, overlap, row_origin, col_origin))
         is not None
     ]
     thumb_factor = _thumbnail_factor(placements_plan, config) if placements_plan else 0

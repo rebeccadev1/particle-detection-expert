@@ -96,15 +96,17 @@ from src.verification.queue import (
     collapse_submap_review_detections,
     snap_detection_keys_to_labels,
 )
-from src.main_pipeline.measurement.measurer import (
-    DEFAULT_NSEW_MERGE_RADIUS_PX,
-    DEFAULT_NSEW_SIZE_MATCH_FRACTION,
+from src.overall.io.naming import (
     is_combi_tile,
     is_submap_lighting_tile,
     lighting_role,
     lighting_source_name,
     lighting_tile_id,
     submap_id,
+)
+from src.main_pipeline.measurement.measurer import (
+    DEFAULT_NSEW_MERGE_RADIUS_PX,
+    DEFAULT_NSEW_SIZE_MATCH_FRACTION,
 )
 from src.verification.store import LabelStore, crop_source_folder, rows_for_campaign
 from src.main_pipeline.report.report_generator import particles_at_least

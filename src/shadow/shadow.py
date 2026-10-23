@@ -30,13 +30,12 @@ from src.verification.crops import (
 )
 from src.verification.inspect import candidate_placements
 from src.verification.queue import detection_key
-from src.verification.store import crop_source_folder
+from src.verification.store import LabelStore, crop_source_folder
 from src.main_pipeline.preprocessing.corrections import apply_corrections, denoise, to_float
-from src.main_pipeline.report.report_generator import _to_display_rgb
+from src.main_pipeline.report.report_generator import to_display_rgb
 
 PICK_MAX_SIDE = 960
 
-LABELS_CSV = PACKAGE_ROOT / "labels" / "all_labels.csv"
 DEFAULT_OUT = "Shadow check"
 LIGHT_FROM_DEG = {"N": 0.0, "E": 90.0, "S": 180.0, "W": 270.0}
 LIGHT_HEIGHT_MM = 5.0
@@ -334,7 +333,7 @@ def measure_shadow(
     ), debug
 
 
-def _wrap_text(text: str, max_w: int, font: int, scale: float, thickness: int) -> list[str]:
+def _wrap_cv2_text(text: str, max_w: int, font: int, scale: float, thickness: int) -> list[str]:
     """Split ``text`` (at ``/`` or spaces when possible) into lines at most ``max_w`` px."""
     lines: list[str] = []
     line = ""
@@ -356,7 +355,7 @@ def _wrap_text(text: str, max_w: int, font: int, scale: float, thickness: int) -
 def _footer_band(source: list[str], width: int) -> np.ndarray:
     """White band with ``source`` lines (folder path, file name) in dark text."""
     font, scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
-    lines = [w for text in source for w in _wrap_text(text, width - 16, font, scale, thickness)]
+    lines = [w for text in source for w in _wrap_cv2_text(text, width - 16, font, scale, thickness)]
     line_h = cv2.getTextSize("Ag", font, scale, thickness)[0][1] + 12
     band = np.full((line_h * len(lines) + 12, width, 3), 255, dtype=np.uint8)
     for i, text in enumerate(lines):
@@ -449,7 +448,7 @@ def debug_image(
     shadow = np.asarray(debug["shadow"], dtype=bool)
     cx, cy = float(debug["cx"]), float(debug["cy"])
     dx, dy = debug["dir"]
-    rgb = _to_display_rgb(patch)
+    rgb = to_display_rgb(patch)
     tint = rgb.copy()
     tint[shadow] = (255, 0, 0)
     rgb = cv2.addWeighted(tint, 0.45, rgb, 0.55, 0)
@@ -880,7 +879,7 @@ def display_preview(
     max_side: int = PICK_MAX_SIDE,
 ) -> tuple[np.ndarray, float]:
     """RGB overview for the draw canvas; returns ``(rgb, display_scale)``."""
-    rgb = _to_display_rgb(image)
+    rgb = to_display_rgb(image)
     height, width = rgb.shape[:2]
     scale = min(1.0, float(max_side) / float(max(height, width, 1)))
     if scale < 1.0:
@@ -904,7 +903,7 @@ def zoom_preview(
     ``zoom`` 1 shows the whole tile. Higher values crop a smaller window and
     enlarge it to about ``max_side`` for drawing.
     """
-    rgb = _to_display_rgb(image)
+    rgb = to_display_rgb(image)
     height, width = rgb.shape[:2]
     zoom = max(float(zoom), 1.0)
     if zoom <= 1.0 + 1e-9:
@@ -1269,7 +1268,7 @@ def _render_database_shadow(
         else:
             with st.spinner("Measuring shadows…"):
                 run_result = run_shadow_check(
-                    pd.read_csv(LABELS_CSV),
+                    LabelStore(PACKAGE_ROOT / "labels").load(),
                     config,
                     keys=keys,
                     tile=Path(tile_text.strip().strip('"')) if tile_text.strip() else None,

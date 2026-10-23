@@ -12,7 +12,7 @@ import pandas as pd
 
 from src.overall.config import PACKAGE_ROOT
 from src.verification.queue import detection_key, label_covers_uniform, nsew_key_aliases
-from src.main_pipeline.measurement.measurer import (
+from src.overall.io.naming import (
     is_nsew_family_tile,
     is_submap_lighting_tile,
     lighting_role,

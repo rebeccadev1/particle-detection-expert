@@ -12,19 +12,21 @@ import pandas as pd
 from scipy.spatial import cKDTree
 
 from src.overall.config import DEFAULT_OUTPUT_DIR, cfg_get, resolve_output_dir
-from src.main_pipeline.measurement.measurer import (
-    DEFAULT_NSEW_MERGE_RADIUS_PX,
-    DEFAULT_NSEW_SIZE_MATCH_FRACTION,
+from src.overall.io.naming import (
     DIRECTION_STEMS,
     LIGHTING_ROLES,
-    Particle,
     combi_key_family,
-    deduplicate_nsew,
     is_combi_tile,
     is_nsew_family_tile,
     is_submap_lighting_tile,
     nsew_merge_stem,
     submap_id,
+)
+from src.main_pipeline.measurement.measurer import (
+    DEFAULT_NSEW_MERGE_RADIUS_PX,
+    DEFAULT_NSEW_SIZE_MATCH_FRACTION,
+    Particle,
+    deduplicate_nsew,
 )
 
 MIN_SIZE_NM = 10_000.0

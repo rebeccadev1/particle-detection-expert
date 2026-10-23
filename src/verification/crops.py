@@ -15,7 +15,6 @@ from src.overall.config import DEFAULT_INPUT_DIR, cfg_get
 from src.overall.io.tile_loader import (
     DEFAULT_FILENAME_PATTERN,
     TILE_SUFFIXES,
-    Tile,
     load_tile_image,
     matching_tile_paths,
     peek_tile_hw,
@@ -23,7 +22,7 @@ from src.overall.io.tile_loader import (
     try_parse_tile_filename,
 )
 from src.main_pipeline.nsew import positional_cell_sides, positional_direction
-from src.main_pipeline.measurement.measurer import (
+from src.overall.io.naming import (
     DIRECTION_STEMS,
     is_combi_tile,
     lighting_role,
@@ -34,14 +33,18 @@ from src.main_pipeline.measurement.measurer import (
     is_submap_lighting_tile,
     submap_id,
 )
-from src.main_pipeline.stitching.stitcher import LazyMosaic, TilePlacement, placement_from_tile
+from src.overall.io.markers import CIRCLE_COLOR, draw_marker, marker_radius
+from src.overall.io.placement import (
+    TilePlacement,
+    grid_index_origin,
+    placement_from_path,
+)
+from src.main_pipeline.stitching.stitcher import LazyMosaic
 
-CIRCLE_COLOR = (255, 140, 40)
-CIRCLE_THICKNESS = 3
-MIN_CIRCLE_RADIUS = 14
 MIN_HALF_PX = 96
 WINDOW_SCALE = 1.8
-DEFAULT_WAFER_FOLDER = "R3 04-08"
+
+
 @dataclass(frozen=True)
 class ParticleCrop:
     """One labeled-review image: tile crop, local coords, and source path."""
@@ -177,23 +180,15 @@ def draw_particle_circle(
     color: tuple[int, int, int] = CIRCLE_COLOR,
 ) -> np.ndarray:
     """Draw a marker on the mosaic overlay, in crop coordinates."""
-    scale = float(pixel_size_nm) if pixel_size_nm > 0 else 1.0
     x_d = int(round(float(x_local) - crop_x0))
     y_d = int(round(float(y_local) - crop_y0))
-    radius = max(int(round(float(size_nm) / scale / 2.0)) + 10, MIN_CIRCLE_RADIUS)
-    if rgb.size == 0:
-        return rgb
-    if not (0 <= x_d < rgb.shape[1] and 0 <= y_d < rgb.shape[0]):
-        return rgb
-    cv2.circle(
+    return draw_marker(
         rgb,
-        (x_d, y_d),
-        radius,
-        tuple(int(c) for c in color),
-        thickness=CIRCLE_THICKNESS,
-        lineType=cv2.LINE_AA,
+        x_d,
+        y_d,
+        marker_radius(size_nm, pixel_size_nm),
+        color=color,
     )
-    return rgb
 
 
 def config_for_hit_placement(
@@ -267,7 +262,7 @@ def _tile_geometry(
         folder = str(path.parent.resolve())
         if folder not in folders:
             paths = matching_tile_paths(path.parent, pattern)
-            folders[folder] = _grid_index_origin(paths, pattern)
+            folders[folder] = grid_index_origin(paths, pattern)
         row_origin, col_origin = folders[folder]
         height, width = peek_tile_hw(path)
         geometry[name] = (
@@ -310,7 +305,7 @@ def find_tile_path(
     input_dir: str | Path | None = None,
     mosaic: LazyMosaic | None = None,
 ) -> Path:
-    """Locate ``tile_name``: mosaic placement, then ``input_dir``, then R3 04-08.
+    """Locate ``tile_name``: mosaic placement, then ``input_dir``.
 
     Submap shots are stored as ``v7/wafer_shot_0_quad0_….png`` so the same
     filename in ``v8`` is a different picture.
@@ -334,7 +329,7 @@ def find_tile_path(
             nested = _existing_tile(folder / relative.parent.name / name)
             if nested is not None:
                 return nested
-    raise FileNotFoundError(f"Tile {raw!r} was not found in R3 04-08 or the tile folder.")
+    raise FileNotFoundError(f"Tile {raw!r} was not found in the tile folder.")
 
 
 def _existing_tile(path: Path) -> Path | None:
@@ -371,10 +366,24 @@ def placement_for_tile(
         row_origin, col_origin = origin_cache[cache_key]
     else:
         paths = matching_tile_paths(folder, pattern)
-        row_origin, col_origin = _grid_index_origin(paths, pattern)
+        row_origin, col_origin = grid_index_origin(paths, pattern)
         if origin_cache is not None:
             origin_cache[cache_key] = (row_origin, col_origin)
-    return _placement_from_path(tile_path, pattern, overlap, row_origin, col_origin)
+    extra_meta: dict[str, int] = {}
+    parsed = positional_direction(tile_path)
+    if parsed is not None:
+        extra_meta["row"], extra_meta["col"] = parsed[0], parsed[1]
+    placed = placement_from_path(
+        tile_path,
+        pattern,
+        overlap,
+        row_origin,
+        col_origin,
+        extra_meta=extra_meta or None,
+        origin_fallback=True,
+    )
+    assert placed is not None
+    return placed
 
 
 _STAGED_2OF4 = re.compile(r"(v\d+)_2of4$", re.IGNORECASE)
@@ -388,7 +397,7 @@ def direction_images_for_combined(tile_path: str | Path) -> dict[str, Path]:
     sides = positional_cell_sides(path)
     if len(sides) >= 2:
         return sides
-    beside = list_direction_images(path.parent)
+    beside = list_folder_direction_images(path.parent)
     if len(beside) >= 2 and not is_direction_tile(path.name):
         return beside
     set_name = _set_name_for_combined(path)
@@ -403,7 +412,7 @@ def direction_images_for_combined(tile_path: str | Path) -> dict[str, Path]:
         if key in seen:
             continue
         seen.add(key)
-        found = list_direction_images(folder)
+        found = list_folder_direction_images(folder)
         if len(found) >= 2:
             return found
     return {}
@@ -730,7 +739,7 @@ def crop_particle(
     )
 
 
-def list_direction_images(folder: str | Path) -> dict[str, Path]:
+def list_folder_direction_images(folder: str | Path) -> dict[str, Path]:
     """N/S/E/W image files in ``folder`` (partial sets are allowed)."""
     directory = Path(folder)
     found: dict[str, Path] = {}
@@ -836,68 +845,9 @@ def nsew_combi_crop(
 
 
 def _candidate_folders(input_dir: str | Path | None) -> list[Path]:
-    folders: list[Path] = []
-    for raw in (input_dir, DEFAULT_WAFER_FOLDER):
-        if raw in (None, ""):
-            continue
-        try:
-            resolved = resolve_input_dir(raw)
-        except FileNotFoundError:
-            continue
-        if resolved not in folders:
-            folders.append(resolved)
-    return folders
-
-
-def _grid_index_origin(paths: list[Path], pattern: str) -> tuple[int, int]:
-    rows: list[int] = []
-    cols: list[int] = []
-    for path in paths:
-        meta = try_parse_tile_filename(path.name, pattern)
-        if meta is None:
-            continue
-        if "row" in meta:
-            rows.append(int(meta["row"]))
-        if "col" in meta:
-            cols.append(int(meta["col"]))
-    return (min(rows) if rows else 0, min(cols) if cols else 0)
-
-
-def _placement_from_path(
-    path: Path,
-    pattern: str,
-    overlap: float,
-    row_origin: int,
-    col_origin: int,
-) -> TilePlacement:
-    meta = dict(try_parse_tile_filename(path.name, pattern) or {})
-    if "row" not in meta or "col" not in meta:
-        parsed = positional_direction(path)
-        if parsed is not None:
-            meta["row"], meta["col"] = parsed[0], parsed[1]
-    height, width = peek_tile_hw(path)
-    tile = Tile(
-        path=path,
-        name=path.name,
-        image=np.empty((0, 0), dtype=np.uint8),
-        row=int(meta["row"]) if "row" in meta else None,
-        col=int(meta["col"]) if "col" in meta else None,
-        run=int(meta["run"]) if "run" in meta else None,
-        magnification=float(meta["mag"]) if "mag" in meta else None,
-        x_origin=float(meta["x"]) if "x" in meta else None,
-        y_origin=float(meta["y"]) if "y" in meta else None,
-        height=height,
-        width=width,
-    )
-    if tile.x_origin is not None and tile.y_origin is not None:
-        return placement_from_tile(tile, overlap, row_origin, col_origin)
-    if tile.row is not None and tile.col is not None:
-        return placement_from_tile(tile, overlap, row_origin, col_origin)
-    return TilePlacement(
-        path=path,
-        name=path.name,
-        y0=0,
-        x0=0,
-        height=height,
-        width=width,
-    )
+    if input_dir in (None, ""):
+        return []
+    try:
+        return [resolve_input_dir(input_dir)]
+    except FileNotFoundError:
+        return []

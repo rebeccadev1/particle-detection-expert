@@ -12,7 +12,7 @@ import numpy as np
 import tifffile
 
 from src.overall.config import DEFAULT_INPUT_DIR, PACKAGE_ROOT, WORKSPACE_ROOT
-from src.main_pipeline.measurement.measurer import is_combi_tile, is_submap_lighting_tile
+from src.overall.io.naming import is_combi_tile, is_submap_lighting_tile
 
 _IMAGE_SUFFIX = r"(?:tiff?|bmp|png|jpe?g)"
 DEFAULT_FILENAME_PATTERN = (

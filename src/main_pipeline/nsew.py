@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image
 
 from src.overall.config import DEFAULT_INPUT_DIR, resolve_output_dir
-from src.main_pipeline.measurement.measurer import (
+from src.overall.io.naming import (
     is_combi_tile,
     lighting_role,
     quad_direction,
@@ -135,7 +135,7 @@ def save_same_resolution(path: str | Path, array: np.ndarray, reference_path: st
     image.save(path, **save_kw)
 
 
-def flatten_illumination(img: np.ndarray, sigma: float = 120) -> np.ndarray:
+def flatten_directional_illumination(img: np.ndarray, sigma: float = 120) -> np.ndarray:
     """Remove the large-scale brightness gradient caused by directional lighting."""
     img_f = img.astype(np.float32)
     background = cv2.GaussianBlur(img_f, (0, 0), sigma)
@@ -250,7 +250,7 @@ def load_flattened_nsew(
         if img.shape != imgs[0].shape:
             raise ValueError("All images must be the same size and pixel-aligned")
     gain = source_display_gain(imgs)
-    f_imgs = [flatten_illumination(img, flatten_sigma) for img in imgs]
+    f_imgs = [flatten_directional_illumination(img, flatten_sigma) for img in imgs]
     stack = np.array(f_imgs)
     return np.sort(stack, axis=0), np.sum(stack, axis=0), stack, gain
 

@@ -25,6 +25,7 @@ from src.main_pipeline.stitching.stitcher import (
     downsample_for_target,
     downsample_image,
 )
+from src.overall.io.markers import CIRCLE_COLOR, draw_marker, marker_radius
 
 SIZE_COUNT_THRESHOLDS_UM = (10, 20, 25, 50, 75)
 SIZE_BIN_STEP_UM = 5.0
@@ -150,7 +151,7 @@ def overlay_rgb(
     """
     downsample = overlay_downsample(mosaic, config, crop=crop)
     preview = mosaic.preview(downsample=downsample, crop=crop, progress_cb=progress_cb)
-    return _photo_display_rgb(preview)
+    return photo_display_rgb(preview)
 
 def draw_overlay_markers(
     rgb: np.ndarray,
@@ -190,28 +191,28 @@ def draw_overlay_markers(
     y_off = 0 if crop is None else crop[0]
     x_off = 0 if crop is None else crop[1]
     marked = np.array(rgb, copy=True)
-    unlabeled = (255, 140, 40)
+    unlabeled = CIRCLE_COLOR
 
     for _, row in particles.iterrows():
         x_px = float(row["x_global"]) / pixel_size
         y_px = float(row["y_global"]) / pixel_size
         x_d = int(round((x_px - x_off) * scale))
         y_d = int(round((y_px - y_off) * scale))
-        if not (0 <= x_d < marked.shape[1] and 0 <= y_d < marked.shape[0]):
-            continue
-        particle_r = float(row["size"]) / pixel_size * scale / 2.0
-        radius = max(int(round(particle_r)) + 10, 14)
         color = unlabeled
         if colors:
             key = str(row["key"]) if "key" in row.index and pd.notna(row["key"]) else ""
             if key:
                 color = colors.get(key, unlabeled)
-        cv2.circle(
-            marked, (x_d, y_d), radius, color, thickness=3, lineType=cv2.LINE_AA
+        draw_marker(
+            marked,
+            x_d,
+            y_d,
+            marker_radius(float(row["size"]), pixel_size, scale),
+            color=color,
         )
     return marked
 
-def _photo_display_rgb(image: np.ndarray) -> np.ndarray:
+def photo_display_rgb(image: np.ndarray) -> np.ndarray:
     """RGB of a photograph at its saved gray levels.
 
     An 8-bit tile stays as saved. A 0–1 float is scaled by 255. Wider counts
@@ -233,9 +234,9 @@ def _photo_display_rgb(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
 
 
-def _to_display_rgb(image: np.ndarray) -> np.ndarray:
+def to_display_rgb(image: np.ndarray) -> np.ndarray:
     """Display a photo at its saved gray levels. No contrast stretch."""
-    return _photo_display_rgb(image)
+    return photo_display_rgb(image)
 
 _DPI = 220.0
 _BASE_DPI = 150.0
@@ -373,7 +374,7 @@ def _text_width(font: ImageFont.ImageFont, text: str) -> int:
     box = font.getbbox(text)
     return int(box[2] - box[0])
 
-def _wrap_text(text: str, font: ImageFont.ImageFont, max_w: int) -> list[str]:
+def _wrap_pil_text(text: str, font: ImageFont.ImageFont, max_w: int) -> list[str]:
     """Break ``text`` so each line fits ``max_w``, preferring ``/`` and spaces."""
     if _text_width(font, text) <= max_w:
         return [text]
@@ -417,7 +418,7 @@ def _summary_page(table: pd.DataFrame, config: Mapping[str, Any]) -> Image.Image
         y += _BODY + _s(6)
         path_box = path_font.getbbox("Hg/()")
         path_step = int(path_box[3] - path_box[1]) + _s(8)
-        for wrapped in _wrap_text(path, path_font, max_text):
+        for wrapped in _wrap_pil_text(path, path_font, max_text):
             draw.text((_MARGIN, y), wrapped, fill=_ACCENT, font=path_font)
             y += path_step
         y += _s(8)
@@ -733,10 +734,11 @@ def _draw_local_markers(
         y_d = int(round((float(row["y_global"]) / pixel_size) / factor))
         if not (0 <= x_d < marked.shape[1] and 0 <= y_d < marked.shape[0]):
             continue
-        particle_r = float(row["size"]) / pixel_size / factor / 2.0
-        radius = max(int(round(particle_r)) + 10, 14)
-        cv2.circle(
-            marked, (x_d, y_d), radius, (255, 140, 40), thickness=3, lineType=cv2.LINE_AA
+        draw_marker(
+            marked,
+            x_d,
+            y_d,
+            marker_radius(float(row["size"]), pixel_size, 1.0 / factor),
         )
     return marked
 
@@ -750,7 +752,7 @@ def unstitched_tile_pair(
     image = load_tile_image(tile_path)
     factor = _tile_preview_factor(int(image.shape[0]), int(image.shape[1]), config)
     small = downsample_image(np.asarray(image, dtype=np.float32), factor)
-    plain = _photo_display_rgb(small)
+    plain = photo_display_rgb(small)
     labeled = _draw_local_markers(
         plain, _particles_for_path(table, tile_path), config, factor
     )

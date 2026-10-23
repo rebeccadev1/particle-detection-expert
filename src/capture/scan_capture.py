@@ -409,7 +409,9 @@ def _scan_thread(
 def _score_triggered_frame(camera, converter, timeout_ms: int, settle_s: float) -> float:
     """Wait out the Z step, then score one new software-triggered frame."""
     import cv2
-    from pypylon import pylon
+    from src.capture.camera_automation import pylon_module
+
+    pylon = pylon_module()
 
     if settle_s > 0:
         time.sleep(settle_s)

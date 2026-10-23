@@ -10,8 +10,8 @@ import pandas as pd
 import pytest
 import tifffile
 
+from src.overall.io.markers import CIRCLE_COLOR
 from src.verification.crops import (
-    CIRCLE_COLOR,
     TileImageCache,
     config_for_hit_placement,
     crop_particle,
@@ -36,7 +36,7 @@ from src.verification.store import (
     newest_first,
     rows_for_campaign,
 )
-from src.main_pipeline.stitching.stitcher import TilePlacement
+from src.overall.io.placement import TilePlacement
 from tests.fixtures.synthetic import write_tile_tiff
 
 PATTERN = r"R(?P<run>\d+)_(?P<row>\d+)_(?P<col>\d+)_(?P<mag>[\d.]+)X\.tiff?"

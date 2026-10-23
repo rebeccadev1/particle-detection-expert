@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from os import cpu_count
 from pathlib import Path
 from typing import Sequence
@@ -12,64 +11,8 @@ from typing import Sequence
 import cv2
 import numpy as np
 
-from src.overall.io.tile_loader import Tile, load_tile_image
-
-
-@dataclass(frozen=True)
-class TilePlacement:
-    """Where a tile sits in the mosaic, in pixel coordinates."""
-
-    path: Path
-    name: str
-    y0: int
-    x0: int
-    height: int
-    width: int
-
-
-def tile_origin_px(
-    tile: Tile,
-    overlap_fraction: float,
-    row_origin: int = 0,
-    col_origin: int = 0,
-) -> tuple[float, float]:
-    """Return the top-left mosaic origin ``(x, y)`` of ``tile`` in pixels.
-
-    If the filename provided ``x`` / ``y``, those values are used as the origin.
-    Otherwise a regular grid is built from ``row`` / ``col`` and overlap.
-    ``row_origin`` / ``col_origin`` are the smallest indices in the run, so the
-    mosaic does not reserve empty space for unused column 0 (or row 0).
-    """
-    if tile.x_origin is not None and tile.y_origin is not None:
-        return float(tile.x_origin), float(tile.y_origin)
-    if tile.row is None or tile.col is None:
-        raise ValueError(
-            f"Tile {tile.name} needs row/col or x/y in the filename to place it."
-        )
-    step_x = tile.width * (1.0 - overlap_fraction)
-    step_y = tile.height * (1.0 - overlap_fraction)
-    return (
-        float(tile.col - col_origin) * step_x,
-        float(tile.row - row_origin) * step_y,
-    )
-
-
-def placement_from_tile(
-    tile: Tile,
-    overlap_fraction: float,
-    row_origin: int = 0,
-    col_origin: int = 0,
-) -> TilePlacement:
-    """Build a placement record from a loaded tile (uses shape, not a second read)."""
-    x0, y0 = tile_origin_px(tile, overlap_fraction, row_origin, col_origin)
-    return TilePlacement(
-        path=tile.path,
-        name=tile.name,
-        y0=int(round(y0)),
-        x0=int(round(x0)),
-        height=tile.height,
-        width=tile.width,
-    )
+from src.overall.io.placement import TilePlacement
+from src.overall.io.tile_loader import load_tile_image
 
 
 def mosaic_shape(placements: Sequence[TilePlacement]) -> tuple[int, int]:

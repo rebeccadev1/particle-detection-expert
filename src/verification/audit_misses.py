@@ -18,7 +18,7 @@ import pandas as pd
 
 from src.overall.config import PACKAGE_ROOT, cfg_get, load_config
 from src.main_pipeline.detection.detector import trace_locations
-from src.main_pipeline.measurement.measurer import (
+from src.overall.io.naming import (
     is_combi_tile,
     is_submap_lighting_tile,
     lighting_source_name,

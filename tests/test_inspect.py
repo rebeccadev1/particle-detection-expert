@@ -30,7 +30,7 @@ from src.verification.inspect import (
     preview_click_crop,
     undetected_size_floor_nm,
 )
-from src.main_pipeline.stitching.stitcher import TilePlacement
+from src.overall.io.placement import TilePlacement
 
 
 def test_cell_bounds_splits_tile_into_equal_grid() -> None:
@@ -675,7 +675,7 @@ def test_tinder_saves_a_grid_label_in_this_folder() -> None:
 
 
 def test_grid_source_name_keeps_the_folder() -> None:
-    from src.main_pipeline.measurement.measurer import lighting_source_name
+    from src.overall.io.naming import lighting_source_name
     from src.overall.config import DEFAULT_INPUT_DIR
 
     path = DEFAULT_INPUT_DIR / "Groundup" / "wafer-a" / "(1,1).png"

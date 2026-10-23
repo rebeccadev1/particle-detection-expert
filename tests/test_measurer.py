@@ -20,7 +20,7 @@ from src.main_pipeline.measurement.measurer import (
     measure_candidates,
 )
 from src.main_pipeline.runner import PipelineStopped, run_pipeline
-from src.main_pipeline.stitching.stitcher import tile_origin_px
+from src.overall.io.placement import tile_origin_px
 from src.overall.io.tile_loader import Tile
 from tests.fixtures.synthetic import detector_test_config, make_structured_tile, write_tile_tiff
 
@@ -569,16 +569,16 @@ def test_pipeline_caches_mosaic_thumbnails(tmp_path: Path) -> None:
 
 
 def test_photo_mosaic_keeps_saved_brightness() -> None:
-    from src.main_pipeline.report.report_generator import _photo_display_rgb
+    from src.main_pipeline.report.report_generator import photo_display_rgb
 
     dark = np.full((8, 8), 20, np.float32)
-    assert int(_photo_display_rgb(dark).mean()) == 20
+    assert int(photo_display_rgb(dark).mean()) == 20
 
 
 def test_grid_tile_mosaic_keeps_the_photo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``(row,col)`` hit stores a folder path. The stitch still uses the filename."""
     monkeypatch.setattr(
-        "src.main_pipeline.measurement.measurer.DEFAULT_INPUT_DIR",
+        "src.overall.io.naming.DEFAULT_INPUT_DIR",
         tmp_path,
     )
     image = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])
@@ -637,7 +637,8 @@ def test_downsample_for_target_caps_mosaic_bytes() -> None:
 
 
 def test_preview_downsizes_tiles_then_pastes_on_canvas(tmp_path: Path) -> None:
-    from src.main_pipeline.stitching.stitcher import LazyMosaic, TilePlacement
+    from src.overall.io.placement import TilePlacement
+    from src.main_pipeline.stitching.stitcher import LazyMosaic
 
     height, width, factor = 16, 16, 4
     left_path = tmp_path / "R3_0_0_5X.tif"
@@ -658,7 +659,8 @@ def test_preview_downsizes_tiles_then_pastes_on_canvas(tmp_path: Path) -> None:
 
 def test_full_mosaic_preview_downsamples_tiles_before_stitch(tmp_path: Path) -> None:
     from src.main_pipeline.report.report_generator import draw_overlay_markers, overlay_downsample, overlay_rgb
-    from src.main_pipeline.stitching.stitcher import LazyMosaic, TilePlacement
+    from src.overall.io.placement import TilePlacement
+    from src.main_pipeline.stitching.stitcher import LazyMosaic
 
     height, width = 80, 120
     left = make_structured_tile((height, width), particles=[(20.0, 30.0, 3.0)])

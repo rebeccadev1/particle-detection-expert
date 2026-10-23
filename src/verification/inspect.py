@@ -21,16 +21,18 @@ from src.overall.io.tile_loader import (
     parse_tile_filename,
     resolve_input_dir,
 )
-from src.verification.crops import (
+from src.overall.io.markers import (
     CIRCLE_COLOR,
     CIRCLE_THICKNESS,
-    DEFAULT_WAFER_FOLDER,
     MIN_CIRCLE_RADIUS,
+    draw_marker,
+    marker_radius,
+)
+from src.verification.crops import (
     MIN_HALF_PX,
     WINDOW_SCALE,
     direction_images_for_combined,
     draw_particle_circle,
-    find_tile_path,
     global_nm_to_local_px,
     grayscale_as_rgb,
     placement_for_tile,
@@ -42,7 +44,7 @@ from src.verification.queue import (
     nsew_key_aliases,
     tagged_if_needed,
 )
-from src.main_pipeline.measurement.measurer import (
+from src.overall.io.naming import (
     DIRECTION_STEMS,
     combi_key_family,
     is_combi_tile,
@@ -55,7 +57,8 @@ from src.main_pipeline.measurement.measurer import (
     lighting_tile_id,
     submap_id,
 )
-from src.main_pipeline.stitching.stitcher import LazyMosaic, TilePlacement
+from src.overall.io.placement import TilePlacement
+from src.main_pipeline.stitching.stitcher import LazyMosaic
 
 LABEL_CIRCLE_COLORS: dict[str, tuple[int, int, int]] = {
     "particle": (40, 180, 70),
@@ -1334,24 +1337,15 @@ def overlay_view(
         x_s = (float(circle["x_local"]) - crop_x0) * scale
         y_s = (float(circle["y_local"]) - crop_y0) * scale
         size_nm = float(circle["size"])
-        pixel = float(pixel_size_nm) if pixel_size_nm > 0 else 1.0
-        radius = max(
-            int(round(size_nm / pixel / 2.0 * scale)) + 10,
-            MIN_CIRCLE_RADIUS,
-        )
         x_d = int(round(x_s))
         y_d = int(round(y_s))
-        if out.size == 0:
-            continue
-        if not (0 <= x_d < out.shape[1] and 0 <= y_d < out.shape[0]):
-            continue
-        cv2.circle(
+        draw_marker(
             out,
-            (x_d, y_d),
-            radius,
-            color,
+            x_d,
+            y_d,
+            marker_radius(size_nm, pixel_size_nm, scale),
+            color=color,
             thickness=max(CIRCLE_THICKNESS, 3),
-            lineType=cv2.LINE_AA,
         )
         _draw_footprint_edge(
             out,
@@ -1584,7 +1578,7 @@ def candidate_placements(
     mosaic: Any | None = None,
     origin_cache: dict[str, tuple[int, int]] | None = None,
 ) -> list[TilePlacement]:
-    """Current-folder placement, full-wafer grid, R3 04-08, then origin (0, 0)."""
+    """Current-folder placement, full-wafer grid, then origin (0, 0)."""
     path = Path(tile_path)
     primary = placement_for_tile(
         path, dict(config), mosaic=mosaic, origin_cache=origin_cache
@@ -1596,19 +1590,6 @@ def candidate_placements(
         if key not in seen:
             ordered.append(extra)
             seen.add(key)
-    try:
-        wafer_path = find_tile_path(path.name, input_dir=DEFAULT_WAFER_FOLDER)
-        wafer_config = dict(config)
-        wafer_config["input_dir"] = DEFAULT_WAFER_FOLDER
-        wafer = placement_for_tile(
-            wafer_path, wafer_config, mosaic=None, origin_cache=origin_cache
-        )
-        key = (int(wafer.x0), int(wafer.y0))
-        if key not in seen:
-            ordered.append(wafer)
-            seen.add(key)
-    except (FileNotFoundError, ValueError, OSError):
-        pass
     if (0, 0) not in seen:
         ordered.append(
             TilePlacement(

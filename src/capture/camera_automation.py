@@ -59,6 +59,13 @@ RUN_DIR_RE = re.compile(r"^v(\d+) (\d{4}-\d{2}-\d{2})$")
 ARDUINO_VIDS = {0x2341, 0x2A03, 0x1A86}
 
 
+def pylon_module():
+    """Load Basler's pypylon SDK. Callers import through here so the load is in one place."""
+    from pypylon import pylon
+
+    return pylon
+
+
 def image_filename(row: int, col: int, label: str | None = None) -> str:
     """Picture name inside a run folder. A side label is N, E, S, or W."""
     stem = f"({int(row)},{int(col)})"
@@ -275,7 +282,7 @@ def _set_node(camera, name: str, value: str) -> None:
 
 
 def _open_device():
-    from pypylon import pylon
+    pylon = pylon_module()
 
     factory = pylon.TlFactory.GetInstance()
     devices = factory.EnumerateDevices()
@@ -335,7 +342,7 @@ def set_exposure(camera, exposure_us: float) -> None:
 
 
 def _make_converter():
-    from pypylon import pylon
+    pylon = pylon_module()
 
     converter = pylon.ImageFormatConverter()
     converter.OutputPixelFormat = pylon.PixelType_BGR8packed
@@ -361,7 +368,7 @@ def open_camera(exposure_us: float):
 
 def open_live_camera(exposure_us: float):
     """Free-running camera for the on-screen feed. Caller must close it."""
-    from pypylon import pylon
+    pylon = pylon_module()
 
     camera = _open_device()
     try:
@@ -385,7 +392,7 @@ def orient_frame(image):
 
 def read_live_frame(camera, converter, timeout_ms: int):
     """Latest free-running frame, BGR or gray. The camera must already be grabbing."""
-    from pypylon import pylon
+    pylon = pylon_module()
 
     grab = camera.RetrieveResult(timeout_ms, pylon.TimeoutHandling_ThrowException)
     try:
@@ -398,7 +405,7 @@ def read_live_frame(camera, converter, timeout_ms: int):
 
 
 def grab_frame(camera, converter, timeout_ms: int):
-    from pypylon import pylon
+    pylon = pylon_module()
 
     camera.ExecuteSoftwareTrigger()
     grab = camera.RetrieveResult(timeout_ms, pylon.TimeoutHandling_ThrowException)
@@ -422,7 +429,7 @@ def capture_uniform(
     camera, converter, ser, folder: Path, timeout_ms: int, row: int = 1, col: int = 1
 ) -> str:
     """Save ``(row,col).png``. With an open Arduino, light all four sides first."""
-    from pypylon import pylon
+    pylon = pylon_module()
 
     if ser is not None:
         ack = light_all(ser)
@@ -450,7 +457,7 @@ def capture_side(
     col: int = 1,
 ) -> str:
     """Light one side and save ``(row,col)_N.png`` and the other sides the same way."""
-    from pypylon import pylon
+    pylon = pylon_module()
 
     if index < 0 or index >= len(DIRECTIONS):
         raise ValueError(f"side index {index} is outside 0..{len(DIRECTIONS) - 1}")
@@ -473,7 +480,7 @@ def capture_nsew(
     camera, converter, ser, folder: Path, timeout_ms: int, row: int = 1, col: int = 1
 ) -> list[str]:
     """Light one side at a time and save ``(row,col)_N.png`` through ``_W.png``."""
-    from pypylon import pylon
+    pylon = pylon_module()
 
     if ser is None:
         raise RuntimeError("NSEW capture needs the Arduino to switch sides.")
