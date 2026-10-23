@@ -76,5 +76,5 @@ report:
   f_beta: 1.0
   beta_presets:
     - beta: 1.0
-      model_path: models/particle_clf_v8.joblib
-      threshold: 0.37
+      model_path: models/particle_clf_v4_residual.joblib
+      threshold: 0.23
