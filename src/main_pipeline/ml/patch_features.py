@@ -15,8 +15,8 @@ from skimage.morphology import skeletonize
 
 from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
 from src.overall.io.tile_loader import DEFAULT_FILENAME_PATTERN
-from src.main_pipeline.ml.features import size_um_from_nm, size_um_from_px
-from src.main_pipeline.ml.patches import PATCH_SIZE, tile_row_col
+from src.main_pipeline.ml.features import size_um_from_px
+from src.main_pipeline.ml.patches import tile_row_col
 
 HOG_SIZE = 64
 LBP_POINTS = 8
@@ -217,32 +217,6 @@ def tabular_layout_vector(
             float(tile_col),
         ],
         dtype=np.float64,
-    )
-
-
-def layout_from_record(
-    record: dict[str, object] | None,
-    pattern: str = DEFAULT_FILENAME_PATTERN,
-) -> np.ndarray:
-    row = dict(record or {})
-    size = float(row.get("size") or 0.0)
-    size_um = size_um_from_nm(size) if size > 100 else float(size)
-    tile = str(row.get("source_tile") or "")
-    tile_row, tile_col = tile_row_col(tile, pattern)
-    return tabular_layout_vector(
-        size_um=size_um,
-        confidence=float(row.get("confidence") or 0.0),
-        circularity=float(row.get("circularity") or 0.0),
-        support_over_area=float(row.get("support_over_area") or 0.0),
-        edge_distance_px=float(row.get("edge_distance_px") or 0.0),
-        tile_border_dist_px=float(row.get("tile_border_dist_px") or 0.0),
-        n_neighbors_48=float(row.get("n_neighbors_48") or 0.0),
-        local_peak_snr=float(row.get("local_peak_snr") or 0.0),
-        radial_inner=float(row.get("radial_inner") or 0.0),
-        radial_mid=float(row.get("radial_mid") or 0.0),
-        radial_outer=float(row.get("radial_outer") or 0.0),
-        tile_row=tile_row,
-        tile_col=tile_col,
     )
 
 

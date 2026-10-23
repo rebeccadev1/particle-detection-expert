@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +18,6 @@ KIND_RESIDUAL = "residual"
 KIND_PATCH = "patch"
 
 DEFAULT_MODEL_PATH = "models/particle_clf_v4_residual.joblib"
-_VERSIONED_NAME = re.compile(r"^particle_clf_v(\d+)\.joblib$")
 
 _WORKER_MODEL: dict[str, Any] = {"path": None, "artifact": None}
 
@@ -29,18 +27,6 @@ def resolve_model_path(path: str | Path | None) -> Path:
     if raw.is_absolute():
         return raw
     return (PACKAGE_ROOT / raw).resolve()
-
-
-def next_versioned_model_path(models_dir: str | Path | None = None) -> Path:
-    """Return models/particle_clf_v{N+1}.joblib from existing vN files."""
-    directory = Path(models_dir) if models_dir is not None else PACKAGE_ROOT / "models"
-    highest = 0
-    if directory.is_dir():
-        for path in directory.glob("particle_clf_v*.joblib"):
-            match = _VERSIONED_NAME.fullmatch(path.name)
-            if match:
-                highest = max(highest, int(match.group(1)))
-    return (directory / f"particle_clf_v{highest + 1}.joblib").resolve()
 
 
 def load_artifact(path: str | Path) -> dict[str, Any]:
@@ -174,7 +160,7 @@ def apply_ml_filter(
     if not path.is_file():
         raise FileNotFoundError(
             f"ml.enabled is true but the classifier was not found at {path}. "
-            "Train with `python -m src.training` or turn ml.enabled off."
+            "Point ml.model_path at a model in models/ or turn ml.enabled off."
         )
     artifact = cached_artifact(path)
     threshold = cfg_get(config, "ml.threshold", None)

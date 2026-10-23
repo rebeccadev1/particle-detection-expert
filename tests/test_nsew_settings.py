@@ -157,7 +157,8 @@ def test_app_sidebar_has_nsew_toggle() -> None:
     assert '["Loading", "Preprocessing", "Detection", "Output"]' in text
     assert '["Capture", "Analyse", "Verify", "Additional tools"]' in text
     assert '["Label", "Inspect", "Database"]' in text
-    assert '["Training", "Shadow", "Redirector"]' in text
+    assert '["Shadow", "Redirector"]' in text
+    assert "Training" not in text
     assert "Last run" in text
     assert "render_labeled_tiles_tab(" in text
     assert "Summary of last run" not in text

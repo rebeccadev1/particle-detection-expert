@@ -9,16 +9,11 @@ from __future__ import annotations
 from typing import Sequence
 
 import numpy as np
-import pandas as pd
 
 from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
 
 NM_PER_UM = 1000.0
 FEATURE_COLUMNS = ("size_um", "confidence") + CANDIDATE_FEATURE_FIELDS
-
-
-def size_um_from_nm(size_nm: float) -> float:
-    return float(size_nm) / NM_PER_UM
 
 
 def size_um_from_px(size_px: float, pixel_size_nm: float) -> float:
@@ -50,19 +45,3 @@ def candidates_to_matrix(
     return np.vstack(
         [candidate_feature_vector(candidate, pixel_size_nm) for candidate in candidates]
     )
-
-
-def dataframe_feature_matrix(df: pd.DataFrame) -> np.ndarray:
-    """Build ``X`` from a results table. ``size`` is nanometres."""
-    missing = [name for name in CANDIDATE_FEATURE_FIELDS if name not in df.columns]
-    if missing:
-        raise ValueError(
-            "Detections are missing feature columns "
-            f"{missing}. Re-run the pipeline so particles.csv stores features."
-        )
-    size_um = df["size"].astype(float) / NM_PER_UM
-    parts = [size_um.to_numpy(dtype=np.float64)]
-    parts.append(df["confidence"].astype(float).to_numpy(dtype=np.float64))
-    for name in CANDIDATE_FEATURE_FIELDS:
-        parts.append(df[name].astype(float).to_numpy(dtype=np.float64))
-    return np.column_stack(parts)

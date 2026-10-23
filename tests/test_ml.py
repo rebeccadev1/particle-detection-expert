@@ -9,9 +9,8 @@ import pandas as pd
 import pytest
 
 from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
-from src.main_pipeline.ml.features import FEATURE_COLUMNS, dataframe_feature_matrix
-from src.main_pipeline.ml.infer import apply_ml_filter, load_artifact, next_versioned_model_path
-from src.training.train import save_artifact, train_classifier
+from src.main_pipeline.ml.features import FEATURE_COLUMNS
+from src.main_pipeline.ml.infer import apply_ml_filter, load_artifact
 
 
 def _feature_table(n_pos: int = 12, n_neg: int = 24) -> pd.DataFrame:
@@ -56,25 +55,12 @@ def _feature_table(n_pos: int = 12, n_neg: int = 24) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_train_rejects_tables_without_features() -> None:
-    df = pd.DataFrame({"size": [1.0], "confidence": [1.0]})
-    with pytest.raises(ValueError, match="missing feature columns"):
-        dataframe_feature_matrix(df)
-
-
 def test_apply_ml_filter_is_noop_when_disabled() -> None:
     candidates = [
         ParticleCandidate(y_local=1.0, x_local=2.0, size=10.0, confidence=0.9)
     ]
     kept = apply_ml_filter(candidates, {"ml": {"enabled": False}})
     assert kept is candidates or kept == candidates
-
-
-def test_next_versioned_model_path_increments(tmp_path: Path) -> None:
-    assert next_versioned_model_path(tmp_path).name == "particle_clf_v1.joblib"
-    (tmp_path / "particle_clf_v3.joblib").write_bytes(b"x")
-    (tmp_path / "particle_clf.joblib").write_bytes(b"x")
-    assert next_versioned_model_path(tmp_path).name == "particle_clf_v4.joblib"
 
 
 def test_apply_ml_filter_errors_when_enabled_without_model(tmp_path: Path) -> None:
@@ -104,40 +90,29 @@ def test_nsew_v8_is_a_combi_residual_model() -> None:
     assert "not in the fit" in artifact["dataset"]
 
 
-def test_combi_manifest_drops_direction_tiles(tmp_path: Path) -> None:
-    from src.training.train_nsew import combi_manifest
+def _save_residual_model(table: pd.DataFrame, path: Path) -> Path:
+    import joblib
+    from sklearn.ensemble import ExtraTreesClassifier
 
-    path = tmp_path / "keys.csv"
-    pd.DataFrame(
-        [
-            {"key": "a", "source_tile": "v3_2of4.png", "label": "particle", "split": "train", "set_id": "v3", "size": 1},
-            {"key": "b", "source_tile": "v3_N.png", "label": "particle", "split": "train", "set_id": "v3", "size": 1},
-            {"key": "c", "source_tile": "v6_2of4.png", "label": "not_particle", "split": "holdout_tile", "set_id": "v6", "size": 1},
-        ]
-    ).to_csv(path, index=False)
-    kept = combi_manifest(path)
-    assert list(kept["key"]) == ["a", "c"]
-
-
-def test_keep_all_threshold_is_min_positive_score() -> None:
-    from src.training.train import keep_all_threshold, hard_negative_weights
-
-    y = np.array([1, 1, 0, 0])
-    proba = np.array([0.4, 0.9, 0.3, 0.8])
-    assert keep_all_threshold(y, proba) == pytest.approx(0.4)
-    weights = hard_negative_weights(y, np.array([0.1, 0.9, 0.25, 0.5]), cutoff=0.20, heavy=3.0)
-    np.testing.assert_allclose(weights, [1.0, 1.0, 3.0, 3.0])
+    matrix = np.column_stack(
+        [table["size"].astype(float) / 1000.0]
+        + [table[name].astype(float) for name in FEATURE_COLUMNS[1:]]
+    )
+    y = (table["label"] == "particle").astype(int).to_numpy()
+    model = ExtraTreesClassifier(n_estimators=50, random_state=0).fit(matrix, y)
+    joblib.dump(
+        {"kind": "residual", "model": model, "feature_names": FEATURE_COLUMNS, "threshold": 0.5},
+        path,
+    )
+    return path
 
 
-def test_train_and_filter_separable_features(tmp_path: Path) -> None:
+def test_residual_filter_separates_features(tmp_path: Path) -> None:
     table = _feature_table()
-    artifact = train_classifier(table)
-    assert artifact["n_positive"] == 12
-    assert artifact["n_negative"] == 24
-    assert artifact["feature_names"] == FEATURE_COLUMNS
-    path = save_artifact(artifact, tmp_path / "particle_clf.joblib")
+    path = _save_residual_model(table, tmp_path / "particle_clf.joblib")
     loaded = load_artifact(path)
-    assert loaded["threshold"] == artifact["threshold"]
+    assert loaded["kind"] == "residual"
+    assert loaded["threshold"] == 0.5
 
     particle = ParticleCandidate(
         y_local=10.0,

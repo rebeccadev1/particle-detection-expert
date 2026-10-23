@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import contextlib
 import importlib
-import io
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -57,8 +55,6 @@ from src.verification.ui import (
     request_last_run,
 )
 from src.verification.queue import load_last_pipeline, load_particles_csv, write_last_pipeline
-from src.main_pipeline.ml.infer import next_versioned_model_path
-from src.training.train import default_label_path, main as train_main
 from src.main_pipeline.job import claim_pipeline_result, pipeline_status, start_pipeline, stop_pipeline
 from src.redirector.redirector import render_redirector_tab
 from src.main_pipeline.report.report_generator import (
@@ -422,7 +418,7 @@ def _assign_widget(key: str, value, *, previous_epoch: int | None = None) -> Non
     if previous_epoch is None or previous_epoch > 0:
         st.session_state[key] = value
 
-def _apply_beta_preset(base: dict, *, previous_epoch: int | None = None, clear_trained: bool = False) -> None:
+def _apply_beta_preset(base: dict, *, previous_epoch: int | None = None) -> None:
     """Point the ML model and threshold slider at this mode's beta preset."""
     beta = float(
         st.session_state.get(_live_key("ui_f_beta"), st.session_state.get("ui_f_beta", 1.0))
@@ -430,8 +426,6 @@ def _apply_beta_preset(base: dict, *, previous_epoch: int | None = None, clear_t
     preset = preset_for_beta(beta_preset_rows(_selected_profile(base)), beta)
     _assign_widget("ui_ml_threshold", float(preset["threshold"]), previous_epoch=previous_epoch)
     st.session_state["ui_beta_model_path"] = str(preset["model_path"])
-    if clear_trained:
-        st.session_state.pop("ui_trained_model", None)
 
 def _on_beta_change(base: dict) -> None:
     """Keep every other sidebar edit, then load this beta's model and threshold."""
@@ -449,11 +443,9 @@ def _on_beta_change(base: dict) -> None:
     st.session_state["ui_settings_epoch"] = previous_epoch + 1
     for key, value in captured.items():
         _assign_widget(key, value, previous_epoch=previous_epoch)
-    _apply_beta_preset(base, previous_epoch=previous_epoch, clear_trained=True)
+    _apply_beta_preset(base, previous_epoch=previous_epoch)
 
-def _apply_standard_settings(
-    base: dict, folder: str | None = None, *, clear_trained: bool = False
-) -> None:
+def _apply_standard_settings(base: dict, folder: str | None = None) -> None:
     """Load Uniform or NSEW standard values. Keep the tile folder just chosen.
 
     The output folder is ``{tile folder} vN``. An empty tile folder leaves the
@@ -482,7 +474,7 @@ def _apply_standard_settings(
         next_versioned_output_name(chosen),
         previous_epoch=previous_epoch,
     )
-    _apply_beta_preset(base, previous_epoch=previous_epoch, clear_trained=clear_trained)
+    _apply_beta_preset(base, previous_epoch=previous_epoch)
 
 def _on_input_folder(base: dict) -> None:
     chosen = str(st.session_state.get(_live_key("ui_input_dir")) or "")
@@ -515,10 +507,10 @@ def _nsew_config(base: dict) -> dict:
     return apply_nsew_settings(base)
 
 def _on_reset_standard(base: dict) -> None:
-    _apply_standard_settings(base, clear_trained=True)
+    _apply_standard_settings(base)
 
 def _on_settings_profile(base: dict) -> None:
-    _apply_standard_settings(base, clear_trained=True)
+    _apply_standard_settings(base)
 
 def _on_profile_choice(base: dict) -> None:
     st.session_state["ui_settings_nsew"] = st.session_state.get("ui_settings_profile") == "NSEW"
@@ -531,12 +523,12 @@ def _prepare_ui_state(base: dict) -> None:
         st.session_state["ui_settings_profile"] = (
             "NSEW" if st.session_state.get("ui_settings_nsew") else "Uniform"
         )
-        _apply_standard_settings(base, "", clear_trained=True)
+        _apply_standard_settings(base, "")
         st.session_state["ui_schema"] = UI_SCHEMA
         st.session_state["ui_initialized"] = True
         st.session_state["ui_param_mount"] = "session"
     elif st.session_state.get("ui_param_mount") != "session":
-        _apply_standard_settings(base, clear_trained=False)
+        _apply_standard_settings(base)
         st.session_state["ui_param_mount"] = "session"
         st.session_state["ui_sidebar_frontend_seeded"] = False
     _backfill_held_widgets(base)
@@ -1044,13 +1036,9 @@ def _config_from_state(base: dict) -> dict:
     )
     if not st.session_state.get("ui_beta_model_path"):
         st.session_state["ui_beta_model_path"] = str(beta_choice["model_path"])
-    trained_model = st.session_state.get("ui_trained_model")
-    if trained_model:
-        ml["model_path"] = str(trained_model)
-    else:
-        ml["model_path"] = str(
-            st.session_state.get("ui_beta_model_path") or beta_choice["model_path"]
-        )
+    ml["model_path"] = str(
+        st.session_state.get("ui_beta_model_path") or beta_choice["model_path"]
+    )
 
     meas = config.setdefault("measurement", {})
     meas["merge_radius_px"] = float(_widget_value("ui_merge_radius_px"))
@@ -1183,133 +1171,6 @@ def _pipeline_controls(config: dict) -> None:
         st.rerun(scope="app")
         return
     _pipeline_buttons(config, running=False)
-
-
-def _render_training(config: dict) -> None:
-    """Run ``python -m src.training`` from the app."""
-    st.caption(
-        "Trains particle vs not-particle from labels. "
-        "Patch mode reads unmarked tiles. Residual mode uses a particles.csv. "
-        "Circled label JPEGs are not used."
-    )
-    if "ui_train_labels" not in st.session_state:
-        st.session_state["ui_train_labels"] = str(default_label_path())
-    if "ui_train_input_dir" not in st.session_state:
-        st.session_state["ui_train_input_dir"] = str(config.get("input_dir") or "")
-
-    mode = st.selectbox(
-        "Mode",
-        options=["patch", "residual"],
-        key="ui_train_mode",
-        help="patch: HOG ExtraTrees on unmarked crops. residual: ExtraTrees on detector columns.",
-    )
-    labels = st.text_input("Labels CSV", key="ui_train_labels")
-    output = st.text_input(
-        "Output model",
-        key="ui_train_output",
-        placeholder="Blank writes the next models/particle_clf_vN.joblib",
-    )
-    detections = st.text_input(
-        "Detections CSV",
-        key="ui_train_detections",
-        placeholder="particles.csv — required for residual unless a default exists",
-    )
-    input_dir = st.text_input(
-        "Tile folder",
-        key="ui_train_input_dir",
-        help="Patch mode reads tiles from here. Blank uses config.yaml.",
-    )
-    with st.expander("More training settings"):
-        config_path = st.text_input(
-            "Config YAML",
-            key="ui_train_config",
-            placeholder=str(ROOT / "config.yaml"),
-        )
-        pattern = st.text_input(
-            "Filename pattern",
-            key="ui_train_pattern",
-            placeholder="Blank keeps the config pattern",
-        )
-        min_size = st.number_input(
-            "Min size (nm)",
-            min_value=0.0,
-            step=1000.0,
-            key="ui_train_min_size_nm",
-        )
-        manifest = st.text_input("Manifest CSV", key="ui_train_manifest")
-        v4_model = st.text_input(
-            "Previous model for hard negatives",
-            key="ui_train_v4_model",
-            help="Optional. Upweights false positives that this model still scores highly.",
-        )
-        if "ui_train_hard_weight" not in st.session_state:
-            st.session_state["ui_train_hard_weight"] = 3.0
-        if "ui_train_hard_cutoff" not in st.session_state:
-            st.session_state["ui_train_hard_cutoff"] = 0.20
-        hard_weight = st.number_input(
-            "Hard-negative weight",
-            min_value=1.0,
-            step=0.5,
-            key="ui_train_hard_weight",
-        )
-        hard_cutoff = st.number_input(
-            "Hard-negative cutoff",
-            min_value=0.0,
-            max_value=1.0,
-            step=0.05,
-            key="ui_train_hard_cutoff",
-        )
-
-    if st.button("Run training", type="primary", key="ui_train_run"):
-        destination = Path(output.strip()) if output.strip() else next_versioned_model_path()
-        argv = ["--mode", mode, "--labels", labels.strip(), "--output", str(destination)]
-        if detections.strip():
-            argv.extend(["--detections", detections.strip()])
-        if config_path.strip():
-            argv.extend(["--config", config_path.strip()])
-        if input_dir.strip():
-            argv.extend(["--input-dir", input_dir.strip()])
-        if pattern.strip():
-            argv.extend(["--filename-pattern", pattern.strip()])
-        if float(min_size) > 0:
-            argv.extend(["--min-size-nm", str(float(min_size))])
-        if manifest.strip():
-            argv.extend(["--manifest", manifest.strip()])
-        if v4_model.strip():
-            argv.extend(
-                [
-                    "--v4-model",
-                    v4_model.strip(),
-                    "--hard-neg-weight",
-                    str(float(hard_weight)),
-                    "--hard-neg-cutoff",
-                    str(float(hard_cutoff)),
-                ]
-            )
-        log = io.StringIO()
-        try:
-            with st.spinner("Training… this can take several minutes."):
-                with contextlib.redirect_stdout(log):
-                    code = train_main(argv)
-        except SystemExit as exc:
-            st.error(str(exc.code) if exc.code else "Training stopped.")
-        except Exception as exc:
-            st.exception(exc)
-        else:
-            if code == 0:
-                st.session_state["ui_trained_model"] = str(destination)
-                st.success(
-                    f"Wrote {destination}. Detection will use this model until you change beta or reset standard values."
-                )
-            else:
-                st.error(f"Training exited with code {code}.")
-        text = log.getvalue().strip()
-        if text:
-            st.code(text)
-
-    active = st.session_state.get("ui_trained_model")
-    if active:
-        st.caption(f"Detection model: `{active}`")
 
 
 def _write_mosaic_png(rgb: np.ndarray, path: Path) -> None:
@@ -1963,15 +1824,11 @@ if page == "Verify":
                             )
 
 if page == "Additional tools":
-    training_tab, shadow_tab, redirector_tab = st.tabs(
-        ["Training", "Shadow", "Redirector"],
+    shadow_tab, redirector_tab = st.tabs(
+        ["Shadow", "Redirector"],
         on_change="rerun",
         key="tools_tabs",
     )
-    if training_tab.open:
-        with training_tab:
-            with st.container(border=True, key="block-training"):
-                _render_training(config)
     if shadow_tab.open:
         with shadow_tab:
             render_shadow_tab(config)

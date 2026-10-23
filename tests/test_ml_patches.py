@@ -5,24 +5,23 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from src.main_pipeline.detection.detector import ParticleCandidate, compute_tile_residual
-from src.verification.crops import crop_particle
 from src.main_pipeline.ml.infer import apply_ml_filter
-from src.main_pipeline.ml.patch_features import PATCH_FEATURE_NAMES, patch_feature_vector
+from src.main_pipeline.ml.patch_features import (
+    PATCH_FEATURE_NAMES,
+    patch_feature_vector,
+    patches_to_matrix,
+)
 from src.main_pipeline.ml.patches import (
     PATCH_SIZE,
-    collect_unmarked_dataset,
     extract_centered,
     extract_unmarked_channels,
     stack_channels,
 )
-from src.training.train import save_artifact, train_patch_classifier
 from src.main_pipeline.preprocessing.corrections import apply_corrections
-from tests.fixtures.synthetic import detector_test_config, write_tile_tiff
-from tests.test_labeling import _red_mask
+from tests.fixtures.synthetic import detector_test_config
 
 
 def _blob_patch(rng: np.random.Generator, size: int = PATCH_SIZE) -> np.ndarray:
@@ -63,6 +62,25 @@ def _separable_dataset(n_pos: int = 12, n_neg: int = 16) -> tuple[np.ndarray, np
     return np.stack(patches), np.asarray(labels), np.asarray(groups)
 
 
+def _save_patch_model(path: Path) -> Path:
+    import joblib
+    from sklearn.ensemble import ExtraTreesClassifier
+
+    channels, y, _groups = _separable_dataset()
+    model = ExtraTreesClassifier(n_estimators=50, random_state=0).fit(patches_to_matrix(channels), y)
+    joblib.dump(
+        {
+            "kind": "patch",
+            "model": model,
+            "feature_names": PATCH_FEATURE_NAMES,
+            "patch_size": PATCH_SIZE,
+            "threshold": 0.5,
+        },
+        path,
+    )
+    return path
+
+
 def test_extract_centered_is_fixed_size_and_padded() -> None:
     image = np.arange(20, dtype=np.float32).reshape(4, 5)
     patch = extract_centered(image, x_local=0.0, y_local=0.0, size=8)
@@ -78,38 +96,6 @@ def test_unmarked_channels_have_no_red_marker() -> None:
     assert channels.shape == (2, 96, 96)
     assert channels.max() <= 1.0 + 1e-5
     assert channels.ndim == 3 and channels.shape[0] == 2
-
-
-def test_unmarked_dataset_ignores_circled_jpegs(tmp_path: Path) -> None:
-    image = np.zeros((160, 160), dtype=np.float32)
-    image[70:90, 70:90] = 1.0
-    path = write_tile_tiff(tmp_path / "R3_1_1_5X.tif", image)
-    row = {
-        "key": "k1",
-        "source_tile": path.name,
-        "x_global": 80.0,
-        "y_global": 80.0,
-        "size": 20.0,
-        "confidence": 1.0,
-        "label": "particle",
-        "crop_path": "/not/used/circled.jpg",
-    }
-    circled = crop_particle(row, {"input_dir": str(tmp_path), "pixel_size_nm": 1.0,
-                                  "filename_pattern": detector_test_config()["filename_pattern"],
-                                  "overlap_fraction": 0.0})
-    assert int(_red_mask(circled.rgb).sum()) > 20
-
-    labels = pd.DataFrame([row])
-    config = detector_test_config()
-    config["input_dir"] = str(tmp_path)
-    config["pixel_size_nm"] = 1.0
-    config["overlap_fraction"] = 0.0
-    channels, y, groups, meta = collect_unmarked_dataset(labels, config)
-    assert channels.shape[0] == 1
-    assert channels.shape[1:] == (2, PATCH_SIZE, PATCH_SIZE)
-    assert int(y[0]) == 1
-    assert str(groups[0]).endswith("R3_1_1_5X.tif")
-    assert "circled.jpg" not in meta.columns or True
 
 
 def test_patch_feature_length_matches_names() -> None:
@@ -129,21 +115,8 @@ def test_compute_tile_residual_matches_blob_maps() -> None:
     assert float(residual.max()) > 0
 
 
-def test_hog_extratrees_separates_letters_from_blobs() -> None:
-    channels, y, groups = _separable_dataset()
-    artifact = train_patch_classifier(channels, y, groups)
-    assert artifact["kind"] == "patch"
-    assert artifact["metrics"]["recall"] >= 0.8
-    assert artifact["metrics"]["precision"] > 0.5
-    assert artifact["n_positive"] == 12
-    assert "threshold_keep_all" in artifact
-    assert artifact["n_holdout"] == 0
-
-
 def test_patch_filter_uses_threshold(tmp_path: Path) -> None:
-    channels, y, groups = _separable_dataset()
-    artifact = train_patch_classifier(channels, y, groups)
-    path = save_artifact(artifact, tmp_path / "patch.joblib")
+    path = _save_patch_model(tmp_path / "patch.joblib")
     image = np.zeros((128, 128), dtype=np.float32)
     image[54:74, 54:74] = 1.0
     blob = ParticleCandidate(y_local=64.0, x_local=64.0, size=20.0, confidence=0.9)
@@ -156,9 +129,7 @@ def test_patch_filter_uses_threshold(tmp_path: Path) -> None:
 
 
 def test_patch_filter_requires_image(tmp_path: Path) -> None:
-    channels, y, groups = _separable_dataset()
-    artifact = train_patch_classifier(channels, y, groups)
-    path = save_artifact(artifact, tmp_path / "patch.joblib")
+    path = _save_patch_model(tmp_path / "patch.joblib")
     config = {"ml": {"enabled": True, "model_path": str(path)}}
     with pytest.raises(ValueError, match="corrected tile image"):
         apply_ml_filter(
