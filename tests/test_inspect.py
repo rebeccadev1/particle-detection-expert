@@ -17,26 +17,17 @@ from src.verification.inspect import (
     pointer_miss_rows,
     circles_from_rows,
     detections_on_this_file,
-    detections_on_tile,
     display_xy_to_local,
     fresh_inspect_click,
-    expand_direction_tile_names,
     expand_submap_lighting_names,
     extra_grid_placements,
-    unhappiness_score,
-    labeled_detections,
-    labeled_particle_recovery,
-    crop_metric_cells,
-    crop_metric_std,
     last_run_class_counts,
     last_run_class_counts_by_tile,
     std_of_tile_scores,
     subfolder_score_rows,
     local_xy_on_tile,
     missed_particle_record,
-    overlay_circles,
     preview_click_crop,
-    tile_names_for_hits,
     undetected_size_floor_nm,
 )
 from src.main_pipeline.stitching.stitcher import TilePlacement
@@ -169,24 +160,6 @@ def test_particle_detected_on_combi_and_uniform_is_marked_on_both() -> None:
     assert list(quad["key"]) == ["quad-only"]
 
 
-def test_detections_on_this_file_keeps_only_that_quad() -> None:
-    table = pd.DataFrame(
-        {
-            "source_tile": [
-                "v4/wafer_shot_0_quad0_exp200000.png",
-                "v4/wafer_shot_1_quad1_exp200000.png",
-                "v4/combi_2of4.png",
-            ],
-            "size": [1.0, 2.0, 3.0],
-            "key": ["v4_LIGHT_1_1", "v4_LIGHT_2_2", "v4_LIGHT_3_3"],
-        }
-    )
-    quad = detections_on_this_file(table, "v4/wafer_shot_1_quad1_exp200000.png")
-    shared = detections_on_tile(table, "v4/wafer_shot_1_quad1_exp200000.png")
-    assert list(quad["size"]) == [2.0]
-    assert list(shared["size"]) == [1.0, 2.0]
-
-
 def test_expand_submap_lighting_names_includes_combi() -> None:
     names = expand_submap_lighting_names(
         ["v4/wafer_shot_0_quad0_exp200000.png"],
@@ -200,162 +173,6 @@ def test_expand_submap_lighting_names_includes_combi() -> None:
     assert "v4/combi_2of4.png" in names
     assert "v4/wafer_shot_4_all_exp200000.png" in names
     assert "v5/combi_2of4.png" not in names
-
-
-def test_detections_on_tile_matches_basename() -> None:
-    table = pd.DataFrame(
-        {
-            "source_tile": ["R3_5_17_5X.tif", "other/R3_2_31_5X.tif", "R3_5_17_5X.tif"],
-            "size": [1.0, 2.0, 3.0],
-        }
-    )
-    hits = detections_on_tile(table, "R3_5_17_5X.tif")
-    assert list(hits["size"]) == [1.0, 3.0]
-
-
-def test_detections_on_tile_share_nsew_hits() -> None:
-    table = pd.DataFrame(
-        {
-            "source_tile": ["N.bmp", "loose.tif"],
-            "size": [10.0, 11.0],
-            "x_global": [100.0, 1.0],
-            "y_global": [200.0, 2.0],
-            "id": [1, 2],
-            "confidence": [0.9, 0.8],
-            "nsew_dirs": ["N,S,E", ""],
-        }
-    )
-    hits = detections_on_tile(table, "S.bmp")
-    assert list(hits["size"]) == [10.0]
-    assert list(hits["source_tile"]) == ["S.bmp"]
-    assert expand_direction_tile_names(["N.bmp"], ["N.bmp", "S.bmp", "E.bmp", "W.bmp"]) == [
-        "N.bmp",
-        "S.bmp",
-        "E.bmp",
-        "W.bmp",
-    ]
-
-
-def test_detections_on_tile_does_not_share_particles_only_versions() -> None:
-    table = pd.DataFrame(
-        {
-            "source_tile": [
-                "particles_only.png",
-                "particles_only_4of4.png",
-            ],
-            "size": [10.0, 11.0],
-            "x_global": [100.0, 100.0],
-            "y_global": [200.0, 200.0],
-            "id": [1, 2],
-            "confidence": [0.9, 0.8],
-            "key": ["NSEW_100_200", "NSEW_100_201"],
-        }
-    )
-    two = detections_on_tile(table, "particles_only.png")
-    four = detections_on_tile(table, "particles_only_4of4.png")
-    assert list(two["id"]) == [1]
-    assert list(four["id"]) == [2]
-
-
-def test_labeled_detections_keeps_particle_keys_and_crops() -> None:
-    detections = pd.DataFrame(
-        {
-            "id": [1, 2, 3],
-            "x_global": [10.0, 20.0, 30.0],
-            "y_global": [11.0, 21.0, 31.0],
-            "size": [16000.0, 17000.0, 18000.0],
-            "confidence": [0.9, 0.8, 0.7],
-            "source_tile": ["a.tif", "b.tif", "a.tif"],
-            "key": ["a_10_11", "b_20_21", "a_30_31"],
-        }
-    )
-    labels = pd.DataFrame(
-        {
-            "key": ["a_10_11", "b_20_21", "a_30_31"],
-            "label": ["particle", "not_particle", "particle"],
-            "crop_path": ["crops/a.jpg", "crops/b.jpg", "crops/c.jpg"],
-            "particle_id": [1, 2, 3],
-        }
-    )
-    hits = labeled_detections(detections, labels, label="particle")
-    assert list(hits["key"]) == ["a_10_11", "a_30_31"]
-    assert list(hits["crop_path"]) == ["crops/a.jpg", "crops/c.jpg"]
-    assert tile_names_for_hits(hits) == ["a.tif"]
-
-
-def test_labeled_detections_empty_when_no_overlap() -> None:
-    detections = pd.DataFrame(
-        {
-            "id": [1],
-            "x_global": [10.0],
-            "y_global": [11.0],
-            "size": [16000.0],
-            "confidence": [0.9],
-            "source_tile": ["a.tif"],
-            "key": ["a_10_11"],
-        }
-    )
-    labels = pd.DataFrame(
-        {
-            "key": ["other"],
-            "label": ["particle"],
-            "crop_path": ["crops/x.jpg"],
-            "particle_id": [9],
-        }
-    )
-    hits = labeled_detections(detections, labels)
-    assert hits.empty
-    assert tile_names_for_hits(hits) == []
-
-
-def test_labeled_particle_recovery_counts_last_run_keys_only() -> None:
-    detections = pd.DataFrame(
-        {
-            "id": [1, 2],
-            "x_global": [10_000.0, 50_000.0],
-            "y_global": [11_000.0, 51_000.0],
-            "size": [16000.0, 17000.0],
-            "confidence": [0.9, 0.8],
-            "source_tile": ["a.tif", "a.tif"],
-            "key": ["a_10000_11000", "a_50000_51000"],
-        }
-    )
-    labels = pd.DataFrame(
-        {
-            "key": ["a_10000_11000", "a_90000_90000", "b_1_1"],
-            "label": ["particle", "particle", "particle"],
-            "source_tile": ["a.tif", "a.tif", "other.tif"],
-            "x_global": [10_000.0, 90_000.0, 1.0],
-            "y_global": [11_000.0, 90_000.0, 1.0],
-        }
-    )
-    stats = labeled_particle_recovery(detections, labels, tile_names=["a.tif"])
-    assert stats == {"n_labeled": 1, "n_found": 1, "pct": 100.0}
-
-
-def test_labeled_particle_recovery_ignores_older_keys_not_in_run() -> None:
-    detections = pd.DataFrame(
-        {
-            "id": [1],
-            "x_global": [10_000.0],
-            "y_global": [11_000.0],
-            "size": [16000.0],
-            "confidence": [0.9],
-            "source_tile": ["a.tif"],
-            "key": ["a_10000_11000"],
-        }
-    )
-    labels = pd.DataFrame(
-        {
-            "key": ["a_10000_11000", "old_tophat", "old_ml"],
-            "label": ["particle", "particle", "particle"],
-            "source_tile": ["a.tif", "a.tif", "a.tif"],
-            "x_global": [10_000.0, 10_005.0, 90_000.0],
-            "y_global": [11_000.0, 11_002.0, 90_000.0],
-        }
-    )
-    stats = labeled_particle_recovery(detections, labels, tile_names=["a.tif"])
-    assert stats == {"n_labeled": 1, "n_found": 1, "pct": 100.0}
 
 
 def test_last_run_class_counts_splits_real_fake_and_inspect_misses() -> None:
@@ -388,10 +205,6 @@ def test_last_run_class_counts_splits_real_fake_and_inspect_misses() -> None:
     assert stats["n_real_total"] == 3
     assert stats["precision"] == 1 / 3
     assert stats["recall"] == 1 / 3
-    assert stats["unhappiness"] == unhappiness_score(1 / 3, 1 / 3)
-    assert stats["unhappiness"] == 100.0 * (
-        (1 / 3 - 0.95) ** 2 + (1 / 3 - 0.95) ** 2
-    )
 
 
 def test_last_run_counts_pointer_clicks_on_the_matching_field() -> None:
@@ -650,11 +463,9 @@ def test_last_run_class_counts_by_tile_splits_folder() -> None:
     assert int(by_tile.loc["a.tif", "n_undetected"]) == 1
     assert float(by_tile.loc["a.tif", "precision"]) == 0.5
     assert float(by_tile.loc["a.tif", "recall"]) == 0.5
-    assert float(by_tile.loc["a.tif", "unhappiness"]) == unhappiness_score(0.5, 0.5)
     assert int(by_tile.loc["b.tif", "n_detected"]) == 1
     assert float(by_tile.loc["b.tif", "precision"]) == 1.0
     assert float(by_tile.loc["b.tif", "recall"]) == 1.0
-    assert float(by_tile.loc["b.tif", "unhappiness"]) == unhappiness_score(1.0, 1.0)
 
 
 def test_last_run_class_counts_by_tile_keeps_submap_folder() -> None:
@@ -736,88 +547,6 @@ def test_std_of_tile_scores_uses_every_tile() -> None:
     )
     assert rows[0]["n_detected"] == 4
     assert rows[0]["precision_std"] == pytest.approx(expected)
-
-
-def test_crop_metric_std_uses_defined_cells_only() -> None:
-    placement = TilePlacement(
-        path=Path("a.tif"),
-        name="a.tif",
-        y0=0,
-        x0=0,
-        height=90,
-        width=90,
-    )
-    detections = pd.DataFrame(
-        {
-            "id": [1, 2, 3, 4],
-            "x_global": [10.0, 12.0, 40.0, 70.0],
-            "y_global": [10.0, 12.0, 10.0, 70.0],
-            "size": [20000.0, 20000.0, 20000.0, 20000.0],
-            "confidence": [0.9, 0.8, 0.7, 0.6],
-            "source_tile": ["a.tif", "a.tif", "a.tif", "a.tif"],
-            "key": ["real_a", "fake_a", "real_b", "fake_c"],
-        }
-    )
-    labels = pd.DataFrame(
-        {
-            "key": ["real_a", "fake_a", "real_b", "miss_a", "fake_c"],
-            "label": ["particle", "not_particle", "particle", "particle", "not_particle"],
-            "source_tile": ["a.tif", "a.tif", "a.tif", "a.tif", "a.tif"],
-            "size": [20000.0, 20000.0, 20000.0, 25000.0, 20000.0],
-            "x_global": [10.0, 12.0, 40.0, 15.0, 70.0],
-            "y_global": [10.0, 12.0, 10.0, 15.0, 70.0],
-        }
-    )
-    spread = crop_metric_std(
-        detections,
-        labels,
-        height=90,
-        width=90,
-        placements=[placement],
-        pixel_size_nm=1.0,
-        tile_names=["a.tif"],
-        min_size_nm=20000.0,
-        beta=1.0,
-    )
-    pair = float(pd.Series([0.5, 1.0]).std(ddof=1))
-    three = float(pd.Series([0.5, 1.0, 0.0]).std(ddof=1))
-    assert spread["precision"] == pytest.approx(three)
-    assert spread["recall"] == pytest.approx(pair)
-    assert spread["f_beta"] == pytest.approx(pair)
-    including_empty = float(pd.Series([0.5, 1.0, 0.0, *([0.0] * 6)]).std(ddof=1))
-    assert spread["precision"] != pytest.approx(including_empty)
-
-    one_cell = detections.loc[detections["key"] == "real_b"]
-    one_label = labels.loc[labels["key"] == "real_b"]
-    single = crop_metric_std(
-        one_cell,
-        one_label,
-        height=90,
-        width=90,
-        placements=[placement],
-        pixel_size_nm=1.0,
-        tile_names=["a.tif"],
-        beta=1.0,
-    )
-    assert single == {"precision": None, "recall": None, "f_beta": None}
-    cells = crop_metric_cells(
-        detections,
-        labels,
-        height=90,
-        width=90,
-        placements=[placement],
-        pixel_size_nm=1.0,
-        tile_names=["a.tif"],
-        min_size_nm=20000.0,
-        beta=1.0,
-    )
-    assert len(cells) == 9
-    assert cells[0]["precision"] == pytest.approx(0.5)
-    assert cells[0]["recall"] == pytest.approx(0.5)
-    assert cells[1]["precision"] == pytest.approx(1.0)
-    assert cells[1]["recall"] == pytest.approx(1.0)
-    assert cells[8]["precision"] == pytest.approx(0.0)
-    assert cells[8]["recall"] is None
 
 
 def test_last_run_class_counts_by_tile_splits_particles_only() -> None:
@@ -1064,42 +793,10 @@ def test_related_scene_tile_names_keeps_groundup_v3_suffix(tmp_path: Path) -> No
     assert "N.bmp" not in relative
 
 
-def test_unhappiness_score_is_zero_at_target() -> None:
-    assert unhappiness_score(0.95, 0.95) == 0.0
-    assert unhappiness_score(1.0, 1.0) == 100.0 * (
-        (1.0 - 0.95) ** 2 + (1.0 - 0.95) ** 2
-    )
-
-
 def test_undetected_size_floor_uses_this_run_minimum() -> None:
     detections = pd.DataFrame({"size": [20000.0, 31000.0]})
     floor = undetected_size_floor_nm(detections, {"detection": {"min_size_nm": 10000.0}})
     assert floor == 20000.0
-
-
-def test_labeled_particle_recovery_ignores_non_particle_labels() -> None:
-    detections = pd.DataFrame(
-        {
-            "id": [1],
-            "x_global": [10.0],
-            "y_global": [11.0],
-            "size": [16000.0],
-            "confidence": [0.9],
-            "source_tile": ["a.tif"],
-            "key": ["a_10_11"],
-        }
-    )
-    labels = pd.DataFrame(
-        {
-            "key": ["a_10_11"],
-            "label": ["not_particle"],
-            "source_tile": ["a.tif"],
-            "x_global": [10.0],
-            "y_global": [11.0],
-        }
-    )
-    stats = labeled_particle_recovery(detections, labels)
-    assert stats == {"n_labeled": 0, "n_found": 0, "pct": 0.0}
 
 
 def _area_line_mask(rgb: np.ndarray) -> np.ndarray:
@@ -1151,28 +848,6 @@ def test_outline_particle_area_is_a_thin_line() -> None:
     assert int(orange.sum()) > 20
 
 
-def test_overlay_draws_labeled_circle_in_crop() -> None:
-    image = np.full((80, 90), 0.2, dtype=np.float32)
-    image[20:28, 30:38] = 1.0
-    rgb = overlay_circles(
-        image,
-        [
-            {
-                "x_local": 34.0,
-                "y_local": 24.0,
-                "size": 20.0,
-                "color": (40, 180, 70),
-            }
-        ],
-        pixel_size_nm=1.0,
-        crop=(0, 0, 80, 90),
-        max_side=None,
-    )
-    assert rgb.shape == (80, 90, 3)
-    green = (rgb[:, :, 1] > 150) & (rgb[:, :, 0] < 80) & (rgb[:, :, 2] < 100)
-    assert int(green.sum()) > 20
-
-
 def test_circles_from_rows_uses_label_color() -> None:
     rows = pd.DataFrame(
         {
@@ -1188,39 +863,6 @@ def test_circles_from_rows_uses_label_color() -> None:
     missed_circles = circles_from_rows(missed, [1.0, 2.0], [3.0, 4.0], {"a": "particle"})
     assert missed_circles[0]["color"] == MISSED_PARTICLE_COLOR
     assert missed_circles[1]["color"] == (255, 140, 40)
-
-
-def test_own_tile_only_keeps_misses_on_that_file() -> None:
-    from src.verification.ui import _label_rows_missing_from_hits
-
-    labels = pd.DataFrame(
-        {
-            "key": ["v4_LIGHT_1_1", "v4_LIGHT_2_2", "v4_LIGHT_9_9", "v4_LIGHT_3_3"],
-            "source_tile": [
-                "v4/wafer_shot_4_all_exp200000.png",
-                "v4/wafer_shot_0_quad0_exp200000.png",
-                "v4/wafer_shot_4_all_exp200000.png",
-                "v4/wafer_shot_4_all_exp200000.png",
-            ],
-            "label": ["particle", "particle", "particle", "not_particle"],
-            "x_global": [1.0, 2.0, 9.0, 3.0],
-            "y_global": [1.0, 2.0, 9.0, 3.0],
-            "size": [20_000.0, 20_000.0, 20_000.0, 20_000.0],
-        }
-    )
-    hits = pd.DataFrame(
-        {
-            "key": ["v4_LIGHT_1_1"],
-            "source_tile": ["v4/wafer_shot_4_all_exp200000.png"],
-        }
-    )
-    tile = "v4/wafer_shot_4_all_exp200000.png"
-    missing = _label_rows_missing_from_hits(labels, tile, hits, own_tile_only=True)
-    assert missing is not None
-    assert list(missing["key"]) == ["v4_LIGHT_9_9"]
-    shared = _label_rows_missing_from_hits(labels, tile, hits, own_tile_only=False)
-    assert shared is not None
-    assert "v4_LIGHT_2_2" in set(shared["key"].astype(str))
 
 
 def test_display_xy_to_local_inverts_overlay_scale() -> None:
@@ -1467,36 +1109,6 @@ def test_local_px_roundtrip_to_global_nm() -> None:
     x_local, y_local = global_nm_to_local_px(x_global, y_global, placement, pixel_size_nm=2.0)
     assert x_local == 5.0
     assert y_local == 4.0
-
-
-def test_pointer_groundup_folder_lists_combi_and_uniform_only(tmp_path: Path) -> None:
-    from src.verification.inspect import combi_uniform_paths
-
-    folder = tmp_path / "v5"
-    folder.mkdir()
-    names = [
-        "wafer_shot_0_quad0_exp200000.png",
-        "wafer_shot_1_quad1_exp200000.png",
-        "wafer_shot_4_all_exp200000.png",
-        "combi_2of4.png",
-        "notes.txt",
-    ]
-    paths = []
-    for name in names:
-        path = folder / name
-        path.write_bytes(b"x")
-        if path.suffix == ".png":
-            paths.append(path)
-    chosen = combi_uniform_paths(paths)
-    assert chosen is not None
-    assert [path.name for path in chosen] == [
-        "combi_2of4.png",
-        "wafer_shot_4_all_exp200000.png",
-    ]
-    letters = [tmp_path / "N.png", tmp_path / "S.png"]
-    for path in letters:
-        path.write_bytes(b"x")
-    assert combi_uniform_paths(letters) is None
 
 
 def test_pointer_uses_directional_photos_and_shares_one_set(tmp_path: Path) -> None:

@@ -287,11 +287,6 @@ def label_database(source_tile: object) -> str | None:
     return "nsew"
 
 
-def label_campaign(source_tile: object) -> str:
-    """Database name for this photo. Unassigned rows return an empty string."""
-    return label_database(source_tile) or ""
-
-
 def _in_database(df: pd.DataFrame, database: str) -> pd.Series:
     """Rows that belong in one split file.
 

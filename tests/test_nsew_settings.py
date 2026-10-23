@@ -5,12 +5,13 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import yaml
+
 from src.overall.config import (
     PACKAGE_ROOT,
     apply_nsew_settings,
     deep_update,
     load_nsew_overlay,
-    save_nsew_overlay,
 )
 
 
@@ -36,9 +37,9 @@ def test_deep_update_overlays_nested_keys() -> None:
 
 def test_apply_nsew_settings_reads_overlay_file(tmp_path: Path) -> None:
     path = tmp_path / "nsew_config.yaml"
-    save_nsew_overlay(
-        {"pixel_size_nm": 3500.0, "ml": {"threshold": 0.55, "enabled": True}},
-        path,
+    path.write_text(
+        yaml.safe_dump({"pixel_size_nm": 3500.0, "ml": {"threshold": 0.55, "enabled": True}}),
+        encoding="utf-8",
     )
     overlay = load_nsew_overlay(path)
     assert overlay["pixel_size_nm"] == 3500.0

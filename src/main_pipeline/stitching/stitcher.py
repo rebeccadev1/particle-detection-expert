@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import Sequence
 
 import cv2
-import dask.array as da
 import numpy as np
-from dask import delayed
 
 from src.overall.io.tile_loader import Tile, load_tile_image
 
@@ -102,25 +100,6 @@ def downsample_for_target(
     if raw_bytes <= target_bytes:
         return 1
     return int(np.ceil(np.sqrt(raw_bytes / target_bytes)))
-
-
-def build_lazy_composite(placements: Sequence[TilePlacement]) -> list[da.Array]:
-    """Lazy per-tile dask arrays (visualization only; not a detection input).
-
-    Does not assemble a dense in-memory mosaic. For a downsampled view that
-    respects overlap placement, use :class:`LazyMosaic`.
-    """
-    arrays: list[da.Array] = []
-    for placement in placements:
-        delayed_read = delayed(load_tile_image)(placement.path)
-        arrays.append(
-            da.from_delayed(
-                delayed_read,
-                shape=(placement.height, placement.width),
-                dtype=np.float32,
-            )
-        )
-    return arrays
 
 
 def _load_downsampled(path: Path, factor: int) -> np.ndarray:

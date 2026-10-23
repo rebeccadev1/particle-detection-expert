@@ -12,7 +12,7 @@ from scipy.spatial import cKDTree
 from skimage.feature import blob_log
 from skimage.morphology import skeletonize
 
-from src.overall.config import cfg_get, with_recall_profile
+from src.overall.config import cfg_get
 
 _FLOAT = np.float32
 _SNR_PERCENTILE = 99.5
@@ -677,23 +677,6 @@ def blob_local_peak_snr(
     return float(excess / floor)
 
 
-def blob_is_local_peak(
-    image: np.ndarray,
-    y: float,
-    x: float,
-    radius: float,
-    bright: bool = True,
-    min_snr: float = _LOCAL_PEAK_SNR,
-) -> bool:
-    """True if ``(y, x)`` is a strong local intensity peak on ``image``.
-
-    Top-hat and flattening can leave residual peaks on empty dark field.
-    Those are not particles: the preprocessed intensity is not a high-SNR
-    extremum relative to the local median.
-    """
-    return blob_local_peak_snr(image, y, x, radius, bright=bright) >= float(min_snr)
-
-
 def blob_radial_means(
     residual: np.ndarray,
     y: float,
@@ -1072,7 +1055,6 @@ def _tile_residual_maps(
     fft_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray]:
     """Corrected float image, residual, coarse edge-distance, island-protect mask."""
-    config = with_recall_profile(config)
     array = np.ascontiguousarray(image, dtype=_FLOAT)
     residual, used_tophat = _background_residual(array, config, fft_mask)
 
@@ -1115,7 +1097,6 @@ def _residual_and_blobs(
     fft_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, np.ndarray]:
     """Preprocess residual and run DoG/LoG. ``blobs`` is ``(N, 3)`` y, x, sigma."""
-    config = with_recall_profile(config)
     array, residual, edge_distance, protect = _tile_residual_maps(
         image, config, fft_mask
     )
@@ -1167,7 +1148,6 @@ def _gate_blob(
     photo: np.ndarray | None = None,
 ) -> tuple[ParticleCandidate | None, str]:
     """Return a candidate or the first gate that drops this DoG peak."""
-    config = with_recall_profile(config)
     min_d, max_d = _size_bounds_px(config)
     min_area = float(cfg_get(config, "detection.min_area_px", 4))
     min_circ = float(cfg_get(config, "detection.min_circularity", 0.0))
@@ -1259,7 +1239,6 @@ def apply_structure_filters(
     Default pipeline order is gates → these filters → ML. ``structure_filters``
     on ``detect_particles`` can skip this so a caller scores proposals first.
     """
-    config = with_recall_profile(config)
     if not candidates:
         return candidates
     counted = attach_neighbor_counts(candidates, NEIGHBOR_FEATURE_PX)
@@ -1305,7 +1284,6 @@ def detect_particles(
     the size gate use it. Peaks are still found on ``image``. Omit ``photo``
     only when ``image`` is already the photograph to measure.
     """
-    config = with_recall_profile(config)
     _array, residual, edge_distance, blobs, protect = _residual_and_blobs(
         image, config, fft_mask
     )
@@ -1345,7 +1323,6 @@ def trace_locations(
     ``photo`` is the unprocessed tile, used for the size gate, matching
     ``detect_particles``.
     """
-    config = with_recall_profile(config)
     array, residual, edge_distance, blobs, protect = _residual_and_blobs(
         image, config, fft_mask
     )
@@ -1460,4 +1437,3 @@ def trace_locations(
             }
         )
     return rows
-

@@ -16,7 +16,6 @@ from src.overall.config import DEFAULT_INPUT_DIR, cfg_get
 from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
 
 DIRECTION_STEMS = ("N", "S", "E", "W")
-DISPLAY_DIRECTION_ORDER = ("N", "W", "E", "S")
 LIGHTING_ROLES = ("quad0", "quad1", "quad2", "quad3", "all")
 QUAD_DIRECTIONS = ("N", "E", "S", "W")
 DEFAULT_NSEW_MERGE_RADIUS_PX = 24.0

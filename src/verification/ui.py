@@ -55,7 +55,6 @@ from src.verification.inspect import (
     expand_direction_tile_names,
     expand_submap_lighting_names,
     label_color_for_key,
-    labeled_particle_recovery,
     label_on_run_tiles,
     with_grid_folder,
     crop_metric_cells,
@@ -65,7 +64,6 @@ from src.verification.inspect import (
     subfolder_score_rows,
     last_run_class_counts,
     last_run_class_counts_by_tile,
-    unhappiness_score,
     local_xy_on_tile,
     missed_particle_record,
     footprint_grow_mass,
@@ -91,7 +89,6 @@ from src.verification.queue import (
     use_last_pipeline_queue,
     load_particles_csv,
     label_map_with_aliases,
-    merge_detection_tables,
     tag_table,
     nsew_key_aliases,
     share_exposure_keys,
@@ -103,7 +100,6 @@ from src.main_pipeline.measurement.measurer import (
     DEFAULT_NSEW_MERGE_RADIUS_PX,
     DEFAULT_NSEW_SIZE_MATCH_FRACTION,
     is_combi_tile,
-    is_nsew_family_tile,
     is_submap_lighting_tile,
     lighting_role,
     lighting_source_name,
@@ -1630,7 +1626,6 @@ def _sum_tile_counts(table: pd.DataFrame | None) -> dict[str, float]:
     real_total = totals["n_real_total"]
     totals["precision"] = (totals["n_real"] / detected) if detected else 0.0
     totals["recall"] = (totals["n_real"] / real_total) if real_total else 0.0
-    totals["unhappiness"] = unhappiness_score(totals["precision"], totals["recall"])
     return totals
 
 
@@ -2193,71 +2188,6 @@ def _review_side_images(
         except OSError:
             continue
     return loaded if len(loaded) >= 2 else []
-
-
-def _label_rows_missing_from_hits(
-    labels_df: pd.DataFrame,
-    tile_name: str,
-    hits: pd.DataFrame,
-    folder_tiles: list[str] | None = None,
-    own_tile_only: bool = False,
-) -> pd.DataFrame | None:
-    """Labeled marks on this tile that are not in the current detection CSV.
-
-    ``own_tile_only`` keeps marks stored on this file. Sibling quads, the
-    uniform shot, and other N/S/E/W files stay off this picture.
-    """
-    if labels_df is None or labels_df.empty:
-        return None
-    names = labels_df["source_tile"].astype(str).map(
-        lambda path: str(path).replace("\\", "/").rsplit("/", 1)[-1]
-    )
-    if own_tile_only:
-        wanted = lighting_tile_id(tile_name)
-        on_tile = labels_df.loc[
-            labels_df["source_tile"].astype(str).map(lighting_tile_id) == wanted
-        ].copy()
-        if "label" in on_tile.columns:
-            on_tile = on_tile.loc[on_tile["label"].astype(str) == "particle"].copy()
-        if "key" in on_tile.columns:
-            on_tile = on_tile.drop_duplicates(subset=["key"], keep="last")
-    else:
-        on_tile = labels_df.loc[
-            labels_df["source_tile"].astype(str).map(
-                lambda name: label_on_run_tiles(name, {str(tile_name)})
-            )
-        ].copy()
-        if is_nsew_family_tile(tile_name):
-            allowed = {
-                Path(name).name
-                for name in (folder_tiles or [tile_name])
-                if is_nsew_family_tile(str(name))
-            }
-            allowed.add(str(tile_name))
-            on_tile = labels_df.loc[names.isin(allowed)].copy()
-            if "key" in on_tile.columns:
-                on_tile = on_tile.drop_duplicates(subset=["key"], keep="last")
-        elif is_submap_lighting_tile(tile_name) or (
-            is_combi_tile(tile_name) and submap_id(tile_name)
-        ):
-            set_id = submap_id(tile_name)
-            sibling = labels_df["source_tile"].astype(str).map(
-                lambda name: submap_id(name) == set_id
-                and (is_submap_lighting_tile(name) or is_combi_tile(name))
-            )
-            if set_id and bool(sibling.any()):
-                on_tile = labels_df.loc[sibling].copy()
-                if "key" in on_tile.columns:
-                    on_tile = on_tile.drop_duplicates(subset=["key"], keep="last")
-    if on_tile.empty:
-        return None
-    known = set()
-    if hits is not None and not hits.empty and "key" in hits.columns:
-        known = expand_labeled_keys(hits["key"].astype(str))
-    missing = on_tile.loc[~on_tile["key"].astype(str).isin(known)]
-    if missing.empty:
-        return None
-    return missing.reset_index(drop=True)
 
 
 def render_collection_tab(

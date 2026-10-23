@@ -55,35 +55,8 @@ BOOT_LISTEN_S = 2.0
 SCRIPT_DIR = Path(__file__).resolve().parent
 CAPTURES_DIR = SCRIPT_DIR.parents[2] / "Inputs" / "Groundup"
 DEFAULT_COLUMNS = 10
-LOCATION_DIR_RE = re.compile(r"^\((\d+),(\d+)\)$")
 RUN_DIR_RE = re.compile(r"^v(\d+) (\d{4}-\d{2}-\d{2})$")
 ARDUINO_VIDS = {0x2341, 0x2A03, 0x1A86}
-
-
-def next_capture_location(existing: list[tuple[int, int]], columns: int) -> tuple[int, int]:
-    """Next (row, column), 1-based, in the same serpentine as the stage.
-
-    Odd rows run from column 1 toward ``columns``. Even rows run back toward
-    column 1, so the next row starts on the column where the previous row ended.
-    """
-    columns = int(columns)
-    if columns < 1:
-        raise ValueError("columns must be at least 1")
-    if not existing:
-        return (1, 1)
-
-    def progress(row: int, col: int) -> tuple[int, int]:
-        along = col if row % 2 == 1 else columns - col + 1
-        return (row, along)
-
-    row, col = max(existing, key=lambda loc: progress(loc[0], loc[1]))
-    if row % 2 == 1:
-        if col >= columns:
-            return (row + 1, columns)
-        return (row, col + 1)
-    if col <= 1:
-        return (row + 1, 1)
-    return (row, col - 1)
 
 
 def image_filename(row: int, col: int, label: str | None = None) -> str:
@@ -92,14 +65,6 @@ def image_filename(row: int, col: int, label: str | None = None) -> str:
     if label:
         return f"{stem}_{label}.png"
     return f"{stem}.png"
-
-
-def folder_location(folder: Path) -> tuple[int, int]:
-    """Row and column encoded in a captures/(row,col) directory name."""
-    match = LOCATION_DIR_RE.match(folder.name)
-    if match is None:
-        raise ValueError(f"{folder.name!r} is not a location folder")
-    return int(match.group(1)), int(match.group(2))
 
 
 def latest_run_folder(base: Path | None = None) -> Path | None:
@@ -140,20 +105,6 @@ def allocate_run_folder(base: Path, on: date | None = None) -> Path:
     """Create the next captures/vN YYYY-MM-DD directory. N restarts at 1 each day."""
     folder = next_run_folder(base, on=on)
     folder.parent.mkdir(parents=True, exist_ok=True)
-    folder.mkdir()
-    return folder
-
-
-def allocate_capture_folder(base: Path, columns: int = DEFAULT_COLUMNS) -> Path:
-    """Next captures/(row,col) directory. Caller must connect hardware first."""
-    base.mkdir(parents=True, exist_ok=True)
-    existing: list[tuple[int, int]] = []
-    for path in base.iterdir():
-        match = LOCATION_DIR_RE.match(path.name)
-        if match and path.is_dir():
-            existing.append((int(match.group(1)), int(match.group(2))))
-    row, col = next_capture_location(existing, columns)
-    folder = base / f"({row},{col})"
     folder.mkdir()
     return folder
 

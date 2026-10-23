@@ -156,15 +156,6 @@ def cfg_get(config: dict[str, Any], dotted_key: str, default: Any = None) -> Any
     return current
 
 
-def with_recall_profile(config: dict[str, Any]) -> dict[str, Any]:
-    """Return ``config`` unchanged.
-
-    High-recall gates (uniform edge exclude 8 px, confidence 0.50, circularity 0)
-    are the standard detection values, not a separate overlay.
-    """
-    return config
-
-
 def deep_update(base: dict[str, Any], overlay: dict[str, Any] | None) -> dict[str, Any]:
     """Copy ``base`` and recursively overlay mapping values from ``overlay``."""
     out = deepcopy(base)
@@ -267,14 +258,3 @@ def preset_for_beta(presets: list[dict[str, Any]], beta: float) -> dict[str, Any
             }
     known = ", ".join(f"{float(row['beta']):.2f}" for row in presets) or "(none)"
     raise ValueError(f"No ML preset for beta {target:.2f}. Known betas: {known}.")
-
-
-def save_nsew_overlay(overlay: dict[str, Any], path: str | Path | None = None) -> Path:
-    """Write N/S/E/W standard values for the sidebar NSEW toggle."""
-    destination = nsew_config_path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    payload = deepcopy(overlay)
-    payload.pop("nsew_profile", None)
-    text = yaml.safe_dump(payload, sort_keys=False, default_flow_style=False)
-    destination.write_text(text, encoding="utf-8")
-    return destination

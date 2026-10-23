@@ -67,17 +67,6 @@ UNLABELED_CIRCLE_COLOR = CIRCLE_COLOR
 OVERVIEW_MAX_SIDE = 960
 ZOOM_MAX_SIDE = 1080
 INSPECT_DISPLAY_WIDTH = 960
-UNHAPPINESS_TARGET = 0.95
-
-
-def unhappiness_score(precision: float, recall: float) -> float:
-    """``100 × ((P - 0.95)² + (R - 0.95)²)`` with P and R in 0–1. Lower is better."""
-    return 100.0 * (
-        (float(precision) - UNHAPPINESS_TARGET) ** 2
-        + (float(recall) - UNHAPPINESS_TARGET) ** 2
-    )
-
-
 GRID_N = 3
 CELL_NAMES = (
     ("NW", "N", "NE"),
@@ -333,63 +322,6 @@ def pointer_miss_rows(
     return marks.reset_index(drop=True)
 
 
-def detections_on_tile(table: pd.DataFrame | None, tile_name: str) -> pd.DataFrame:
-    """Rows for ``tile_name``. N/S/E/W share one aligned view, so a hit on any
-    of those four is shown on all four. Particles-only 2/3/4-of-4 files do not
-    share hits: they are different combined images.
-    """
-    if table is None or table.empty:
-        return pd.DataFrame()
-    if is_submap_lighting_tile(tile_name):
-        return _lighting_hits_on_tile(table, tile_name)
-    name = _basename(tile_name)
-    names = table["source_tile"].astype(str).map(_basename)
-    mask = names == name
-    if is_direction_tile(name):
-        mask = mask | names.map(is_direction_tile)
-        if "nsew_dirs" in table.columns:
-            stem = Path(name).stem.upper()
-            dirs = table["nsew_dirs"].fillna("").astype(str).str.upper()
-            mask = mask | dirs.map(
-                lambda text: stem
-                in {part.strip() for part in str(text).replace(";", ",").split(",") if part.strip()}
-            )
-    hits = table.loc[mask].copy()
-    if hits.empty:
-        return hits.reset_index(drop=True)
-    if is_direction_tile(name):
-        hits = tagged_if_needed(hits)
-        hits["source_tile"] = name
-        if "key" in hits.columns:
-            hits = hits.drop_duplicates(subset=["key"], keep="first")
-        else:
-            hits = hits.drop_duplicates(
-                subset=["x_global", "y_global"], keep="first"
-            )
-    return hits.reset_index(drop=True)
-
-
-def _lighting_hits_on_tile(table: pd.DataFrame, tile_name: str) -> pd.DataFrame:
-    """Hits for this submap shot, including the other quads and the uniform shot.
-
-    A label on any of the five pictures is the same particle. ``v8`` is not included.
-    """
-    set_id = submap_id(tile_name)
-    tiles = table["source_tile"].astype(str)
-    if set_id:
-        mask = tiles.map(is_submap_lighting_tile) & (tiles.map(submap_id) == set_id)
-    else:
-        mask = tiles.map(_basename) == _basename(tile_name)
-    hits = table.loc[mask].copy()
-    if hits.empty:
-        return hits.reset_index(drop=True)
-    hits = tagged_if_needed(hits)
-    hits["source_tile"] = tile_name
-    if "key" in hits.columns:
-        hits = hits.drop_duplicates(subset=["key"], keep="first")
-    return hits.reset_index(drop=True)
-
-
 _STAGED_2OF4 = re.compile(r"^(v\d+)_2of4$", re.IGNORECASE)
 
 
@@ -401,30 +333,6 @@ class PointerTile:
     path: Path
     set_id: str
     direction: str
-
-
-def combi_uniform_paths(paths: Sequence[Path]) -> list[Path] | None:
-    """Combi and uniform images in a Groundup quad folder.
-
-    ``None`` when ``paths`` is not that kind of folder, so letter N/S/E/W sets
-    stay unchanged.
-    """
-    files = [Path(path) for path in paths]
-    has_quad = any((lighting_role(path.name) or "").startswith("quad") for path in files)
-    if not has_quad:
-        return None
-    chosen = [
-        path
-        for path in files
-        if is_combi_tile(path.name) or lighting_role(path.name) == "all"
-    ]
-    if not chosen:
-        return None
-
-    def _order(path: Path) -> tuple[int, str]:
-        return (0 if is_combi_tile(path.name) else 1, path.name.lower())
-
-    return sorted(chosen, key=_order)
 
 
 def pointer_direction_tiles(folder: str | Path | None) -> list[PointerTile]:
@@ -522,28 +430,6 @@ def _labels_for_pointer_set(labels: pd.DataFrame | None, set_id: str) -> pd.Data
     )
     key_mask = keys.str.startswith(f"{set_id}_NSEW_") | keys.str.startswith(f"{set_id}_2of4_")
     return labels.loc[tile_mask | key_mask].copy()
-
-
-def labeled_detections(
-    detections: pd.DataFrame | None,
-    labels: pd.DataFrame | None,
-    label: str = "particle",
-) -> pd.DataFrame:
-    """Detections whose keys are stored with ``label`` (default: particle)."""
-    if detections is None or detections.empty or labels is None or labels.empty:
-        return pd.DataFrame()
-    tagged = tagged_if_needed(detections)
-    labeled = labels.loc[labels["label"].astype(str) == str(label)].copy()
-    if labeled.empty or "key" not in tagged.columns:
-        return pd.DataFrame()
-    labeled["key"] = labeled["key"].astype(str)
-    hits = tagged.loc[tagged["key"].astype(str).isin(set(labeled["key"]))].copy()
-    if hits.empty:
-        return hits.reset_index(drop=True)
-    extra_cols = [col for col in ("key", "crop_path", "particle_id") if col in labeled.columns]
-    extra = labeled.loc[:, extra_cols].drop_duplicates("key")
-    hits["key"] = hits["key"].astype(str)
-    return hits.merge(extra, on="key", how="left", suffixes=("", "_label")).reset_index(drop=True)
 
 
 _STAGED_SET = re.compile(r"^(v\d+)_2of4$", re.IGNORECASE)
@@ -880,7 +766,6 @@ def last_run_class_counts(
     * ``n_real_total`` — ``n_real`` + ``n_undetected``
     * ``precision`` — ``n_real / n_detected`` (unlabeled hits count as fake)
     * ``recall`` — ``n_real / n_real_total``
-    * ``unhappiness`` — ``100 × ((P - 0.95)² + (R - 0.95)²)`` (lower is better)
     """
     tagged = tagged_if_needed(detections) if detections is not None else pd.DataFrame()
     if tile_names is not None and not tagged.empty and "source_tile" in tagged.columns:
@@ -936,7 +821,6 @@ def last_run_class_counts(
         "n_real_total": n_real_total,
         "precision": precision,
         "recall": recall,
-        "unhappiness": unhappiness_score(precision, recall),
     }
 
 
@@ -1217,47 +1101,6 @@ def crop_metric_cells(
     return rated
 
 
-def crop_metric_std(
-    detections: pd.DataFrame | None,
-    labels: pd.DataFrame | None,
-    *,
-    height: int,
-    width: int,
-    placements: Sequence[TilePlacement],
-    pixel_size_nm: float,
-    tile_names: Sequence[str] | None = None,
-    min_size_nm: float = 0.0,
-    folder_tiles: Sequence[str] | None = None,
-    beta: float = 1.0,
-    grid: int = GRID_N,
-    run_dir: str | None = None,
-) -> dict[str, float | None]:
-    """Sample standard deviation of precision, recall, and Fβ across a tile's crops.
-
-    The tile image is split into ``grid`` × ``grid`` cells, the same bounds as
-    the zoom grid. Each detection and each undetected labeled particle is
-    assigned by its center. See ``std_of_crop_cells`` for which crops count.
-    """
-    empty: dict[str, float | None] = {"precision": None, "recall": None, "f_beta": None}
-    cells = crop_metric_cells(
-        detections,
-        labels,
-        height=height,
-        width=width,
-        placements=placements,
-        pixel_size_nm=pixel_size_nm,
-        tile_names=tile_names,
-        min_size_nm=min_size_nm,
-        folder_tiles=folder_tiles,
-        beta=beta,
-        grid=grid,
-        run_dir=run_dir,
-    )
-    if not cells:
-        return empty
-    return std_of_crop_cells(cells)
-
-
 def undetected_size_floor_nm(
     detections: pd.DataFrame | None,
     config: Mapping[str, Any] | None = None,
@@ -1272,33 +1115,6 @@ def undetected_size_floor_nm(
             run_floor = float(np.floor(run_min / 1000.0) * 1000.0)
             floor = max(floor, run_floor)
     return floor
-
-
-def labeled_particle_recovery(
-    detections: pd.DataFrame | None,
-    labels: pd.DataFrame | None,
-    tile_names: Sequence[str] | None = None,
-    near_px: float = 20.0,
-    pixel_size_nm: float = 960.0,
-) -> dict[str, float]:
-    """Labeled particles among last-run detections (green circles).
-
-    Only keys that appear in ``detections`` are counted, so labels from older
-    pipeline CSVs that this run did not emit are ignored.
-    """
-    _ = (near_px, pixel_size_nm)
-    empty = {"n_labeled": 0, "n_found": 0, "pct": 0.0}
-    hits = labeled_detections(detections, labels, label="particle")
-    if hits.empty:
-        return empty
-    if tile_names is not None:
-        wanted = {_basename(name) for name in tile_names}
-        tile = hits["source_tile"].astype(str).map(_basename)
-        hits = hits.loc[tile.isin(wanted)]
-    if hits.empty:
-        return empty
-    n = int(hits["key"].astype(str).nunique()) if "key" in hits.columns else int(len(hits))
-    return {"n_labeled": n, "n_found": n, "pct": 100.0}
 
 
 def tile_names_for_hits(hits: pd.DataFrame | None) -> list[str]:
@@ -1692,20 +1508,6 @@ def outline_particle_crop_file(
         pixel_size_nm=pixel_size_nm,
         config=config,
     )
-
-
-def overlay_circles(
-    image: np.ndarray,
-    circles: Sequence[Mapping[str, Any]],
-    pixel_size_nm: float,
-    *,
-    crop: tuple[int, int, int, int] | None = None,
-    max_side: int | None = OVERVIEW_MAX_SIDE,
-) -> np.ndarray:
-    """RGB overlay used by tests and callers that only need the image."""
-    return overlay_view(
-        image, circles, pixel_size_nm, crop=crop, max_side=max_side
-    ).rgb
 
 
 def local_xy_on_tile(

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,26 +81,6 @@ def resolve_input_dir(folder: str | Path) -> Path:
     raise FileNotFoundError(
         f"Input folder does not exist: {folder!r}. Tried: {tried}"
     )
-
-
-def follow_latest_capture(
-    current: str,
-    previous_suggestion: str | None,
-    latest: str | None,
-    *,
-    seeded: bool,
-) -> tuple[str, str | None, bool]:
-    """Tile folder that should follow the newest capture folder.
-
-    The first time a capture folder exists, use it. After that, keep a folder
-    the user picked, and keep following the newest capture while the tile
-    folder is still the previous suggestion or still empty.
-    """
-    if not latest:
-        return current, previous_suggestion, seeded
-    if not seeded or not str(current or "") or current == previous_suggestion:
-        return latest, latest, True
-    return current, previous_suggestion, True
 
 
 def input_folder_labels(root: str | Path | None = None) -> list[str]:
@@ -384,36 +363,3 @@ def matching_tile_paths(
             continue
         matched.append(path)
     return matched
-
-
-def iter_tiles(
-    folder: str | Path,
-    filename_pattern: str,
-    run: object = None,
-    magnification: object = None,
-    include_unmatched: bool = False,
-) -> Iterator[Tile]:
-    """Yield one loaded tile at a time. Never returns a list of image arrays."""
-    for path in matching_tile_paths(
-        folder,
-        filename_pattern,
-        run,
-        magnification,
-        include_unmatched=include_unmatched,
-    ):
-        meta = try_parse_tile_filename(path.name, filename_pattern) or {}
-        image = load_tile_image(path)
-        height, width = int(image.shape[0]), int(image.shape[1])
-        yield Tile(
-            path=path,
-            name=path.name,
-            image=image,
-            row=int(meta["row"]) if "row" in meta else None,
-            col=int(meta["col"]) if "col" in meta else None,
-            run=int(meta["run"]) if "run" in meta else None,
-            magnification=float(meta["mag"]) if "mag" in meta else None,
-            x_origin=float(meta["x"]) if "x" in meta else None,
-            y_origin=float(meta["y"]) if "y" in meta else None,
-            height=height,
-            width=width,
-        )

@@ -380,15 +380,6 @@ def _large_debris_config(**detection: object) -> dict:
     return detector_test_config(detection=params)
 
 
-def test_dark_residual_peak_is_not_a_particle() -> None:
-    from src.main_pipeline.detection.detector import blob_is_local_peak
-
-    image = np.full((64, 64), 0.1, dtype=np.float32)
-    image[20:28, 20:28] = 0.9
-    assert blob_is_local_peak(image, 24.0, 24.0, 4.0, bright=True)
-    assert not blob_is_local_peak(image, 50.0, 50.0, 4.0, bright=True)
-
-
 def test_large_dark_field_flake_is_kept() -> None:
     center = (140.0, 160.0)
     image = make_dark_field_flake(center=center, axes=(36.0, 32.0))
@@ -594,19 +585,6 @@ def test_pad_corner_stays_dropped_with_island_protect() -> None:
             assert dist > 24.0, "pad corner should not be a particle"
 
 
-def test_recall_profile_is_identity() -> None:
-    from src.overall.config import with_recall_profile
-
-    config = detector_test_config(
-        detection={
-            "edge_exclude_px": 12.0,
-            "min_confidence": 0.50,
-            "min_circularity": 0.0,
-        }
-    )
-    assert with_recall_profile(config) is config
-
-
 def test_trace_locations_marks_kept_and_empty() -> None:
     from src.main_pipeline.detection.detector import detect_particles, trace_locations
 
@@ -619,4 +597,3 @@ def test_trace_locations_marks_kept_and_empty() -> None:
     assert kept[0]["reason"] == "already_kept"
     empty = trace_locations(corrected, config, [(5.0, 5.0)])
     assert empty[0]["reason"] != "already_kept"
-

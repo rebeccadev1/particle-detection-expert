@@ -24,9 +24,7 @@ from src.overall.io.tile_loader import (
 )
 from src.main_pipeline.nsew import positional_cell_sides, positional_direction
 from src.main_pipeline.measurement.measurer import (
-    DISPLAY_DIRECTION_ORDER,
     DIRECTION_STEMS,
-    combi_key_family,
     is_combi_tile,
     lighting_role,
     quad_direction,
@@ -44,9 +42,6 @@ MIN_CIRCLE_RADIUS = 14
 MIN_HALF_PX = 96
 WINDOW_SCALE = 1.8
 DEFAULT_WAFER_FOLDER = "R3 04-08"
-TINDER_NSEW_ORDER = ("N", "S", "E", "W")
-
-
 @dataclass(frozen=True)
 class ParticleCrop:
     """One labeled-review image: tile crop, local coords, and source path."""
@@ -480,14 +475,6 @@ def _spot_contrast(image: np.ndarray, x: float, y: float, diameter_px: float) ->
     return float(patch[particle].mean() - patch[background].mean())
 
 
-def reviewed_on_combi_or_uniform(source_tile: str) -> bool:
-    """True when this hit is shown on the combi or the uniform image, not N/S/E/W."""
-    text = str(source_tile)
-    if combi_key_family(text) == "light":
-        return True
-    return lighting_role(text) == "all"
-
-
 def review_surface_name(source_tile: str) -> str:
     """``Combi`` or ``Uniform`` for a Groundup review image. Empty for a quad."""
     text = str(source_tile)
@@ -691,147 +678,6 @@ def combi_or_uniform_crop(
     )
 
 
-def compass_direction(source_tile: str) -> str | None:
-    """N, S, E, or W for a directional file. The uniform ``all`` shot has none."""
-    if is_direction_tile(source_tile):
-        return Path(str(source_tile)).stem.upper()
-    return quad_direction(source_tile)
-
-
-def direction_scene(source_tile: str) -> str:
-    """Folder that shares one N/S/E/W set. Submaps stay separate from each other."""
-    text = str(source_tile).replace("\\", "/")
-    if is_submap_lighting_tile(text):
-        return f"light:{submap_id(text)}"
-    parent = Path(text).parent.name
-    if parent and parent not in (".",):
-        return f"dir:{parent.lower()}"
-    return "dir:"
-
-
-def brightest_prominence_direction_row(
-    record: dict[str, Any],
-    candidates: pd.DataFrame | None,
-    *,
-    merge_radius_nm: float,
-    size_match_fraction: float,
-) -> dict[str, Any] | None:
-    """N/S/E/W detection of this hit with the highest prominence.
-
-    Prominence is the detection confidence. The uniform all-lights shot is
-    left out, even when its confidence is higher than every quad.
-    """
-    if reviewed_on_combi_or_uniform(str(record.get("source_tile") or "")):
-        return None
-    if candidates is None or candidates.empty or "source_tile" not in candidates.columns:
-        return None
-    if "x_global" not in candidates.columns or "y_global" not in candidates.columns:
-        return None
-    scene = direction_scene(str(record.get("source_tile") or ""))
-    scenes = candidates["source_tile"].astype(str).map(direction_scene)
-    subset = candidates.loc[scenes == scene]
-    if subset.empty:
-        return None
-    directional = subset["source_tile"].astype(str).map(compass_direction).notna()
-    subset = subset.loc[directional]
-    if subset.empty:
-        return None
-    x = float(record["x_global"])
-    y = float(record["y_global"])
-    size = float(record.get("size") or 0.0)
-    dist = np.hypot(
-        subset["x_global"].astype(float).to_numpy() - x,
-        subset["y_global"].astype(float).to_numpy() - y,
-    )
-    other_size = (
-        subset["size"].astype(float).to_numpy()
-        if "size" in subset.columns
-        else np.zeros(len(subset))
-    )
-    limit = np.full(len(subset), float(merge_radius_nm))
-    if size_match_fraction > 0:
-        limit = np.maximum(limit, float(size_match_fraction) * np.maximum(size, other_size))
-    near = subset.loc[dist <= limit]
-    if near.empty:
-        return None
-    confidence = (
-        near["confidence"].astype(float).fillna(0.0)
-        if "confidence" in near.columns
-        else pd.Series(0.0, index=near.index)
-    )
-    return near.loc[confidence.idxmax()].to_dict()
-
-
-def brightest_direction_crop(
-    row: pd.Series | dict[str, Any],
-    config: dict[str, Any],
-    mosaic: LazyMosaic | None = None,
-    cache: TileImageCache | None = None,
-    origin_cache: dict[str, tuple[int, int]] | None = None,
-) -> ParticleCrop | None:
-    """Crop the N/S/E/W frame where the particle stands out most from its background.
-
-    Score is particle brightness minus the ring just outside the particle.
-    The circle stays on the same pixel as the combined detection. Returns
-    ``None`` when the hit is not a combined tile or the four angles are missing.
-    """
-    record = dict(row) if not isinstance(row, dict) else dict(row)
-    tile_name = str(record.get("source_tile", "") or "")
-    if is_direction_tile(tile_name) or reviewed_on_combi_or_uniform(tile_name):
-        return None
-    input_dir = cfg_get(config, "input_dir", None)
-    try:
-        combined_path = find_tile_path(tile_name, input_dir=input_dir, mosaic=mosaic)
-    except (FileNotFoundError, OSError):
-        return None
-    directions = direction_images_for_combined(combined_path)
-    if len(directions) < 2:
-        return None
-    placement = placement_for_tile(
-        combined_path, config, mosaic=mosaic, origin_cache=origin_cache
-    )
-    pixel_size = float(cfg_get(config, "pixel_size_nm", 1.0))
-    x_local, y_local = global_nm_to_local_px(
-        float(record["x_global"]),
-        float(record["y_global"]),
-        placement,
-        pixel_size,
-    )
-    diameter_px = float(record["size"]) / (pixel_size if pixel_size > 0 else 1.0)
-    loader = cache if cache is not None else TileImageCache()
-    best_name = ""
-    best_score = float("-inf")
-    for direction in DISPLAY_DIRECTION_ORDER:
-        path = directions.get(direction)
-        if path is None:
-            continue
-        score = _spot_contrast(loader.load(path), x_local, y_local, diameter_px)
-        if score > best_score:
-            best_score = score
-            best_name = direction
-    if not best_name:
-        return None
-    sibling = dict(record)
-    sibling["source_tile"] = directions[best_name].name
-    crop = crop_particle(
-        sibling,
-        config,
-        mosaic=mosaic,
-        cache=loader,
-        origin_cache=origin_cache,
-        tile_path=directions[best_name],
-    )
-    return ParticleCrop(
-        rgb=crop.rgb,
-        x_local=crop.x_local,
-        y_local=crop.y_local,
-        crop_x0=crop.crop_x0,
-        crop_y0=crop.crop_y0,
-        tile_path=crop.tile_path,
-        direction=best_name,
-    )
-
-
 def crop_particle(
     row: pd.Series | dict[str, Any],
     config: dict[str, Any],
@@ -987,96 +833,6 @@ def nsew_combi_crop(
         tile_path=crop.tile_path,
         direction="Combi",
     )
-
-
-def nsew_direction_crops(
-    row: pd.Series | dict[str, Any],
-    config: dict[str, Any],
-    mosaic: LazyMosaic | None = None,
-    cache: TileImageCache | None = None,
-    origin_cache: dict[str, tuple[int, int]] | None = None,
-) -> dict[str, ParticleCrop]:
-    """Crops of one hit on N, S, E, and W, in that order.
-
-    Works for a staged 2-of-4 detection and for a hit already on one angle.
-    Returns an empty dict when fewer than two directions are on disk.
-    """
-    record = dict(row) if not isinstance(row, dict) else dict(row)
-    tile_name = str(record.get("source_tile", "") or "")
-    if reviewed_on_combi_or_uniform(tile_name):
-        return {}
-    input_dir = cfg_get(config, "input_dir", None)
-    try:
-        tile_path = find_tile_path(tile_name, input_dir=input_dir, mosaic=mosaic)
-    except (FileNotFoundError, OSError):
-        return {}
-    if is_direction_tile(tile_name):
-        directions = list_direction_images(tile_path.parent)
-    else:
-        directions = direction_images_for_combined(tile_path)
-    if len(directions) < 2:
-        return {}
-    views: dict[str, ParticleCrop] = {}
-    loader = cache if cache is not None else TileImageCache()
-    for direction in TINDER_NSEW_ORDER:
-        path = directions.get(direction)
-        if path is None:
-            continue
-        sibling = dict(record)
-        sibling["source_tile"] = path.name
-        crop = crop_particle(
-            sibling,
-            config,
-            mosaic=mosaic,
-            cache=loader,
-            origin_cache=origin_cache,
-            tile_path=path,
-        )
-        views[direction] = ParticleCrop(
-            rgb=crop.rgb,
-            x_local=crop.x_local,
-            y_local=crop.y_local,
-            crop_x0=crop.crop_x0,
-            crop_y0=crop.crop_y0,
-            tile_path=crop.tile_path,
-            direction=direction,
-        )
-    return views
-
-
-def crop_direction_views(
-    row: pd.Series | dict[str, Any],
-    config: dict[str, Any],
-    mosaic: LazyMosaic | None = None,
-    cache: TileImageCache | None = None,
-    origin_cache: dict[str, tuple[int, int]] | None = None,
-) -> dict[str, ParticleCrop]:
-    """Crops of the same location on N, W, E, and S when those tiles exist."""
-    record = dict(row) if not isinstance(row, dict) else dict(row)
-    tile_name = str(record.get("source_tile", "") or "")
-    if not is_direction_tile(tile_name):
-        return {}
-    input_dir = cfg_get(config, "input_dir", None)
-    tile_path = find_tile_path(tile_name, input_dir=input_dir, mosaic=mosaic)
-    siblings = list_direction_images(tile_path.parent)
-    if len(siblings) < 2:
-        return {}
-    views: dict[str, ParticleCrop] = {}
-    loader = cache if cache is not None else TileImageCache()
-    for direction in DISPLAY_DIRECTION_ORDER:
-        path = siblings.get(direction)
-        if path is None:
-            continue
-        sibling = dict(record)
-        sibling["source_tile"] = path.name
-        views[direction] = crop_particle(
-            sibling,
-            config,
-            mosaic=mosaic,
-            cache=loader,
-            origin_cache=origin_cache,
-        )
-    return views
 
 
 def _candidate_folders(input_dir: str | Path | None) -> list[Path]:

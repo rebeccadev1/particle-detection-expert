@@ -618,51 +618,6 @@ def fov_beam(
     return hits / samples, low_angle, high_angle
 
 
-def fov_fraction(
-    shape: RedirectorShape,
-    refractive_index: float = PMMA_N,
-    reflect_far_side: bool = False,
-    samples: int = 401,
-) -> float:
-    """Share of the thickness-face beam that crosses the field of view."""
-    fraction, _low, _high = fov_beam(shape, refractive_index, reflect_far_side, samples)
-    return fraction
-
-
-def clear_radius_mm(shape: RedirectorShape) -> float:
-    """Open radius at the sample, inside the inner bottom edge."""
-    return shape.bottom[0][0]
-
-
-def landing_in_hole(shape: RedirectorShape, trace: RayTrace) -> tuple[float, float] | None:
-    """``(angle below horizontal, hit radius)`` if the ray hits the sample inside the hole.
-
-    The sample is the plane through the inner bottom edge. Only downward rays count.
-    """
-    if trace.status != "exited" or len(trace.points) < 2:
-        return None
-    exit_point = trace.points[-2]
-    far = trace.points[-1]
-    dx = far[0] - exit_point[0]
-    dy = far[1] - exit_point[1]
-    length = math.hypot(dx, dy)
-    if length == 0 or dy >= -1e-9:
-        return None
-    dx /= length
-    dy /= length
-    z_sample = sample_z_mm(shape)
-    if exit_point[1] <= z_sample + 1e-6:
-        hit_r = abs(exit_point[0])
-    else:
-        distance = (z_sample - exit_point[1]) / dy
-        if distance < 0:
-            return None
-        hit_r = abs(exit_point[0] + distance * dx)
-    if hit_r >= clear_radius_mm(shape) - 0.05:
-        return None
-    return angle_down_deg((dx, dy)), hit_r
-
-
 def _surface_points(shape: RedirectorShape, which: str, side: float) -> list[tuple[float, float]]:
     points = shape.top if which == "top" else shape.bottom
     return [_mirrored(point, side) for point in points]
@@ -699,7 +654,6 @@ def section_image(
     span_x = width / px_x
     span_y = max(height / px_z, (y_high - z_fov) / 0.8)
     min_x = -span_x / 2.0
-    max_x = span_x / 2.0
     max_y = y_high + 0.14 * span_y
     min_y = max_y - span_y
 
@@ -956,4 +910,3 @@ def render_redirector_tab() -> None:
                 }
             )
         st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
-

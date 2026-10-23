@@ -334,7 +334,7 @@ def start_autofocus(
 ) -> None:
     """Start the hill climb on a background thread. Returns once the thread is running."""
     from src.capture.preview import preview_snapshot
-    from src.capture.stage import move_z, printer_status
+    from src.capture.stage import printer_status
 
     max_travel_mm = float(max_travel_mm)
     coarse_mm = float(coarse_mm)

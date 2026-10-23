@@ -402,10 +402,6 @@ def _render_lighting_controls(cap, mode: str, nsew_style: str, ser) -> None:
 
 
 
-def _stage_columns() -> int:
-    return int(st.session_state.get("stage_columns", STAGE_WIDGET_DEFAULTS["stage_columns"]))
-
-
 def _manual_target(cap) -> tuple[Path, int, int]:
     current = st.session_state.get("capture_manual_folder")
     row = st.session_state.get("capture_manual_row")

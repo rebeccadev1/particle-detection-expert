@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from src.overall.config import cfg_get, resolve_output_dir, with_recall_profile
+from src.overall.config import cfg_get, resolve_output_dir
 from src.main_pipeline.detection.detector import (
     apply_structure_filters,
     build_fft_notch_mask,
@@ -142,7 +142,6 @@ def _placement_from_path(
 
 def load_report_mosaic(config: dict[str, Any]) -> LazyMosaic:
     """Tile placements for the stitched report, without running detection."""
-    config = with_recall_profile(config)
     folder = cfg_get(config, "input_dir", "")
     if not folder:
         return LazyMosaic([])
@@ -375,7 +374,6 @@ def run_pipeline(
     ``should_stop`` is checked between tiles. When it returns true the run
     raises ``PipelineStopped`` and does not write outputs.
     """
-    config = with_recall_profile(config)
     folder = cfg_get(config, "input_dir", "")
     if not folder:
         raise ValueError("config.input_dir is required.")

@@ -10,7 +10,6 @@ in the field (see ``light_distance_mm``). Used by the **Shadow** tab and
 from __future__ import annotations
 
 import math
-import tempfile
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
@@ -874,20 +873,6 @@ def run_shadow_check(
 
 def _parse_keys(text: str) -> list[str]:
     return [token for token in text.replace(",", " ").split() if token]
-
-
-def decode_upload(name: str, data: bytes) -> np.ndarray:
-    """Decode an uploaded tile to 2D grayscale via a temporary file."""
-    suffix = Path(name).suffix.lower()
-    if suffix not in TILE_SUFFIXES:
-        suffix = ".png"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
-        handle.write(data)
-        path = Path(handle.name)
-    try:
-        return load_tile_image(path)
-    finally:
-        path.unlink(missing_ok=True)
 
 
 def display_preview(

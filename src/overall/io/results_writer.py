@@ -53,22 +53,9 @@ def write_csv(df: pd.DataFrame, path: str | Path) -> Path:
     return destination
 
 
-def write_json(df: pd.DataFrame, path: str | Path) -> Path:
-    """Write the result table as JSON records."""
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    result_table(df).to_json(destination, orient="records", indent=2)
-    return destination
-
-
 def parameters_payload(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Nested settings used for this run."""
     return _json_ready(dict(config) if config else {})
-
-
-def write_parameters_json(config: Mapping[str, Any] | None, path: str | Path) -> Path:
-    """Write the settings used for this run as nested JSON."""
-    return write_run_settings(config, path)
 
 
 def write_run_settings(

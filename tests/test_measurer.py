@@ -650,7 +650,7 @@ def test_preview_downsizes_tiles_then_pastes_on_canvas(tmp_path: Path) -> None:
 
 
 def test_full_mosaic_preview_downsamples_tiles_before_stitch(tmp_path: Path) -> None:
-    from src.main_pipeline.report.report_generator import overlay_downsample, overlay_markers, write_overlay_image
+    from src.main_pipeline.report.report_generator import draw_overlay_markers, overlay_downsample, overlay_rgb
     from src.main_pipeline.stitching.stitcher import LazyMosaic, TilePlacement
 
     height, width = 80, 120
@@ -666,15 +666,13 @@ def test_full_mosaic_preview_downsamples_tiles_before_stitch(tmp_path: Path) -> 
     config = detector_test_config(report={"downsample": 0, "target_mb": 0.01})
     factor = overlay_downsample(mosaic, config, crop=None)
     assert factor > 1
-    overlay = overlay_markers(mosaic, pd.DataFrame(), config, crop=None)
+    overlay = draw_overlay_markers(
+        overlay_rgb(mosaic, config, crop=None), mosaic, pd.DataFrame(), config, crop=None
+    )
     assert overlay.ndim == 3
     assert overlay.shape[0] == mosaic.preview(downsample=factor).shape[0]
     assert overlay.shape[1] == mosaic.preview(downsample=factor).shape[1]
     assert overlay.nbytes <= 0.05 * 1024 * 1024
-    written = write_overlay_image(
-        mosaic, pd.DataFrame(), config, tmp_path / "mosaic_overlay.jpg"
-    )
-    assert written.exists() and written.stat().st_size > 0
 
 
 def test_pipeline_table_includes_feature_columns(tmp_path: Path) -> None:
@@ -743,7 +741,7 @@ def test_pipeline_detects_unmatched_names_without_stitching(tmp_path: Path) -> N
 
 
 def test_pipeline_stitches_only_patterned_tiles(tmp_path: Path) -> None:
-    from src.main_pipeline.report.report_generator import overlay_markers
+    from src.main_pipeline.report.report_generator import draw_overlay_markers, overlay_rgb
 
     patterned = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])
     loose = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])
@@ -756,10 +754,9 @@ def test_pipeline_stitches_only_patterned_tiles(tmp_path: Path) -> None:
     assert [p.name for p in mosaic.placements] == ["R3_0_1_5X.tif"]
     assert "loose_photo.tif" in set(table["source_tile"].astype(str))
     assert "R3_0_1_5X.tif" in set(table["source_tile"].astype(str))
-    overlay = overlay_markers(mosaic, table, config, crop=None)
+    overlay = draw_overlay_markers(overlay_rgb(mosaic, config, crop=None), mosaic, table, config, crop=None)
     assert overlay.shape[0] > 0
     assert overlay.shape[1] > 0
-    from src.main_pipeline.report.report_generator import overlay_rgb
     from src.main_pipeline.runner import load_report_mosaic
 
     report = load_report_mosaic(config)

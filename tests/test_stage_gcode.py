@@ -10,10 +10,8 @@ from src.capture.stage import (
     build_home_gcode,
     build_relative_move_gcode,
     build_scan_gcode,
-    build_z_move_gcode,
     move_axis,
     move_z,
-    next_scan_row,
     pause_plan,
     return_from_stop_moves,
     return_to_start_moves,
@@ -121,11 +119,6 @@ def test_rejects_a_zero_step() -> None:
         build_scan_gcode(step_mm=0)
 
 
-def test_z_move_is_relative_and_waits() -> None:
-    text = build_z_move_gcode(-0.05, 300)
-    assert text.splitlines() == ["G21", "G91", "G1 Z-0.05 F300", "M400", "G90"]
-
-
 def test_z_move_needs_a_printer() -> None:
     with pytest.raises(RuntimeError, match="Connect the printer"):
         move_z(0.1, 300)
@@ -193,11 +186,6 @@ def test_scan_stops_follow_the_serpentine() -> None:
     assert stops[1][2:] == ("X", 1.5)
     assert stops[3][2:] == ("Y", -1.5)
     assert stops[4][2:] == ("X", -1.5)
-
-
-def test_next_scan_starts_below_existing_rows() -> None:
-    assert next_scan_row([]) == 1
-    assert next_scan_row([(1, 1), (1, 7), (2, 3)]) == 3
 
 
 def test_xy_jog_needs_a_printer() -> None:

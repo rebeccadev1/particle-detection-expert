@@ -14,13 +14,11 @@ from src.verification.crops import (
     CIRCLE_COLOR,
     TileImageCache,
     config_for_hit_placement,
-    crop_direction_views,
     crop_particle,
     crop_window,
     find_tile_path,
     global_nm_to_local_px,
 )
-from src.verification.inspect import detections_on_tile
 from src.verification.queue import (
     MIN_SIZE_NM,
     detection_key,
@@ -281,9 +279,6 @@ def test_nsew_label_covers_all_four_directions(tmp_path: Path) -> None:
     )
     queue = unlabeled_queue([tag_table(detections)], store.labeled_keys())
     assert list(queue["source_tile"]) == ["loose.tif"]
-    hits = detections_on_tile(tag_table(detections), "W.bmp")
-    assert "NSEW_100_200" in set(hits["key"].astype(str))
-    assert set(hits["source_tile"].astype(str)) == {"W.bmp"}
 
 
 def test_particles_only_shares_nsew_key_and_skips_labeled_location(tmp_path: Path) -> None:
@@ -401,65 +396,6 @@ def test_tinder_queue_merges_nwes_offset_hits() -> None:
     assert set(str(same.iloc[0]["nsew_dirs"]).split(",")) == {"N", "W", "E", "S"}
 
 
-def test_groundup_tinder_keeps_combi_and_uniform(tmp_path: Path) -> None:
-    from src.verification.crops import nsew_direction_crops, reviewed_on_combi_or_uniform
-
-    folder = tmp_path / "v5"
-    folder.mkdir()
-    for name in (
-        "wafer_shot_0_quad0_exp200000.png",
-        "wafer_shot_1_quad1_exp200000.png",
-        "wafer_shot_2_quad2_exp200000.png",
-        "wafer_shot_3_quad3_exp200000.png",
-        "wafer_shot_4_all_exp200000.png",
-        "combi_2of4.png",
-    ):
-        (folder / name).write_bytes(b"png")
-    combi = str(folder / "combi_2of4.png")
-    uniform = str(folder / "wafer_shot_4_all_exp200000.png")
-    quad = str(folder / "wafer_shot_0_quad0_exp200000.png")
-    assert reviewed_on_combi_or_uniform(combi)
-    assert reviewed_on_combi_or_uniform(uniform)
-    assert not reviewed_on_combi_or_uniform(quad)
-    row = {
-        "id": 1,
-        "x_global": 10.0,
-        "y_global": 20.0,
-        "size": 8.0,
-        "confidence": 0.9,
-    }
-    assert nsew_direction_crops({**row, "source_tile": combi}, _config(folder)) == {}
-    assert nsew_direction_crops({**row, "source_tile": uniform}, _config(folder)) == {}
-
-
-def test_nsew_direction_crops_shows_nsew_for_combined(tmp_path: Path) -> None:
-    import cv2
-
-    from src.verification.crops import nsew_direction_crops
-
-    angles = tmp_path / "Inputs" / "Groundup v5" / "v5 (10^5)"
-    stage = tmp_path / "Inputs" / "Groundup v5 combi v5 v6"
-    angles.mkdir(parents=True)
-    stage.mkdir()
-    for name in ("N", "S", "E", "W"):
-        gray = np.zeros((64, 64), dtype=np.uint8)
-        gray[28:36, 28:36] = 180
-        assert cv2.imwrite(str(angles / f"{name}.png"), gray)
-    assert cv2.imwrite(str(stage / "v5_2of4.png"), np.zeros((64, 64), dtype=np.uint8))
-    row = {
-        "id": 1,
-        "source_tile": "v5_2of4.png",
-        "x_global": 32.0,
-        "y_global": 32.0,
-        "size": 8.0,
-        "confidence": 0.9,
-    }
-    views = nsew_direction_crops(row, _config(stage))
-    assert list(views) == ["N", "S", "E", "W"]
-    assert all(view.direction == name for name, view in views.items())
-    assert all(_red_mask(view.rgb).any() for view in views.values())
-
-
 def test_nsew_label_crop_uses_the_combi_not_the_letters(tmp_path: Path) -> None:
     import cv2
 
@@ -493,177 +429,6 @@ def test_nsew_label_crop_uses_the_combi_not_the_letters(tmp_path: Path) -> None:
     assert from_letter is not None
     assert from_letter.tile_path.name == "combi_2of4.png"
     assert from_letter.direction == "Combi"
-
-
-def test_crop_direction_views_shows_nwes(tmp_path: Path) -> None:
-    import cv2
-
-    for name in ("N", "W", "E", "S"):
-        gray = np.zeros((48, 48), dtype=np.uint8)
-        gray[20:28, 20:28] = 200
-        assert cv2.imwrite(str(tmp_path / f"{name}.bmp"), gray)
-    row = {
-        "id": 1,
-        "source_tile": "N.bmp",
-        "x_global": 24.0,
-        "y_global": 24.0,
-        "size": 8.0,
-        "confidence": 0.9,
-    }
-    views = crop_direction_views(row, _config(tmp_path))
-    assert list(views) == ["N", "W", "E", "S"]
-    assert all(view.rgb.size > 0 for view in views.values())
-
-
-def test_brightest_direction_crop_picks_the_bright_angle(tmp_path: Path) -> None:
-    import cv2
-
-    from src.verification.crops import brightest_direction_crop
-
-    angles = tmp_path / "Inputs" / "Groundup v4" / "v3"
-    stage = tmp_path / "Inputs" / "Groundup v4 ML off"
-    angles.mkdir(parents=True)
-    stage.mkdir()
-    for name, value in (("N", 20), ("S", 40), ("E", 220), ("W", 30)):
-        gray = np.full((64, 64), 5, dtype=np.uint8)
-        if name == "E":
-            gray[28:36, 28:36] = value
-        assert cv2.imwrite(str(angles / f"{name}.bmp"), gray)
-    mask = np.zeros((64, 64), dtype=np.uint8)
-    assert cv2.imwrite(str(stage / "v3_2of4.bmp"), mask)
-    row = {
-        "id": 1,
-        "source_tile": "v3_2of4.bmp",
-        "x_global": 32.0,
-        "y_global": 32.0,
-        "size": 8.0,
-        "confidence": 0.9,
-    }
-    crop = brightest_direction_crop(row, _config(stage))
-    assert crop is not None
-    assert crop.direction == "E"
-    assert crop.tile_path.name == "E.bmp"
-    assert _red_mask(crop.rgb).any()
-
-
-def test_brightest_direction_crop_uses_groundup_v5_exposure_folder(tmp_path: Path) -> None:
-    import cv2
-
-    from src.verification.crops import brightest_direction_crop
-
-    angles = tmp_path / "Inputs" / "Groundup v5" / "v3 (10^5)"
-    stage = tmp_path / "Inputs" / "Groundup v5 combi"
-    angles.mkdir(parents=True)
-    stage.mkdir()
-    for name, value in (("N", 20), ("S", 40), ("E", 220), ("W", 30)):
-        gray = np.full((64, 64), 5, dtype=np.uint8)
-        if name == "E":
-            gray[28:36, 28:36] = value
-        assert cv2.imwrite(str(angles / f"{name}.png"), gray)
-    mask = np.zeros((64, 64), dtype=np.uint8)
-    assert cv2.imwrite(str(stage / "v3_2of4.png"), mask)
-    row = {
-        "id": 1,
-        "source_tile": "v3_2of4.png",
-        "x_global": 32.0,
-        "y_global": 32.0,
-        "size": 8.0,
-        "confidence": 0.9,
-    }
-    crop = brightest_direction_crop(row, _config(stage))
-    assert crop is not None
-    assert crop.direction == "E"
-    assert crop.tile_path.parent == angles
-
-
-def test_direction_crop_prefers_contrast_over_raw_brightness(tmp_path: Path) -> None:
-    import cv2
-
-    from src.verification.crops import brightest_direction_crop
-
-    angles = tmp_path / "Inputs" / "Groundup v4" / "v3"
-    stage = tmp_path / "Inputs" / "Groundup v4 ML off"
-    angles.mkdir(parents=True)
-    stage.mkdir()
-    yy, xx = np.ogrid[:64, :64]
-    disk = (xx - 32) ** 2 + (yy - 32) ** 2 <= 4 ** 2
-    north = np.full((64, 64), 180, dtype=np.uint8)
-    north[disk] = 200
-    west = np.full((64, 64), 20, dtype=np.uint8)
-    west[disk] = 90
-    flat = np.full((64, 64), 30, dtype=np.uint8)
-    for name, image in (("N", north), ("S", flat), ("E", flat), ("W", west)):
-        assert cv2.imwrite(str(angles / f"{name}.bmp"), image)
-    assert cv2.imwrite(str(stage / "v3_2of4.bmp"), np.zeros((64, 64), dtype=np.uint8))
-    row = {
-        "id": 1,
-        "source_tile": "v3_2of4.bmp",
-        "x_global": 32.0,
-        "y_global": 32.0,
-        "size": 8.0,
-        "confidence": 0.9,
-    }
-    crop = brightest_direction_crop(row, _config(stage))
-    assert crop is not None
-    assert crop.direction == "W"
-
-
-def test_uniform_hit_is_not_moved_onto_a_quad() -> None:
-    from src.verification.crops import brightest_prominence_direction_row
-
-    detections = pd.DataFrame(
-        [
-            {
-                "source_tile": "v4/wafer_shot_0_quad0_exp200000.png",
-                "x_global": 1000.0,
-                "y_global": 2000.0,
-                "size": 20_000.0,
-                "confidence": 0.40,
-            },
-            {
-                "source_tile": "v4/wafer_shot_1_quad1_exp200000.png",
-                "x_global": 1100.0,
-                "y_global": 1900.0,
-                "size": 20_000.0,
-                "confidence": 0.91,
-            },
-            {
-                "source_tile": "v4/wafer_shot_2_quad2_exp200000.png",
-                "x_global": 900.0,
-                "y_global": 2100.0,
-                "size": 20_000.0,
-                "confidence": 0.55,
-            },
-            {
-                "source_tile": "v4/wafer_shot_4_all_exp200000.png",
-                "x_global": 1000.0,
-                "y_global": 2000.0,
-                "size": 20_000.0,
-                "confidence": 0.99,
-            },
-            {
-                "source_tile": "v5/wafer_shot_1_quad1_exp200000.png",
-                "x_global": 1000.0,
-                "y_global": 2000.0,
-                "size": 20_000.0,
-                "confidence": 0.98,
-            },
-        ]
-    )
-    record = {
-        "source_tile": "v4/wafer_shot_4_all_exp200000.png",
-        "x_global": 1000.0,
-        "y_global": 2000.0,
-        "size": 20_000.0,
-        "confidence": 0.99,
-    }
-    chosen = brightest_prominence_direction_row(
-        record,
-        detections,
-        merge_radius_nm=5_000.0,
-        size_match_fraction=0.4,
-    )
-    assert chosen is None
 
 
 def test_groundup_review_picks_combi_or_uniform_by_prominence() -> None:
@@ -905,43 +670,6 @@ def test_collection_is_newest_first_and_names_the_folder(tmp_path: Path) -> None
     assert list(newest_first(plain)["id"]) == [2, 1]
 
 
-def test_last_run_csv_queue_floor_is_10_um() -> None:
-    from src.verification.queue import last_run_csv, load_particles_csv
-
-    path = last_run_csv(Path(__file__).resolve().parents[1])
-    assert path.is_file()
-    table = load_particles_csv(path)
-    kept = filter_min_size(table)
-    assert len(kept) > 0
-    assert float(kept["size"].min()) >= MIN_SIZE_NM
-
-
-def test_last_run_csv_prefers_custom_recall_table(tmp_path: Path) -> None:
-    from src.verification.queue import last_run_csv, load_particles_csv
-
-    folder = tmp_path / "my_recall"
-    folder.mkdir()
-    table = pd.DataFrame(
-        {
-            "id": [1],
-            "x_global": [100.0],
-            "y_global": [10.0],
-            "size": [20_000.0],
-            "confidence": [1.0],
-            "source_tile": ["R3_1_1_5X.tif"],
-        }
-    )
-    csv_path = folder / "particles.csv"
-    table.to_csv(csv_path, index=False)
-    found = last_run_csv(
-        tmp_path, {"labeling": {"source_csv": "my_recall/particles.csv"}}
-    )
-    assert found == csv_path
-    loaded = load_particles_csv(found)
-    assert len(loaded) == 1
-    assert "key" in loaded.columns
-
-
 def test_load_last_pipeline_uses_pointer_not_recall_csv(tmp_path: Path) -> None:
     from src.verification.queue import load_last_pipeline, write_last_pipeline
 
@@ -1153,11 +881,6 @@ def test_submap_label_covers_quads_and_uniform_shot_only(tmp_path: Path) -> None
     assert sorted(queue["key"].astype(str)) == sorted(
         [detection_key(_submap_shot("v7", "quad0", 1_000_000.0, 200.0, 6)), "v8_LIGHT_100_200"]
     )
-    on_all = detections_on_tile(tag_table(detections), "v7/wafer_shot_4_all_exp200000.png")
-    assert "v7_LIGHT_100_200" in set(on_all["key"].astype(str))
-    assert "v8_LIGHT_100_200" not in set(on_all["key"].astype(str))
-    on_other = detections_on_tile(tag_table(detections), "v8/wafer_shot_4_all_exp200000.png")
-    assert set(on_other["key"].astype(str)) == {"v8_LIGHT_100_200"}
 
 
 def test_submap_folders_load_lighting_shots_only(tmp_path: Path) -> None:
@@ -1185,39 +908,6 @@ def test_submap_folders_load_lighting_shots_only(tmp_path: Path) -> None:
         "v8/wafer_shot_0_quad0_exp200000.png",
         "v8/wafer_shot_4_all_exp200000.png",
     }
-
-
-def test_tile_folder_follows_the_latest_capture_until_the_user_picks_one() -> None:
-    from src.overall.io.tile_loader import follow_latest_capture
-
-    chosen, suggestion, seeded = follow_latest_capture(
-        "Glovebox/Not trained on 14-09",
-        None,
-        "Groundup/v2 2026-10-20",
-        seeded=False,
-    )
-    assert (chosen, suggestion, seeded) == ("Groundup/v2 2026-10-20", "Groundup/v2 2026-10-20", True)
-
-    stayed, suggestion, seeded = follow_latest_capture(
-        "Glovebox/Not trained on 14-09",
-        "Groundup/v2 2026-10-20",
-        "Groundup/v3 2026-10-20",
-        seeded=True,
-    )
-    assert stayed == "Glovebox/Not trained on 14-09"
-    assert suggestion == "Groundup/v2 2026-10-20"
-
-    followed, suggestion, seeded = follow_latest_capture(
-        "Groundup/v2 2026-10-20",
-        "Groundup/v2 2026-10-20",
-        "Groundup/v3 2026-10-20",
-        seeded=True,
-    )
-    assert (followed, suggestion, seeded) == ("Groundup/v3 2026-10-20", "Groundup/v3 2026-10-20", True)
-
-    empty, suggestion, seeded = follow_latest_capture("", suggestion, None, seeded=True)
-    assert empty == ""
-    assert seeded is True
 
 
 def test_input_folder_labels_suggest_image_folders_and_submaps(tmp_path: Path) -> None:

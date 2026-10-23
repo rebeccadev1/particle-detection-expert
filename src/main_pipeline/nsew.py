@@ -35,11 +35,6 @@ KIND_FOLDERS = {
     "combi": "Combi",
     "symmetry_map": "Symmetry",
 }
-OUTPUT_NAMES = tuple(
-    f"{kind}_{min_count}of4" for min_count in MIN_COUNTS for kind in KIND_NAMES
-)
-
-
 def _direction_name(path: Path) -> str | None:
     """N/S/E/W from a stem, or from a quad shot (quad0=N, quad1=E, quad2=S, quad3=W)."""
     stem = path.stem.upper()
@@ -336,23 +331,6 @@ def is_uniform_image(path: str | Path) -> bool:
     if lighting_role(file_path.name) == "all":
         return True
     return file_path.stem.lower() in {"all", "uniform"}
-
-
-def uniform_image(folder: str | Path) -> Path | None:
-    """The uniform-lighting image in ``folder``, if there is one."""
-    folder = Path(folder)
-    chosen: Path | None = None
-    for path in sorted(folder.iterdir()):
-        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTS:
-            continue
-        if not is_uniform_image(path):
-            continue
-        if chosen is not None:
-            raise FileExistsError(
-                f"Multiple uniform images in {folder}: {chosen.name} and {path.name}"
-            )
-        chosen = path
-    return chosen
 
 
 def _combi_2of4_uint8(paths: list[Path], *, use_all_cores: bool = True) -> np.ndarray:

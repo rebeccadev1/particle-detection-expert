@@ -29,8 +29,6 @@ from src.main_pipeline.measurement.measurer import (
 
 MIN_SIZE_NM = 10_000.0
 RECALL_CSV_NAME = "recall/particles.csv"
-FALLBACK_CSV_NAME = "allemaal 08/09/particles.csv"
-LAST_RUN_CSV_NAME = RECALL_CSV_NAME
 LAST_PIPELINE_POINTER = "last_pipeline.json"
 LABEL_QUEUE_CLEARED = "label_queue_cleared.json"
 
@@ -282,29 +280,6 @@ def label_map_with_aliases(labels: pd.DataFrame | None) -> dict[str, str]:
             for alias in nsew_key_aliases(detection_key(record)):
                 mapping[alias] = name
     return mapping
-
-
-def last_run_csv(project_root: str | Path, config: Mapping[str, Any] | None = None) -> Path:
-    """CSV used as the default labeling source (under ``Outputs``).
-
-    Prefers a high-recall run (``recall/particles.csv``) so previously labeled
-    keys are skipped and only new loosened-gate hits need review. Falls back
-    to the last classical run when the recall table is missing.
-    """
-    names: list[str] = []
-    if config is not None:
-        custom = cfg_get(dict(config), "labeling.source_csv", None)
-        if custom not in (None, ""):
-            names.append(str(custom))
-    for name in (RECALL_CSV_NAME, FALLBACK_CSV_NAME):
-        if name not in names:
-            names.append(name)
-    for name in names:
-        for folder in (DEFAULT_OUTPUT_DIR, Path(project_root)):
-            path = folder / name
-            if path.is_file():
-                return path
-    return DEFAULT_OUTPUT_DIR / names[0]
 
 
 def pipeline_particles_csv(config: Mapping[str, Any] | None = None) -> Path:

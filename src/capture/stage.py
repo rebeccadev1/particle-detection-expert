@@ -221,11 +221,6 @@ def build_relative_move_gcode(axis: str, delta_mm: float, feed: float) -> str:
     )
 
 
-def build_z_move_gcode(delta_mm: float, feed: float) -> str:
-    """One relative Z step, then wait until the printer has finished moving."""
-    return build_relative_move_gcode("Z", delta_mm, feed)
-
-
 def move_axis(axis: str, delta_mm: float, feed: float) -> None:
     """Step one axis and block until that short program has finished."""
     text = build_relative_move_gcode(axis, delta_mm, feed)
@@ -365,13 +360,6 @@ def scan_stops(columns: int, rows: int, step_mm: float) -> list[tuple[int, int, 
                 direction = 1.0 if going_right else -1.0
                 stops.append((row_index + 1, col, "X", direction * step_mm))
     return stops
-
-
-def next_scan_row(existing: list[tuple[int, int]]) -> int:
-    """First grid row of a new scan, below every captures/(row,col) folder."""
-    if not existing:
-        return 1
-    return max(row for row, _col in existing) + 1
 
 
 def scan_summary(step_mm: float, columns: int, rows: int, fov_mm: float = FOV_MM) -> dict:

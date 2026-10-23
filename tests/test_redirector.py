@@ -108,15 +108,12 @@ def test_rejects_a_drop_too_steep_for_a_circular_arc() -> None:
 
 
 def test_fan_enters_only_through_the_thickness() -> None:
-    from src.redirector.redirector import fov_fraction, trace_fan, trace_ray
+    from src.redirector.redirector import trace_fan, trace_ray
 
     shape = make_shape(24.0, 10.0, 0.4, 1.0)
     traces = trace_fan(shape, 11, 1.883)
     assert traces
     assert all(trace.path.startswith("outer edge right") for trace in traces)
-    assert fov_fraction(shape, 1.883, samples=51) == pytest.approx(
-        fov_fraction(shape, 1.883, samples=51)
-    )
 
     plain = trace_ray(shape, -0.279, 1.883)
     bounced = trace_ray(shape, -0.279, 1.883, reflect_far_side=True)

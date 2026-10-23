@@ -211,22 +211,6 @@ def draw_overlay_markers(
         )
     return marked
 
-def overlay_markers(
-    mosaic: LazyMosaic,
-    particles: pd.DataFrame,
-    config: dict[str, Any],
-    crop: tuple[int, int, int, int] | None = None,
-    progress_cb: Callable[[int, int, str], None] | None = None,
-) -> np.ndarray:
-    """Downsampled mosaic with particle markers. Coordinates are global nm or px.
-
-    Marker positions are converted back to mosaic pixels using ``pixel_size_nm``.
-    ``crop`` is ``(y, x, h, w)`` in full-resolution mosaic pixels. ``crop=None``
-    stitches every tile into one overview.
-    """
-    rgb = overlay_rgb(mosaic, config, crop=crop, progress_cb=progress_cb)
-    return draw_overlay_markers(rgb, mosaic, particles, config, crop=crop)
-
 def _photo_display_rgb(image: np.ndarray) -> np.ndarray:
     """RGB of a photograph at its saved gray levels.
 
@@ -365,15 +349,6 @@ def _italic_font(size: int) -> ImageFont.ImageFont:
         if Path(candidate).is_file():
             return ImageFont.truetype(candidate, size=size)
     return _font(size)
-
-def pdf_header_lines(config: Mapping[str, Any]) -> list[str]:
-    """Title, the path label, then the input path."""
-    lines = ["Particle Detection Output"]
-    path, _folder = _input_path_and_folder(config)
-    if path:
-        lines.append("Path to analysed image(s):")
-        lines.append(path)
-    return lines
 
 def summary_pdf_name(config: Mapping[str, Any]) -> str:
     """``Summary of {input folder}.pdf``."""
@@ -847,23 +822,3 @@ def encode_overlay_jpeg(rgb: np.ndarray, quality: int = 90) -> bytes:
     if not ok:
         raise RuntimeError("Failed to encode mosaic JPEG.")
     return buffer.tobytes()
-
-def write_overlay_image(
-    mosaic: LazyMosaic,
-    particles: pd.DataFrame,
-    config: dict[str, Any],
-    path: str | Path,
-    crop: tuple[int, int, int, int] | None = None,
-) -> Path:
-    """Stitch a size-capped mosaic overlay and write it to ``path``."""
-    rgb = overlay_markers(mosaic, particles, config, crop=crop)
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    suffix = destination.suffix.lower()
-    if suffix in {".jpg", ".jpeg"}:
-        destination.write_bytes(encode_overlay_jpeg(rgb))
-    else:
-        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        if not cv2.imwrite(str(destination), bgr):
-            raise RuntimeError(f"Failed to write mosaic image to {destination}")
-    return destination
