@@ -59,7 +59,7 @@ Layout — letters, pad corners, array row starts, fiducials, lattice nodes, box
 | `particles.csv` | One row per merged particle: identity, global nm, size, confidence, source tile, N/S/E/W merge fields, plus residual features for the optional ML gate |
 | `mosaic_overlay.jpg` | Downsampled stitch of every *placeable* tile with a red circle at each detection |
 
-The Streamlit app (`streamlit run app.py`) has tabs: **Detection**, **NSEW**, **Tiles**, **Last Run**, **Tinder** (label queue), **Database**. Detection shows the table, a size histogram in **µm**, and can render a **full-resolution crop** of the mosaic.
+The Streamlit app (`streamlit run app.py`) is four modules: **Capture**, **Analyse**, **Verify**, **Additional tools**. Analyse runs the pipeline and shows the table, a size histogram in **µm**, and a mosaic crop. Verify has **Label**, **Inspect**, and **Database**. Additional tools has **Shadow** and **Redirector**.
 
 ---
 
@@ -144,13 +144,17 @@ Implemented in `src/main_pipeline/runner.py`. Modules:
 | Step | Module | Role |
 |------|--------|------|
 | Find tiles | `src/overall/io/tile_loader.py` | Regex match, optional run/mag filters, unmatched files, RGB→gray |
-| Place tile | `src/main_pipeline/stitching/stitcher.py` | Top-left mosaic origin from `row`/`col` and `overlap_fraction` |
+| Names | `src/overall/io/naming.py` | Combi / lighting / NSEW filename roles |
+| Place tile | `src/overall/io/placement.py` | Top-left mosaic origin from `row`/`col` and `overlap_fraction` |
 | Preprocess | `src/main_pipeline/preprocessing/corrections.py` | Denoise, flatten, stretch; stay **float32** |
 | Detect | `src/main_pipeline/detection/detector.py` | Lattice out, islands, compact high-prominence residual, DoG, filters |
 | ML | `src/main_pipeline/ml/infer.py` | Optional ExtraTrees on detector hits |
 | Measure | `src/main_pipeline/measurement/measurer.py` | Local px → global nm; cluster nearby hits; N/S/E/W merge |
 | NSEW combine | `src/main_pipeline/nsew.py` | Four lighting angles → combi / particles-only / symmetry maps |
-| Report | `src/main_pipeline/report/report_generator.py` | Stats, markers, JPEG from cached thumbnails. UI: `app.py` |
+| Stitch | `src/main_pipeline/stitching/stitcher.py` | Lazy mosaic from cached thumbnails |
+| Report | `src/main_pipeline/report/report_generator.py` | Stats, markers, JPEG. UI: `app.py` |
+| Capture | `src/capture/capture_ui.py`, `capture_stage.py` | Lighting, live view, stage, focus, scan |
+| CLIs | `scripts/nsew_to_combi.py`, `audit_misses.py`, `shadow_check.py` | Combine lighting, explain misses, measure shadows |
 
 Default order is **gates → structure filters → ML**. Set `ml.score_before_structure: true` to score gated DoG hits first, then cluster/line-filter the ML survivors (can add lattice neighbours that cluster-kill isolated flakes). `config.yaml` keeps this **false**.
 
@@ -194,7 +198,7 @@ Tile **height and width** for mosaic planning come from the file **header** (`pe
 
 ### Placement
 
-A regular grid with fractional overlap (current `overlap_fraction: 0.0` = no assumed overlap):
+A regular grid with fractional overlap (current `overlap_fraction: 0.1`):
 
 ```
 step_x = tile_width  × (1 − overlap)
@@ -220,7 +224,7 @@ Integer images (typical microscope uint8 / uint16) are divided by their max so v
 
 ### Gaussian denoise (`denoise_sigma`, default 1 px)
 
-A small blur so blob detection does not fire on sensor speckle. Too large a sigma also rounds off real particles and merges close neighbours; 1 px is a noise filter, not a smoother. NSEW overlay uses **0.5 px**.
+A small blur so blob detection does not fire on sensor speckle. Too large a sigma also rounds off real particles and merges close neighbours; 1 px is a noise filter, not a smoother. NSEW overlay also uses **1 px**.
 
 ### Illumination flatten (`flatten_sigma`, default 160 px)
 
@@ -367,7 +371,7 @@ if protect: ramp = max(ramp, 0.85)
 residual ← residual × ramp
 ```
 
-Default `edge_soften_strength: 2` and `edge_exclude_px: 12`. The ramp goes to zero **on** the border and recovers over ~12 px (or 12 px of blur, whichever is larger). Islands keep most of their residual.
+Default `edge_soften_strength: 2`. Uniform `edge_exclude_px` is **8**; NSEW is **12**. The ramp goes to zero **on** the border and recovers over that many pixels (or `edge_soften_sigma` of blur, whichever is larger). Islands keep most of their residual.
 
 Set `edge_soften_strength` to 0 to leave the residual unchanged (the hard distance gate below can still drop blobs).
 
@@ -602,9 +606,9 @@ Later tiles overwrite earlier ones in overlap; there is no blending. That is fin
 
 ## Scale: pixels, micrometres, nanometres
 
-Typical 5× tiles: **`pixel_size_nm: 960`** → **1 pixel = 0.96 µm**.
+Current YAML (`config.yaml` and the NSEW overlay) uses **`pixel_size_nm: 3610`** → **1 pixel = 3.61 µm**.
 
-Groundup / N/S/E/W images use **`pixel_size_nm: 3500`** (3.5 µm/px) when the sidebar **NSEW** toggle is on.
+Older 5× R-grid tiles were often **`pixel_size_nm: 960`** (0.96 µm/px). The conversion table below still uses that 5× scale.
 
 The UI talks in **µm**. The CSV and internal config talk in **nm**. Sidebar conversions: `nm = µm × 1000`.
 
@@ -639,7 +643,7 @@ Four images of the **same field** named `N`, `S`, `E`, `W` (any common suffix) u
 
 Outputs go to `Outputs/Output {folder name}/`. 2-of-4 is also written without the `_2of4` suffix.
 
-Detection of those combined images (and of the four raw angles) uses the main pipeline. The sidebar **NSEW** toggle merges `nsew_config.yaml` on top of `config.yaml` (ML off in that overlay). Off restores `config.yaml`: v4 at threshold **0.23**.
+Detection of those combined images (and of the four raw angles) uses the main pipeline. The sidebar **NSEW** toggle merges `nsew_config.yaml` on top of `config.yaml`: v8 at threshold **0.37**, `edge_exclude_px` **12**, `structure_min_neighbors` **2**. Off restores `config.yaml`: v4 residual at **0.23**, `edge_exclude_px` **8**, `structure_min_neighbors` **3**.
 
 ---
 
@@ -708,7 +712,7 @@ Defaults below are from current `config.yaml` unless noted. The Streamlit sideba
 | `local_snr_sigma` | 0 | 0 = auto on FFT (`3.5 × blob_max_sigma`), off for top-hat. Negative = off always. |
 | `edge_soften_sigma` | 12 | Coarse blur before the region-border gradient. 0 disables distance. |
 | `edge_soften_strength` | 2 | How hard to ramp residual to 0 near borders. 0 = no ramp. |
-| `edge_exclude_px` | 12 | Hard drop if distance ≤ this (except protected islands). 0 keeps border blobs. |
+| `edge_exclude_px` | 8 Uniform / 12 NSEW | Hard drop if distance ≤ this (except protected islands). 0 keeps border blobs. |
 | `edge_min_length_px` | 40 *YAML* | Ignore compact gradient rings shorter than this. |
 
 ### Shape / structure
@@ -718,22 +722,22 @@ Defaults below are from current `config.yaml` unless noted. The Streamlit sideba
 | `min_circularity` | 0.0 | 0 keeps every blob. Do not raise this to reject letters. |
 | `max_support_area_px` | 0 *YAML* | 0 → cap at `6 × π r²`. Layout pads exceed this. |
 | `structure_neighbor_px` | 48 | Drop blobs with ≥ `structure_min_neighbors` others this close. 0 disables. |
-| `structure_min_neighbors` | 2 *YAML* | |
+| `structure_min_neighbors` | 3 Uniform / 2 NSEW | |
 | `structure_size_ratio` | 1.30 *YAML* | Keep a clustered blob if size ≥ this × neighbour median |
 | `structure_line_bin_px` | 10 *YAML* | Row/column binning for frame filter. 0 disables. |
 | `structure_line_min_run` | 3 *YAML* | |
 | `structure_line_min_span_px` | 48 *YAML* | |
 | `structure_line_max_gap_px` | 48 *YAML* | Hole larger than this → not a frame |
 
-`detection.recall_mode` and `detection.recall.*` are **unused**. `with_recall_profile()` is a no-op. Edge 12 / confidence 0.50 / circularity 0 are the standard gates.
+Uniform `config.yaml` is the default: edge 8 / confidence 0.50 / circularity 0 / three neighbours. The NSEW overlay is looser on clustering (two neighbours) and keeps a 12 px border drop.
 
 ### ML
 
 | Key | Default | Notes |
 |-----|---------|--------|
 | `ml.enabled` | true | Score proposals. Raises if the joblib is missing. |
-| `ml.model_path` | `models/particle_clf_v4_residual.joblib` | Relative to `particle_detection/`. Versioned; do not overwrite a vN file. |
-| `ml.threshold` | 0.23 | Keep blobs with `P(particle)` ≥ this (v4 on Groundup v7 v5+v7, beta 1: P 95.4%, R 76.2%). |
+| `ml.model_path` | Uniform `models/particle_clf_v4_residual.joblib`; NSEW `models/particle_clf_v8.joblib` | Relative to `particle_detection/`. Versioned; do not overwrite a vN file. |
+| `ml.threshold` | 0.23 Uniform / 0.37 NSEW | Keep blobs with `P(particle)` ≥ this. |
 | `ml.score_before_structure` | false | true = ML then cluster/line. false = cluster/line then ML. |
 
 ### Measurement / report
@@ -814,25 +818,13 @@ Work from the **symptom**, not from every slider at once. After a change, re-run
 - It does **not** detect on the stitched mosaic. Overlap is handled only by the KD-tree merge after per-tile detection.
 - It does **not** keep pad-corner L-junctions. Compact islands on a *single* edge (≥20 µm) or large flakes (≥40 µm) can survive the border band; corners cannot.
 - It does **not** try to split overlapping real particles. DoG overlap pruning keeps the larger scale; the merge step keeps the higher-confidence seed.
-- It does **not** train on the circled label JPEGs. The red marker would leak into the crop features. Training reads unmarked TIFF/BMP patches and residual channels.
-- `detection.recall_mode` does **not** switch a looser profile. That overlay was removed; the current YAML *is* the high-recall-ish standard.
+- It does **not** train models. Frozen joblibs under `models/` are scored at inference only.
 
 ---
 
 ## ML filter (optional)
 
-DoG remains the only proposal generator. After cheap geometric gates (and usually after structure filters), each blob is scored.
-
-`python -m src.training` (default `--mode patch`):
-
-1. Joins `labels/labels.csv` to detections (GroupKFold by tile).
-2. Extracts **unmarked** corrected-image + residual patches (circled crops under `labels/crops/` are ignored).
-3. Trains class-weighted ExtraTrees on HOG / layout features.
-4. Writes the next `models/particle_clf_v{N+1}.joblib` (never overwrites an existing vN).
-
-`--mode residual` is the old detector-float ExtraTrees on CSV columns only.
-
-At inference (`apply_ml_filter`):
+DoG remains the only proposal generator. After cheap geometric gates (and usually after structure filters), each blob is scored by `apply_ml_filter` against a frozen ExtraTrees joblib. There is no training UI.
 
 - Residual models score the ~12-float vector (`size_um`, `confidence`, circularity, support, edges, neighbours, local-peak SNR, radial rings).
 - Patch models rebuild unmarked patches on the **corrected tile** in the worker.
@@ -840,13 +832,7 @@ At inference (`apply_ml_filter`):
 
 Scoring a few dozen vectors (or patches) per tile is small next to DoG. `ml.enabled: true` with a missing joblib **raises**; it will not silently run classical-only.
 
-v4 at threshold **0.23** is the beta-1 standard on Groundup v7 (06-10) v5 and v7 labels (P 95.4%, R 76.2%).
-
-Typical loop:
-
-1. Run Detection (structure filters on, ML on or off).
-2. **Tinder** tab: label new hits; existing keys (including N/S/E/W aliases) are skipped.
-3. Train a new vN. Point `ml.model_path` at it and set `ml.threshold`.
+Uniform (`config.yaml`) uses **v4 residual at 0.23**. NSEW (`nsew_config.yaml`) uses **v8 at 0.37**.
 
 ---
 
@@ -859,13 +845,21 @@ streamlit run app.py
 
 Set the tile folder in the sidebar (or `input_dir` in `config.yaml`) and click **Run pipeline**. **Reset to standard values** restores every sidebar widget from `config.yaml` and turns the **NSEW** toggle off. Turning that toggle on overlays `nsew_config.yaml`.
 
-| Tab | Use |
-|-----|-----|
-| Detection | Run the pipeline, table, histogram, mosaic crop |
-| NSEW | Combine N/S/E/W lighting into combi / particles-only / symmetry |
-| Tiles | Walk one image at a time; zoom; mark a missed speck |
-| Last Run | Review the last `particles.csv` against labels |
-| Tinder | Label queue from detections |
-| Database | Saved particle / not-particle crops |
+| Module | Use |
+|--------|-----|
+| Capture | Camera, lighting, stage, autofocus, scan |
+| Analyse | Run the pipeline, table, histogram, mosaic crop |
+| Verify → Label | Label queue from detections |
+| Verify → Inspect | Walk one image; zoom; mark a missed speck |
+| Verify → Database | Saved particle / not-particle crops |
+| Additional tools | Shadow measurement and Redirector |
 
-Tests live under `tests/` (`pytest`). Synthetic fixtures in `tests/fixtures/synthetic.py` cover lattice tiles, dark-field flakes, and pad corners so the filters have regression locks.
+Command-line helpers (from the project folder):
+
+```bash
+python scripts/nsew_to_combi.py [folder]
+python scripts/audit_misses.py
+python scripts/shadow_check.py --ids …
+```
+
+Tests live under `tests/` (`pytest`, after `pip install -r requirements-dev.txt`). Synthetic fixtures in `tests/fixtures/synthetic.py` cover lattice tiles, dark-field flakes, and pad corners so the filters have regression locks.

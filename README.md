@@ -23,7 +23,7 @@ On this GitHub page, click **Code**, then **Download ZIP**. Unzip it. The folder
 
 ## Install
 
-You need Python 3.11 or newer. 
+You need Python 3.11 or newer (3.13 is fine).
 
 On Mac: From this folder in your terminal, run:
 
@@ -36,7 +36,14 @@ pip install -r requirements.txt
 
 On Windows: Activate with `.venv\Scripts\activate` instead of `source .venv/bin/activate`.
 
-## Install
+Tests need the extra packages in `requirements-dev.txt`:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+## Run
 
 With the virtual environment active, from this folder:
 

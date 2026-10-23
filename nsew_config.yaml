@@ -1,3 +1,4 @@
+# Overlay when the sidebar NSEW toggle is on. Merged on top of config.yaml.
 pixel_size_nm: 3610.0
 preprocessing:
   denoise: true
@@ -35,6 +36,7 @@ detection:
   local_snr_sigma: 0.0
   edge_soften_sigma: 12.0
   edge_soften_strength: 2.0
+  # Wider border drop than Uniform (8 px) and a looser neighbour gate (Uniform uses 3).
   edge_exclude_px: 12.0
   edge_min_length_px: 40.0
   min_circularity: 0.0
