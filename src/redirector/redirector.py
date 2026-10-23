@@ -5,7 +5,6 @@ import math
 from dataclasses import dataclass
 
 PMMA_N = 1.49
-# Field of view: a square centred under the ring, by default 5 mm below the inner bottom edge.
 FOV_SIZE_MM = 6.86
 FOV_DEPTH_MM = 5.0
 _EPS = 1e-5
@@ -733,7 +732,6 @@ def section_image(
         width_px = 5 if index == selected else 2
         if len(pixels) >= 2:
             draw.line(pixels, fill=colour, width=width_px)
-    # Keep polyline order aligned with traces, not draw order.
     polylines = [[xy(point) for point in points] for points in drawn]
     fov_a, fov_b = xy((-half, z_fov)), xy((half, z_fov))
     draw.line([fov_a, fov_b], fill="#15803d", width=5)

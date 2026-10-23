@@ -1,4 +1,4 @@
-"""Train a tile-grouped particle vs not-particle classifier from labels.csv.
+"""Train a tile-grouped particle vs not-particle classifier from all_labels.csv.
 
 Does not read circled crop JPEGs. Default ``--mode patch`` extracts unmarked
 TIFF/residual patches and trains HOG ExtraTrees. ``--mode residual`` is the
@@ -24,6 +24,7 @@ from sklearn.metrics import precision_score, recall_score
 from sklearn.model_selection import GroupKFold, StratifiedKFold, cross_val_predict
 
 from src.overall.config import DEFAULT_OUTPUT_DIR, PACKAGE_ROOT, cfg_get
+from src.verification.store import default_labels_path
 from src.overall.io.tile_loader import DEFAULT_FILENAME_PATTERN
 from src.verification.inspect import UNHAPPINESS_TARGET, unhappiness_score
 from src.verification.queue import detection_key
@@ -51,7 +52,7 @@ MIN_RECALL = 0.95
 
 
 def default_label_path() -> Path:
-    return PACKAGE_ROOT / "labels" / "labels.csv"
+    return default_labels_path()
 
 
 def default_detection_paths() -> list[Path]:
@@ -474,7 +475,7 @@ def save_artifact(artifact: dict[str, Any], path: str | Path) -> Path:
     payload = {
         key: value
         for key, value in artifact.items()
-        if key not in {"oof_proba", "oof_hog", "oof_cnn"}  # training-only scores
+        if key not in {"oof_proba", "oof_hog", "oof_cnn"}
     }
     joblib.dump(payload, destination)
     return destination

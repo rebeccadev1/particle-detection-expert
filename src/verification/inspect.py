@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -11,7 +12,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from src.overall.config import cfg_get
+from src.overall.config import DEFAULT_INPUT_DIR, cfg_get, resolve_output_dir
 from src.main_pipeline.detection.detector import blob_footprint
 from src.overall.io.tile_loader import (
     DEFAULT_FILENAME_PATTERN,
@@ -46,6 +47,7 @@ from src.main_pipeline.measurement.measurer import (
     combi_key_family,
     is_combi_tile,
     is_direction_tile,
+    is_grid_tile,
     is_nsew_family_tile,
     is_particles_only_tile,
     is_submap_lighting_tile,
@@ -53,14 +55,13 @@ from src.main_pipeline.measurement.measurer import (
     lighting_tile_id,
     submap_id,
 )
-from src.main_pipeline.stitching.stitcher import TilePlacement
+from src.main_pipeline.stitching.stitcher import LazyMosaic, TilePlacement
 
 LABEL_CIRCLE_COLORS: dict[str, tuple[int, int, int]] = {
     "particle": (40, 180, 70),
     "not_particle": (255, 40, 40),
     "not_sure": (60, 140, 220),
 }
-# Darker than a detected particle so a click the detector missed stays visible.
 MISSED_PARTICLE_COLOR = (12, 78, 18)
 UNLABELED_CIRCLE_COLOR = CIRCLE_COLOR
 OVERVIEW_MAX_SIDE = 960
@@ -84,8 +85,8 @@ CELL_NAMES = (
     ("SW", "S", "SE"),
 )
 MISS_SOURCE = "tile_inspect"
+MARKED_MOSAIC_NAME = "mosaic_marked.png"
 DEFAULT_MISS_SIZE_UM = 15.0
-# Pointer misses smaller than this on the photograph are dropped, circle included.
 MISSED_MIN_SIZE_NM = 20_000.0
 _PARTICLES_ONLY_DIR_NAMES = {"particles only", "particles only output"}
 
@@ -256,11 +257,14 @@ def pointer_miss_rows(
     detections: pd.DataFrame | None,
     tile_name: str,
     folder_tiles: Sequence[str] | None = None,
+    run_dir: str | None = None,
 ) -> pd.DataFrame:
     """Particle-pointer marks the detector missed on this tile.
 
     A click stays on the picture it was marked on. A hit on another tile in
     the same subfolder does not erase it, and does not draw it there.
+    A ``(row,col)`` click also stays in its scan folder. A mark with no
+    folder does not attach once ``run_dir`` is set.
     """
     if labels is None or labels.empty or "source_tile" not in labels.columns:
         return pd.DataFrame()
@@ -297,6 +301,13 @@ def pointer_miss_rows(
         marks = marks.loc[
             marks["source_tile"].astype(str).map(lighting_tile_id) == wanted
         ]
+        if run_dir and not marks.empty:
+            grid = marks["source_tile"].astype(str).map(is_grid_tile)
+            if bool(grid.any()) or is_grid_tile(tile_name):
+                on_this_scan = marks["source_tile"].astype(str).map(
+                    lambda name: label_on_run_tiles(name, {tile_name}, run_dir)
+                )
+                marks = marks.loc[~grid | on_this_scan]
     if marks.empty:
         return pd.DataFrame()
     if "key" in marks.columns:
@@ -557,14 +568,82 @@ def staged_set_id(source_tile: str) -> str:
     return ""
 
 
-def label_on_run_tiles(source_tile: str, tile_names: set[str] | None) -> bool:
+@lru_cache(maxsize=256)
+def _directory_key(folder: str) -> str:
+    """One id for a scan folder, whether it is stored relative or absolute."""
+    text = str(folder).replace("\\", "/").strip().strip("/")
+    if not text or text == ".":
+        return ""
+    resolved = _resolve_scene_folder(text)
+    if resolved is None:
+        return text
+    try:
+        return resolved.resolve().relative_to(DEFAULT_INPUT_DIR.resolve()).as_posix()
+    except (ValueError, OSError):
+        try:
+            return resolved.resolve().as_posix()
+        except OSError:
+            return text
+
+
+def _grid_parent(source_tile: str) -> str:
+    parent = Path(str(source_tile).replace("\\", "/")).parent.as_posix()
+    if parent in ("", "."):
+        return ""
+    return _directory_key(parent)
+
+
+def _grid_id(source_tile: str, assume_dir: str | None = None) -> str:
+    """Folder plus filename. A bare filename stays bare unless ``assume_dir`` is set."""
+    name = _basename(source_tile)
+    parent = _grid_parent(source_tile)
+    if not parent and assume_dir:
+        parent = _directory_key(assume_dir)
+    if parent:
+        return f"{parent}/{name}"
+    return name
+
+
+def with_grid_folder(record: Mapping[str, Any], run_dir: str | None) -> dict[str, Any]:
+    """Copy a detection so a ``(row,col)`` label keeps this scan folder.
+
+    The results file stores only ``(1,1).png``. Without the folder, the saved
+    mark matches every scan that uses that filename and is then dropped.
+    """
+    row = record.to_dict() if hasattr(record, "to_dict") else dict(record)
+    tile = str(row.get("source_tile") or "")
+    if not run_dir or not is_grid_tile(tile) or _grid_parent(tile):
+        return row
+    folder = _directory_key(str(run_dir))
+    if not folder:
+        return row
+    row["source_tile"] = f"{folder}/{_basename(tile)}"
+    return row
+
+
+def label_on_run_tiles(
+    source_tile: str,
+    tile_names: set[str] | None,
+    run_dir: str | None = None,
+) -> bool:
     """True when this label belongs to one of the last-run tiles.
 
-    A Pointer click stored as ``v5/N.png`` belongs to ``v5_2of4.png``.
-    ``v6/N.png`` does not.
+    A grid file matches the folder and the filename. ``(1,1).png`` in another
+    scan does not. A Pointer click stored as ``v5/N.png`` belongs to
+    ``v5_2of4.png``. ``v6/N.png`` does not. A grid mark with no folder does
+    not attach to a run that has one.
     """
     if tile_names is None:
         return True
+    if is_grid_tile(source_tile):
+        if run_dir and not _grid_parent(source_tile):
+            return False
+        label_id = _grid_id(source_tile)
+        for name in tile_names:
+            other = _grid_id(name, assume_dir=run_dir if not _grid_parent(name) else None)
+            if label_id == other:
+                return True
+        return False
     base = _basename(source_tile)
     light_review = is_submap_lighting_tile(source_tile) or (
         is_combi_tile(source_tile) and bool(submap_id(source_tile))
@@ -579,12 +658,173 @@ def label_on_run_tiles(source_tile: str, tile_names: set[str] | None) -> bool:
     set_id = staged_set_id(source_tile)
     if not set_id:
         return False
-    # v6_2of4.bmp is Groundup v4. It is not the v6_2of4.png field in this run.
     suffix = Path(base).suffix.lower()
     return any(
         staged_set_id(name) == set_id and Path(name).suffix.lower() == suffix
         for name in tile_names
     )
+
+
+def label_colors_for_hits(
+    detections: pd.DataFrame | None,
+    labels: pd.DataFrame | None,
+    run_dir: str | None = None,
+) -> dict[str, tuple[int, int, int]]:
+    """Review colour for each detection key on this run.
+
+    A label from another scan folder is left out. Hits with no mark are absent,
+    so the mosaic keeps them orange.
+    """
+    tagged = tagged_if_needed(detections) if detections is not None else pd.DataFrame()
+    if tagged is None or tagged.empty or "key" not in tagged.columns:
+        return {}
+    scoped = labels
+    if (
+        scoped is not None
+        and not scoped.empty
+        and "source_tile" in scoped.columns
+        and "source_tile" in tagged.columns
+    ):
+        tiles = set(tagged["source_tile"].astype(str))
+        keep = scoped["source_tile"].astype(str).map(
+            lambda name: label_on_run_tiles(name, tiles, run_dir)
+        )
+        scoped = scoped.loc[keep]
+    label_map = label_map_with_aliases(scoped)
+    colors: dict[str, tuple[int, int, int]] = {}
+    for key in tagged["key"].astype(str):
+        name = label_map.get(key, "")
+        if name in LABEL_CIRCLE_COLORS:
+            colors[key] = LABEL_CIRCLE_COLORS[name]
+    return colors
+
+
+def write_marked_mosaic(
+    config: Mapping[str, Any],
+    detections: pd.DataFrame | None,
+    labels: pd.DataFrame | None,
+    *,
+    mosaic: LazyMosaic | None = None,
+) -> Path | None:
+    """Write ``mosaic_marked.png`` in this run's output folder.
+
+    The plain mosaic is copied and the review circles are drawn on it.
+    Green, red, and blue are Label marks. Orange is still unlabeled.
+    Dark green is a particle clicked in Inspect. Returns None when this
+    run has no stitched mosaic. ``mosaic_overlay.png`` is left as it was.
+    """
+    settings = dict(config)
+    output_dir = str(cfg_get(settings, "output_dir", "") or "").strip()
+    if not output_dir:
+        return None
+    if mosaic is None or not getattr(mosaic, "placements", None):
+        from src.main_pipeline.runner import load_report_mosaic
+
+        mosaic = load_report_mosaic(settings)
+    if not getattr(mosaic, "placements", None) or int(mosaic.full_width) < 1:
+        return None
+
+    from src.main_pipeline.report.report_generator import (
+        draw_overlay_markers,
+        overlay_rgb,
+    )
+
+    out = resolve_output_dir(output_dir)
+    plain_path = out / "mosaic_plain.png"
+    scale: float | None = None
+    if plain_path.is_file():
+        bgr = cv2.imread(str(plain_path), cv2.IMREAD_COLOR)
+        if bgr is None:
+            raise OSError(f"Could not read {plain_path}")
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        scale = rgb.shape[1] / float(mosaic.full_width)
+    else:
+        rgb = overlay_rgb(mosaic, settings, crop=None)
+    run_dir = str(cfg_get(settings, "input_dir", "") or "") or None
+    frame, colors = _mosaic_review_marks(detections, labels, mosaic, run_dir)
+    marked = draw_overlay_markers(
+        rgb, mosaic, frame, settings, colors=colors, scale=scale
+    )
+    dest = out / MARKED_MOSAIC_NAME
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    written = cv2.cvtColor(np.asarray(marked), cv2.COLOR_RGB2BGR)
+    if not cv2.imwrite(str(dest), written):
+        raise OSError(f"Failed to write mosaic image to {dest}")
+    return dest
+
+
+def _mosaic_review_marks(
+    detections: pd.DataFrame | None,
+    labels: pd.DataFrame | None,
+    mosaic: LazyMosaic,
+    run_dir: str | None,
+) -> tuple[pd.DataFrame, dict[str, tuple[int, int, int]]]:
+    """Detection rows plus Inspect clicks, with a colour for each key."""
+    tagged = tagged_if_needed(detections) if detections is not None else pd.DataFrame()
+    if tagged is None:
+        tagged = pd.DataFrame()
+    colors = label_colors_for_hits(tagged, labels, run_dir=run_dir)
+    tile_names = {placement.name for placement in mosaic.placements}
+    if not tagged.empty and "source_tile" in tagged.columns:
+        tile_names.update(tagged["source_tile"].astype(str))
+    misses = _misses_for_mosaic(labels, tagged, tile_names, run_dir)
+    if misses.empty:
+        return tagged, colors
+    placed = {placement.name for placement in mosaic.placements}
+    fallback = next(iter(placed))
+
+    def _on_mosaic(name: str) -> str:
+        base = str(name).replace("\\", "/").rsplit("/", 1)[-1]
+        return base if base in placed else fallback
+
+    misses = misses.copy()
+    misses["source_tile"] = misses["source_tile"].astype(str).map(_on_mosaic)
+    for key in misses["key"].astype(str):
+        colors[key] = MISSED_PARTICLE_COLOR
+    keep = [
+        column
+        for column in ("source_tile", "x_global", "y_global", "size", "key")
+        if column in misses.columns
+    ]
+    extra = misses.loc[:, keep]
+    if tagged.empty:
+        return extra.reset_index(drop=True), colors
+    return pd.concat([tagged, extra], ignore_index=True), colors
+
+
+def _misses_for_mosaic(
+    labels: pd.DataFrame | None,
+    detections: pd.DataFrame,
+    tile_names: set[str],
+    run_dir: str | None,
+) -> pd.DataFrame:
+    """Inspect clicks on this run that are not already detector hits."""
+    if (
+        labels is None
+        or labels.empty
+        or "source_tile" not in labels.columns
+        or "label" not in labels.columns
+        or "source_csv" not in labels.columns
+    ):
+        return pd.DataFrame()
+    marks = labels.loc[
+        (labels["label"].astype(str) == "particle")
+        & (labels["source_csv"].astype(str) == MISS_SOURCE)
+    ].copy()
+    if marks.empty or not tile_names:
+        return pd.DataFrame()
+    on_run = marks["source_tile"].astype(str).map(
+        lambda name: label_on_run_tiles(name, tile_names, run_dir)
+    )
+    marks = marks.loc[on_run]
+    if marks.empty:
+        return pd.DataFrame()
+    if "key" in marks.columns and not detections.empty and "key" in detections.columns:
+        found = expand_labeled_keys(detections["key"].astype(str))
+        marks = marks.loc[~marks["key"].astype(str).isin(found)]
+    if marks.empty or "key" not in marks.columns:
+        return pd.DataFrame()
+    return marks.drop_duplicates(subset=["key"], keep="last").reset_index(drop=True)
 
 
 def _tiles_for_folder_labels(
@@ -623,6 +863,7 @@ def last_run_class_counts(
     tile_names: Sequence[str] | None = None,
     min_size_nm: float = 0.0,
     folder_tiles: Sequence[str] | None = None,
+    run_dir: str | None = None,
 ) -> dict[str, float]:
     """Last-run detection totals split by label, plus missed inspect marks.
 
@@ -634,7 +875,8 @@ def last_run_class_counts(
       in the last run (inspect marks and other misses), at least
       ``min_size_nm`` when that floor is > 0 (Last Run shows this as
       undetected real ≥ that size, typically 20 µm). A hit on another tile
-      in the same subfolder does not count.
+      in the same subfolder does not count. A grid label from another folder
+      does not count. ``run_dir`` is that folder.
     * ``n_real_total`` — ``n_real`` + ``n_undetected``
     * ``precision`` — ``n_real / n_detected`` (unlabeled hits count as fake)
     * ``recall`` — ``n_real / n_real_total``
@@ -648,7 +890,7 @@ def last_run_class_counts(
     label_tiles = _tiles_for_folder_labels(tile_names, folder_tiles)
     if scoped is not None and not scoped.empty and label_tiles is not None:
         keep = scoped["source_tile"].astype(str).map(
-            lambda name: label_on_run_tiles(name, label_tiles)
+            lambda name: label_on_run_tiles(name, label_tiles, run_dir)
         )
         scoped = scoped.loc[keep]
     label_map = label_map_with_aliases(scoped)
@@ -704,6 +946,7 @@ def last_run_class_counts_by_tile(
     tile_names: Sequence[str],
     min_size_nm: float = 0.0,
     folder_tiles: Sequence[str] | None = None,
+    run_dir: str | None = None,
 ) -> pd.DataFrame:
     """``last_run_class_counts`` for each tile, one row per tile.
 
@@ -726,6 +969,7 @@ def last_run_class_counts_by_tile(
             tile_names=[name],
             min_size_nm=min_size_nm,
             folder_tiles=label_tiles,
+            run_dir=run_dir,
         )
         rows.append({"tile": tile, **counts})
     return pd.DataFrame(rows)
@@ -748,6 +992,124 @@ def std_of_crop_cells(cells: Sequence[Mapping[str, Any]]) -> dict[str, float | N
     }
 
 
+def _score_records(
+    records: pd.DataFrame | Sequence[Mapping[str, Any]] | None,
+) -> list[Mapping[str, Any]]:
+    if records is None:
+        return []
+    if isinstance(records, pd.DataFrame):
+        if records.empty:
+            return []
+        return records.to_dict(orient="records")
+    return list(records)
+
+
+def std_of_tile_scores(
+    records: pd.DataFrame | Sequence[Mapping[str, Any]] | None,
+    *,
+    beta: float = 1.0,
+) -> dict[str, float | None]:
+    """Sample standard deviation of precision, recall, and Fβ across tiles.
+
+    Each tile is one observation, including a tile with no detections or no
+    labeled real particles (those scores are 0). The result is undefined when
+    fewer than two tiles are present.
+    """
+    precisions: list[float] = []
+    recalls: list[float] = []
+    f_betas: list[float] = []
+    for record in _score_records(records):
+        n_detected = float(record.get("n_detected") or 0.0)
+        n_real = float(record.get("n_real") or 0.0)
+        n_undetected = float(record.get("n_undetected") or 0.0)
+        n_real_total = float(record.get("n_real_total") or (n_real + n_undetected))
+        precision = (n_real / n_detected) if n_detected else 0.0
+        recall = (n_real / n_real_total) if n_real_total else 0.0
+        precisions.append(precision)
+        recalls.append(recall)
+        f_betas.append(f_beta_score(precision, recall, beta))
+    return {
+        "precision": _sample_std(precisions),
+        "recall": _sample_std(recalls),
+        "f_beta": _sample_std(f_betas),
+    }
+
+
+def subfolder_of_tile(tile: str) -> str:
+    """``v7`` for a shot inside a ``vN`` folder. Empty when the tile sits in the run folder."""
+    return submap_id(tile)
+
+
+def subfolder_score_rows(
+    per_tile: pd.DataFrame | None,
+    *,
+    folder_name: str = "",
+    beta: float = 1.0,
+    std_tiles: pd.DataFrame | None = None,
+) -> list[dict[str, Any]]:
+    """One score per subfolder, adding every tile that lives there.
+
+    Tiles in the run folder, such as ``(1,1).png`` and ``(3,3).png``, share
+    one row named for that folder. ``v5/…`` and ``v7/…`` stay on separate rows.
+    Counts are summed. P and R are scored from those totals. The standard
+    deviations are the spread of each tile's own P, R, and Fβ. ``std_tiles``
+    is that sample when it should include every tile in the input folder,
+    including tiles that contributed no counts.
+    """
+    if per_tile is None or per_tile.empty or "tile" not in per_tile.columns:
+        return []
+    plain_name = Path(str(folder_name).replace("\\", "/")).name or "Folder"
+    order: list[str] = []
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in per_tile.to_dict(orient="records"):
+        key = subfolder_of_tile(str(record["tile"]))
+        if key not in grouped:
+            order.append(key)
+            grouped[key] = []
+        grouped[key].append(record)
+    std_grouped: dict[str, list[Mapping[str, Any]]] = {}
+    if std_tiles is not None and not std_tiles.empty and "tile" in std_tiles.columns:
+        for record in std_tiles.to_dict(orient="records"):
+            std_grouped.setdefault(subfolder_of_tile(str(record["tile"])), []).append(record)
+
+    rows: list[dict[str, Any]] = []
+    count_keys = (
+        "n_detected",
+        "n_real",
+        "n_fake",
+        "n_unlabeled",
+        "n_undetected",
+        "n_undetected_below",
+        "n_not_sure",
+    )
+    for key in order:
+        records = grouped[key]
+        totals = {name: 0.0 for name in count_keys}
+        for record in records:
+            for name in count_keys:
+                totals[name] += float(record.get(name) or 0.0)
+        n_detected = int(totals["n_detected"])
+        n_real = int(totals["n_real"])
+        n_undetected = int(totals["n_undetected"])
+        n_real_total = n_real + n_undetected
+        spread = std_of_tile_scores(std_grouped.get(key, records), beta=beta)
+        rows.append(
+            {
+                "name": key or plain_name,
+                "n_detected": n_detected,
+                "n_real": n_real,
+                "n_undetected": n_undetected,
+                "n_real_total": n_real_total,
+                "precision": (n_real / n_detected) if n_detected else None,
+                "recall": (n_real / n_real_total) if n_real_total else None,
+                "precision_std": spread["precision"],
+                "recall_std": spread["recall"],
+                "f_beta_std": spread["f_beta"],
+            }
+        )
+    return rows
+
+
 def crop_metric_cells(
     detections: pd.DataFrame | None,
     labels: pd.DataFrame | None,
@@ -761,6 +1123,7 @@ def crop_metric_cells(
     folder_tiles: Sequence[str] | None = None,
     beta: float = 1.0,
     grid: int = GRID_N,
+    run_dir: str | None = None,
 ) -> list[dict[str, Any]]:
     """Precision, recall, and Fβ for each cell of the ``grid`` × ``grid`` zoom split.
 
@@ -777,7 +1140,7 @@ def crop_metric_cells(
     label_tiles = _tiles_for_folder_labels(tile_names, folder_tiles)
     if scoped is not None and not scoped.empty and label_tiles is not None:
         keep = scoped["source_tile"].astype(str).map(
-            lambda name: label_on_run_tiles(name, label_tiles)
+            lambda name: label_on_run_tiles(name, label_tiles, run_dir)
         )
         scoped = scoped.loc[keep]
     label_map = label_map_with_aliases(scoped)
@@ -867,6 +1230,7 @@ def crop_metric_std(
     folder_tiles: Sequence[str] | None = None,
     beta: float = 1.0,
     grid: int = GRID_N,
+    run_dir: str | None = None,
 ) -> dict[str, float | None]:
     """Sample standard deviation of precision, recall, and Fβ across a tile's crops.
 
@@ -887,6 +1251,7 @@ def crop_metric_std(
         folder_tiles=folder_tiles,
         beta=beta,
         grid=grid,
+        run_dir=run_dir,
     )
     if not cells:
         return empty
@@ -1182,7 +1547,6 @@ def overlay_view(
     return OverlayView(rgb=out, crop_x0=crop_x0, crop_y0=crop_y0, scale=scale)
 
 
-# Yellow fill on the measured footprint, inside the marker circle.
 FOOTPRINT_EDGE_COLOR = (255, 220, 40)
 
 
@@ -1224,8 +1588,6 @@ def _draw_footprint_edge(
     )
 
 
-# Thin outline of the measured footprint on database particle crops.
-# Standard colour #0F238C.
 AREA_LINE_COLOR = (15, 35, 140)
 AREA_LINE_THICKNESS = 2
 
@@ -1273,7 +1635,6 @@ def outline_particle_area(
         cy = float(np.median(ys))
         cx = float(np.median(xs))
         ring = float(np.median(np.hypot(ys.astype(np.float64) - cy, xs.astype(np.float64) - cx)))
-        # The saved circle is drawn 10 px outside the equivalent radius.
         radius = max(ring - 10.0, 2.0)
         keep = ~marker
         fill = float(np.median(gray[keep])) if np.any(keep) else float(np.median(gray))
@@ -1458,6 +1819,27 @@ def candidate_placements(
             )
         )
     return ordered
+
+
+def fresh_inspect_click(click: Mapping[str, Any] | None, seen: Any) -> int | None:
+    """Click time when this press has not already been turned into a mark.
+
+    The click widget keeps returning its last press after the picture changes.
+    Opening a crop must not paint that stored press as a new dark-green circle.
+    """
+    if not isinstance(click, Mapping):
+        return None
+    try:
+        stamp = int(click.get("unix_time"))
+    except (TypeError, ValueError):
+        return None
+    if seen is not None:
+        try:
+            if stamp == int(seen):
+                return None
+        except (TypeError, ValueError):
+            pass
+    return stamp
 
 
 def display_xy_to_local(

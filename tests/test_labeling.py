@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 import tifffile
 
 from src.verification.crops import (
@@ -33,7 +34,7 @@ from src.verification.queue import (
 from src.verification.store import (
     LabelStore,
     crop_source_folder,
-    label_campaign,
+    label_database,
     newest_first,
     rows_for_campaign,
 )
@@ -74,6 +75,19 @@ def test_global_nm_to_local_px_subtracts_origin() -> None:
     x_local, y_local = global_nm_to_local_px(960.0, 480.0, placement, pixel_size_nm=2.0)
     assert x_local == 960.0 / 2.0 - 80
     assert y_local == 480.0 / 2.0 - 100
+
+
+def test_resolve_input_dir_leaves_duplicate_nested_names(tmp_path: Path, monkeypatch) -> None:
+    from src.overall.io import tile_loader
+    from src.overall.io.tile_loader import resolve_input_dir
+
+    inputs = tmp_path / "Inputs"
+    for campaign in ("Glovebox", "Archive"):
+        (inputs / campaign / "R3 04-08").mkdir(parents=True)
+    monkeypatch.setattr(tile_loader, "DEFAULT_INPUT_DIR", inputs)
+
+    with pytest.raises(FileNotFoundError):
+        resolve_input_dir("R3 04-08")
 
 
 def test_find_tile_path_accepts_bmp_for_tif_name(tmp_path: Path) -> None:
@@ -446,6 +460,41 @@ def test_nsew_direction_crops_shows_nsew_for_combined(tmp_path: Path) -> None:
     assert all(_red_mask(view.rgb).any() for view in views.values())
 
 
+def test_nsew_label_crop_uses_the_combi_not_the_letters(tmp_path: Path) -> None:
+    import cv2
+
+    from src.verification.crops import nsew_combi_crop
+
+    folder = tmp_path / "scan"
+    folder.mkdir()
+    for name in ("N", "S", "E", "W"):
+        gray = np.full((64, 64), 30, dtype=np.uint8)
+        gray[28:36, 28:36] = 200
+        assert cv2.imwrite(str(folder / f"{name}.png"), gray)
+    combi = np.zeros((64, 64), dtype=np.uint8)
+    combi[28:36, 28:36] = 180
+    assert cv2.imwrite(str(folder / "combi_2of4.png"), combi)
+    row = {
+        "id": 1,
+        "source_tile": "combi_2of4.png",
+        "x_global": 32.0,
+        "y_global": 32.0,
+        "size": 8.0,
+        "confidence": 0.9,
+    }
+    crop = nsew_combi_crop(row, _config(folder))
+    assert crop is not None
+    assert crop.direction == "Combi"
+    assert crop.tile_path.name == "combi_2of4.png"
+    assert _red_mask(crop.rgb).any()
+
+    letter = dict(row, source_tile="N.png")
+    from_letter = nsew_combi_crop(letter, _config(folder))
+    assert from_letter is not None
+    assert from_letter.tile_path.name == "combi_2of4.png"
+    assert from_letter.direction == "Combi"
+
+
 def test_crop_direction_views_shows_nwes(tmp_path: Path) -> None:
     import cv2
 
@@ -538,10 +587,8 @@ def test_direction_crop_prefers_contrast_over_raw_brightness(tmp_path: Path) -> 
     stage.mkdir()
     yy, xx = np.ogrid[:64, :64]
     disk = (xx - 32) ** 2 + (yy - 32) ** 2 <= 4 ** 2
-    # N is brighter overall, but the speck barely clears its background.
     north = np.full((64, 64), 180, dtype=np.uint8)
     north[disk] = 200
-    # W is darker, and the speck stands further above the ring around it.
     west = np.full((64, 64), 20, dtype=np.uint8)
     west[disk] = 90
     flat = np.full((64, 64), 30, dtype=np.uint8)
@@ -1377,23 +1424,115 @@ def test_shared_hit_keeps_the_label_from_either_picture() -> None:
         assert colors[labeled_key] == "particle"
 
 
-def test_label_campaign_splits_glovebox_r_tiles_and_keeps_groundup_v1() -> None:
-    assert label_campaign("R3_1_23_5X.tif") == "glovebox"
-    assert label_campaign("n2_4_16.tif") == "glovebox"
-    assert label_campaign("n2_v2_6_18.tif") == "glovebox"
-    assert label_campaign("n3_1ms_1_1_bf.tif") == "glovebox"
-    assert label_campaign("bf_-1.2ms.tif") == "glovebox"
-    assert label_campaign("R0_1_1.tiff") == "groundup"
-    assert label_campaign("v7/wafer_shot_0_quad0_exp200000.png") == "groundup"
-    assert label_campaign("N.png") == "groundup"
+def test_label_database_splits_uniform_nsew_and_glovebox() -> None:
+    assert label_database("R3_1_23_5X.tif") == "glovebox"
+    assert label_database("n2_4_16.tif") == "glovebox"
+    assert label_database("n2_v2_6_18.tif") == "glovebox"
+    assert label_database("n3_1ms_1_1_bf.tif") == "glovebox"
+    assert label_database("bf_-1.2ms.tif") == "glovebox"
+    assert label_database("R0_1_1.tiff") == "nsew"
+    assert label_database("v7/wafer_shot_0_quad0_exp200000.png") == "nsew"
+    assert label_database("N.png") == "nsew"
+    assert label_database("combi_2of4.png") == "nsew"
+    assert label_database("v3_2of4.bmp") == "nsew"
+    assert label_database("(1,1).png") == "nsew"
+    assert label_database("5e4.png") == "nsew"
+    assert label_database("WhatsApp Image 2026-09-15 at 15.21.42.jpeg") == "nsew"
+    assert label_database("v5/wafer_shot_4_all_exp200000.png") == "uniform"
+    assert label_database("uniform.png") == "uniform"
+    assert label_database("angles_v1_exp200000_3of6.png") is None
 
     frame = pd.DataFrame(
         {
-            "source_tile": ["R3_1_1_5X.tif", "wafer_shot_0.png", "n2_1_8.tif"],
-            "label": ["particle", "not_particle", "particle"],
+            "source_tile": [
+                "R3_1_1_5X.tif",
+                "v5/wafer_shot_4_all_exp200000.png",
+                "N.png",
+                "angles_v1_exp200000_3of6.png",
+                "n2_1_8.tif",
+            ],
+            "label": ["particle", "not_particle", "particle", "particle", "particle"],
         }
     )
     glovebox = rows_for_campaign(frame, "glovebox")
-    groundup = rows_for_campaign(frame, "groundup")
+    uniform = rows_for_campaign(frame, "uniform")
+    nsew = rows_for_campaign(frame, "nsew")
     assert glovebox["source_tile"].tolist() == ["R3_1_1_5X.tif", "n2_1_8.tif"]
-    assert groundup["source_tile"].tolist() == ["wafer_shot_0.png"]
+    assert uniform["source_tile"].tolist() == ["v5/wafer_shot_4_all_exp200000.png"]
+    assert nsew["source_tile"].tolist() == ["N.png"]
+
+    shared = pd.DataFrame(
+        {
+            "key": ["v7_LIGHT_100_200", "v3_NSEW_100_200"],
+            "source_tile": [
+                "v7/wafer_shot_0_quad0_exp200000.png",
+                "v3/N.png",
+            ],
+            "label": ["particle", "particle"],
+        }
+    )
+    assert rows_for_campaign(shared, "uniform")["source_tile"].tolist() == [
+        "v7/wafer_shot_0_quad0_exp200000.png"
+    ]
+    assert rows_for_campaign(shared, "nsew")["source_tile"].tolist() == [
+        "v7/wafer_shot_0_quad0_exp200000.png",
+        "v3/N.png",
+    ]
+
+
+def test_label_store_writes_all_labels_and_the_mode_file(tmp_path: Path) -> None:
+    store = LabelStore(tmp_path / "labels")
+    rgb = np.zeros((8, 8, 3), dtype=np.uint8)
+    rows = [
+        ("v5/wafer_shot_4_all_exp200000.png", 1.0, "particle"),
+        ("N.png", 2.0, "not_particle"),
+        ("angles_v1_exp200000_3of6.png", 3.0, "particle"),
+        ("R3_1_1_5X.tif", 4.0, "particle"),
+    ]
+    for tile, x, label in rows:
+        store.apply_label(
+            {
+                "id": 1,
+                "source_tile": tile,
+                "x_global": x,
+                "y_global": 10.0,
+                "size": 20_000.0,
+                "confidence": 0.5,
+                "source_csv": "particles.csv",
+            },
+            label,
+            rgb,
+        )
+    saved = pd.read_csv(store.csv_path)
+    assert len(saved) == 4
+    assert store.csv_path.name == "all_labels.csv"
+    uniform = pd.read_csv(store.root / "labels_uniform.csv")
+    nsew = pd.read_csv(store.root / "labels_nsew.csv")
+    glovebox = pd.read_csv(store.root / "labels_glovebox.csv")
+    assert uniform["source_tile"].tolist() == ["v5/wafer_shot_4_all_exp200000.png"]
+    assert nsew["source_tile"].tolist() == ["N.png"]
+    assert glovebox["source_tile"].tolist() == ["R3_1_1_5X.tif"]
+    assert not (store.root / "labels.csv").exists()
+
+    store.apply_label(
+        {
+            "id": 2,
+            "source_tile": "v7/wafer_shot_0_quad0_exp200000.png",
+            "x_global": 50.0,
+            "y_global": 60.0,
+            "size": 20_000.0,
+            "confidence": 0.5,
+            "source_csv": "particles.csv",
+        },
+        "particle",
+        rgb,
+    )
+    saved = pd.read_csv(store.csv_path)
+    quad_key = "v7_LIGHT_50_60"
+    assert quad_key in set(saved["key"].astype(str))
+    assert int((saved["key"].astype(str) == quad_key).sum()) == 1
+    uniform = pd.read_csv(store.root / "labels_uniform.csv")
+    nsew = pd.read_csv(store.root / "labels_nsew.csv")
+    assert quad_key in set(uniform["key"].astype(str))
+    assert quad_key in set(nsew["key"].astype(str))
+    assert "NSEW_2_10" not in set(uniform["key"].astype(str))

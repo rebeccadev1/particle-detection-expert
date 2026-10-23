@@ -68,7 +68,12 @@ def trace_click(
 ) -> dict[str, Any]:
     """Preprocess ``image`` and return the gate that drops ``(y, x)``."""
     corrected = apply_corrections(image, config)
-    rows = trace_locations(corrected, config, [(float(y_local), float(x_local))])
+    rows = trace_locations(
+        corrected,
+        config,
+        [(float(y_local), float(x_local))],
+        photo=image,
+    )
     if not rows:
         return {
             "reason": "unknown",
@@ -225,7 +230,7 @@ def audit_marks(
         locations = [
             (float(row["y_local"]), float(row["x_local"])) for _, row in group.iterrows()
         ]
-        explained = trace_locations(corrected, config, locations)
+        explained = trace_locations(corrected, config, locations, photo=image)
         for record, trace in zip(group.to_dict(orient="records"), explained):
             merged = dict(record)
             merged.update(trace)
@@ -280,7 +285,9 @@ def promote_unmatched_to_inspect(
 
 
 def default_label_path() -> Path:
-    return PACKAGE_ROOT / "labels" / "labels.csv"
+    from src.verification.store import default_labels_path
+
+    return default_labels_path()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

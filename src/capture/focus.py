@@ -77,10 +77,8 @@ def sharpness(image: np.ndarray) -> float:
     lap = cv2.Laplacian(crop, cv2.CV_64F)
     return float(lap.var())
 
-
 def _better(score: float, best: float, min_gain: float) -> bool:
     return score > best * (1.0 + min_gain)
-
 
 def focus_search(
     measure,

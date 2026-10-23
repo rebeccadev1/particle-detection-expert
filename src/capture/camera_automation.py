@@ -39,34 +39,25 @@ import time
 from datetime import date
 from pathlib import Path
 
-# Side 0 is N, then clockwise E, S, W, on Arduino pins 2, 3, 4, and 5.
 DIRECTIONS = ("N", "E", "S", "W")
 RING_SIDES = len(DIRECTIONS)
 
-# Dose from one side, in milliseconds. Uniform divides this by RING_SIDES.
 TOTAL_EXPOSURE_MS = 100.0
 SETTLE_S = 0.05
-# Automatic NSEW only. Manual side buttons wait for the next click.
 NSEW_GAP_S = 0.05
-# After the stage reports the move is finished, before the lights change.
 MOTION_PAUSE_S = 0.5
 BAUD = 9600
 GRAB_TIMEOUT_MS = 5000
 READY_TIMEOUT_S = 5.0
 ACK_TIMEOUT_S = 2.0
-# A resetting Uno prints READY after the bootloader, usually within a second.
-# Listen that long before probing, so the probe is not still in the buffer
-# when setup() finishes.
 BOOT_LISTEN_S = 2.0
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-# particle_detection/src/capture -> ASML SE/Inputs/Groundup.
 CAPTURES_DIR = SCRIPT_DIR.parents[2] / "Inputs" / "Groundup"
-# Default stage width. The Capture tab passes the Columns control instead.
 DEFAULT_COLUMNS = 10
 LOCATION_DIR_RE = re.compile(r"^\((\d+),(\d+)\)$")
 RUN_DIR_RE = re.compile(r"^v(\d+) (\d{4}-\d{2}-\d{2})$")
-ARDUINO_VIDS = {0x2341, 0x2A03, 0x1A86}  # Arduino, Arduino.org, CH340
+ARDUINO_VIDS = {0x2341, 0x2A03, 0x1A86}
 
 
 def next_capture_location(existing: list[tuple[int, int]], columns: int) -> tuple[int, int]:
@@ -82,7 +73,6 @@ def next_capture_location(existing: list[tuple[int, int]], columns: int) -> tupl
         return (1, 1)
 
     def progress(row: int, col: int) -> tuple[int, int]:
-        # Later stops sort higher. Even rows count down from the right edge.
         along = col if row % 2 == 1 else columns - col + 1
         return (row, along)
 

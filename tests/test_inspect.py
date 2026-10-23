@@ -19,6 +19,7 @@ from src.verification.inspect import (
     detections_on_this_file,
     detections_on_tile,
     display_xy_to_local,
+    fresh_inspect_click,
     expand_direction_tile_names,
     expand_submap_lighting_names,
     extra_grid_placements,
@@ -29,6 +30,8 @@ from src.verification.inspect import (
     crop_metric_std,
     last_run_class_counts,
     last_run_class_counts_by_tile,
+    std_of_tile_scores,
+    subfolder_score_rows,
     local_xy_on_tile,
     missed_particle_record,
     overlay_circles,
@@ -113,6 +116,31 @@ def test_pointer_miss_stays_on_the_tile_it_was_marked() -> None:
     assert on_quad1.empty
     assert on_combi.empty
     assert on_uniform.empty
+
+
+def test_grid_inspect_marks_stay_in_their_folder() -> None:
+    labels = pd.DataFrame(
+        {
+            "key": ["here", "other-wafer", "no-folder"],
+            "source_tile": [
+                "Groundup/wafer-a/(1,1).png",
+                "Groundup/wafer-b/(1,1).png",
+                "(1,1).png",
+            ],
+            "label": ["particle", "particle", "particle"],
+            "source_csv": [MISS_SOURCE, MISS_SOURCE, MISS_SOURCE],
+            "x_global": [1.0, 2.0, 3.0],
+            "y_global": [1.0, 2.0, 3.0],
+            "size": [20_000.0, 20_000.0, 20_000.0],
+        }
+    )
+    detections = pd.DataFrame(
+        columns=["source_tile", "key", "x_global", "y_global", "size"]
+    )
+    shown = pointer_miss_rows(
+        labels, detections, "(1,1).png", run_dir="Groundup/wafer-a"
+    )
+    assert list(shown["key"]) == ["here"]
 
 
 def test_particle_detected_on_combi_and_uniform_is_marked_on_both() -> None:
@@ -538,6 +566,60 @@ def test_last_run_class_counts_drops_undetected_below_run_size_floor() -> None:
     assert stats["recall"] == 0.0
 
 
+def test_subfolder_score_rows_combines_tiles_and_splits_vn() -> None:
+    per_tile = pd.DataFrame(
+        [
+            {
+                "tile": "(1,1).png",
+                "n_detected": 2,
+                "n_real": 1,
+                "n_undetected": 1,
+            },
+            {
+                "tile": "(3,3).png",
+                "n_detected": 2,
+                "n_real": 2,
+                "n_undetected": 0,
+            },
+            {
+                "tile": "v5/quad.png",
+                "n_detected": 1,
+                "n_real": 1,
+                "n_undetected": 0,
+            },
+            {
+                "tile": "v7/quad.png",
+                "n_detected": 4,
+                "n_real": 0,
+                "n_undetected": 2,
+            },
+        ]
+    )
+    rows = subfolder_score_rows(
+        per_tile,
+        folder_name="Groundup/Final test 21-10/v44 2026-10-20 N40 (10%) copy",
+        beta=1.0,
+    )
+    by_name = {row["name"]: row for row in rows}
+    assert list(by_name) == [
+        "v44 2026-10-20 N40 (10%) copy",
+        "v5",
+        "v7",
+    ]
+    folder = by_name["v44 2026-10-20 N40 (10%) copy"]
+    assert folder["n_detected"] == 4
+    assert folder["n_real"] == 3
+    assert folder["n_undetected"] == 1
+    assert folder["precision"] == pytest.approx(0.75)
+    assert folder["recall"] == pytest.approx(0.75)
+    assert folder["precision_std"] == pytest.approx(float(np.std([0.5, 1.0], ddof=1)))
+    assert folder["recall_std"] == pytest.approx(float(np.std([0.5, 1.0], ddof=1)))
+    assert folder["f_beta_std"] == pytest.approx(float(np.std([0.5, 1.0], ddof=1)))
+    assert by_name["v5"]["precision_std"] is None
+    assert by_name["v7"]["n_detected"] == 4
+    assert by_name["v7"]["precision"] == 0.0
+
+
 def test_last_run_class_counts_by_tile_splits_folder() -> None:
     detections = pd.DataFrame(
         {
@@ -624,6 +706,36 @@ def test_shared_combi_uniform_hit_counts_on_both_pictures() -> None:
     assert both["n_detected"] == 2
     assert on_combi["n_detected"] == 1
     assert on_uniform["n_detected"] == 2
+
+
+def test_std_of_tile_scores_uses_every_tile() -> None:
+    table = pd.DataFrame(
+        [
+            {"tile": "(1,1).png", "n_detected": 2, "n_real": 1, "n_undetected": 1},
+            {"tile": "(1,2).png", "n_detected": 2, "n_real": 2, "n_undetected": 0},
+            {"tile": "(1,3).png", "n_detected": 0, "n_real": 0, "n_undetected": 0},
+        ]
+    )
+    spread = std_of_tile_scores(table, beta=1.0)
+    expected = float(np.std([0.5, 1.0, 0.0], ddof=1))
+    assert spread["precision"] == pytest.approx(expected)
+    assert spread["recall"] == pytest.approx(expected)
+    assert spread["f_beta"] == pytest.approx(expected)
+    assert std_of_tile_scores(table.iloc[:1], beta=1.0) == {
+        "precision": None,
+        "recall": None,
+        "f_beta": None,
+    }
+
+    counted = table.iloc[:2]
+    rows = subfolder_score_rows(
+        counted,
+        folder_name="folder",
+        beta=1.0,
+        std_tiles=table,
+    )
+    assert rows[0]["n_detected"] == 4
+    assert rows[0]["precision_std"] == pytest.approx(expected)
 
 
 def test_crop_metric_std_uses_defined_cells_only() -> None:
@@ -781,6 +893,67 @@ def test_last_run_ignores_nsew_labels_from_another_folder() -> None:
     assert stats["n_real_total"] == 2
 
 
+def test_grid_labels_stay_in_their_own_folder() -> None:
+    detections = pd.DataFrame(
+        {
+            "id": [1],
+            "x_global": [10.0],
+            "y_global": [11.0],
+            "size": [20000.0],
+            "confidence": [0.9],
+            "source_tile": ["(1,1).png"],
+            "key": ["(1,1)_10_11"],
+        }
+    )
+    labels = pd.DataFrame(
+        {
+            "key": ["(1,1)_10_11", "(1,1)_40_41", "(1,1)_99_98", "(1,1)_50_51"],
+            "label": ["particle", "particle", "particle", "particle"],
+            "source_tile": [
+                "Groundup/wafer-a/(1,1).png",
+                "Groundup/wafer-a/(1,1).png",
+                "Groundup/wafer-b/(1,1).png",
+                "(1,1).png",
+            ],
+            "size": [20000.0, 22000.0, 25000.0, 25000.0],
+            "x_global": [10.0, 40.0, 99.0, 50.0],
+            "y_global": [11.0, 41.0, 98.0, 51.0],
+        }
+    )
+    stats = last_run_class_counts(
+        detections,
+        labels,
+        tile_names=["(1,1).png"],
+        min_size_nm=20000.0,
+        run_dir="Groundup/wafer-a",
+    )
+    assert stats["n_real"] == 1
+    assert stats["n_undetected"] == 1
+    assert stats["n_real_total"] == 2
+
+
+def test_tinder_saves_a_grid_label_in_this_folder() -> None:
+    from src.verification.inspect import label_on_run_tiles, with_grid_folder
+
+    saved = with_grid_folder(
+        {"source_tile": "(1,1).png", "key": "(1,1)_10_11"},
+        "Groundup/wafer-a",
+    )
+    assert saved["source_tile"] == "Groundup/wafer-a/(1,1).png"
+    assert with_grid_folder({"source_tile": "N.png"}, "Groundup/wafer-a")["source_tile"] == "N.png"
+    assert label_on_run_tiles(saved["source_tile"], {"(1,1).png"}, "Groundup/wafer-a")
+    assert not label_on_run_tiles(saved["source_tile"], {"(1,1).png"}, "Groundup/wafer-b")
+
+
+def test_grid_source_name_keeps_the_folder() -> None:
+    from src.main_pipeline.measurement.measurer import lighting_source_name
+    from src.overall.config import DEFAULT_INPUT_DIR
+
+    path = DEFAULT_INPUT_DIR / "Groundup" / "wafer-a" / "(1,1).png"
+    assert lighting_source_name(path) == "Groundup/wafer-a/(1,1).png"
+    assert lighting_source_name(DEFAULT_INPUT_DIR / "v5" / "N.png") == "N.png"
+
+
 def test_last_run_particles_only_uses_same_scene_nsew_labels() -> None:
     detections = pd.DataFrame(
         {
@@ -887,8 +1060,6 @@ def test_related_scene_tile_names_keeps_groundup_v3_suffix(tmp_path: Path) -> No
         "Groundup v3/Output Groundup v3/Particles only",
         ["particles_only_2of4.png"],
     )
-    # Even without resolving the real Inputs tree, png particles-only
-    # still keeps N.png labels (not v2 N.bmp).
     assert "N.png" in relative
     assert "N.bmp" not in relative
 
@@ -1057,6 +1228,15 @@ def test_display_xy_to_local_inverts_overlay_scale() -> None:
     x_local, y_local = display_xy_to_local(15.0, 8.0, view)
     assert x_local == 10.0 + 15.0 / 0.5
     assert y_local == 20.0 + 8.0 / 0.5
+
+
+def test_fresh_inspect_click_ignores_the_press_already_seen() -> None:
+    press = {"x": 12, "y": 40, "unix_time": 1_700_000_000_000}
+    assert fresh_inspect_click(press, None) == 1_700_000_000_000
+    assert fresh_inspect_click(press, 1_700_000_000_000) is None
+    assert fresh_inspect_click(press, "1700000000000") is None
+    assert fresh_inspect_click({"x": 12, "y": 40}, None) is None
+    assert fresh_inspect_click(None, None) is None
 
 
 def test_verify_missed_photo_sizes_replaces_assumed_diameter(tmp_path: Path) -> None:
@@ -1413,3 +1593,180 @@ def test_growing_the_click_includes_the_dim_edge() -> None:
     assert footprint_grow_mass(config, 300) == 0.0
     assert footprint_grow_mass(config, 1.5) < footprint_grow_mass(config, 1)
     assert wide_nm > tight_nm + 4_000.0
+
+
+def test_mosaic_uses_this_folders_review_color() -> None:
+    from src.main_pipeline.report.report_generator import draw_overlay_markers
+    from src.main_pipeline.stitching.stitcher import LazyMosaic
+    from src.verification.inspect import LABEL_CIRCLE_COLORS, label_colors_for_hits
+
+    tile = "Groundup/wafer-a/(1,1).png"
+    hits = pd.DataFrame(
+        [
+            {
+                "source_tile": tile,
+                "x_global": 1000.0,
+                "y_global": 1000.0,
+                "size": 20_000.0,
+                "key": "(1,1)_1000_1000",
+            },
+            {
+                "source_tile": tile,
+                "x_global": 3000.0,
+                "y_global": 1000.0,
+                "size": 20_000.0,
+                "key": "(1,1)_3000_1000",
+            },
+        ]
+    )
+    labels = pd.DataFrame(
+        [
+            {
+                "source_tile": tile,
+                "x_global": 1000.0,
+                "y_global": 1000.0,
+                "size": 20_000.0,
+                "key": "(1,1)_1000_1000",
+                "label": "particle",
+            },
+            {
+                "source_tile": "Groundup/wafer-b/(1,1).png",
+                "x_global": 3000.0,
+                "y_global": 1000.0,
+                "size": 20_000.0,
+                "key": "(1,1)_3000_1000",
+                "label": "not_particle",
+            },
+        ]
+    )
+    colors = label_colors_for_hits(hits, labels, run_dir="Groundup/wafer-a")
+    assert colors["(1,1)_1000_1000"] == LABEL_CIRCLE_COLORS["particle"]
+    assert "(1,1)_3000_1000" not in colors
+
+    mosaic = LazyMosaic(
+        [TilePlacement(path=Path("(1,1).png"), name="(1,1).png", y0=0, x0=0, height=40, width=40)]
+    )
+    rgb = np.zeros((40, 40, 3), dtype=np.uint8)
+    marked = draw_overlay_markers(
+        rgb,
+        mosaic,
+        hits.iloc[:1].assign(x_global=20_000.0, y_global=20_000.0, size=1_000.0),
+        {"pixel_size_nm": 1000.0, "report": {"downsample": 1}},
+        colors=colors,
+        scale=1.0,
+    )
+    ring = marked[6, 20]
+    assert int(ring[1]) > int(ring[0])
+
+
+def test_write_marked_mosaic_saves_review_and_inspect_circles(tmp_path: Path) -> None:
+    import cv2
+
+    from src.main_pipeline.stitching.stitcher import LazyMosaic
+    from src.verification.inspect import (
+        LABEL_CIRCLE_COLORS,
+        MARKED_MOSAIC_NAME,
+        write_marked_mosaic,
+    )
+
+    out = tmp_path / "out"
+    out.mkdir()
+    plain = np.zeros((50, 100, 3), dtype=np.uint8)
+    assert cv2.imwrite(str(out / "mosaic_plain.png"), plain)
+    mosaic = LazyMosaic(
+        [
+            TilePlacement(
+                path=Path("field.png"),
+                name="field.png",
+                y0=0,
+                x0=0,
+                height=50,
+                width=100,
+            )
+        ]
+    )
+    hits = pd.DataFrame(
+        [
+            {
+                "source_tile": "field.png",
+                "x_global": 20_000.0,
+                "y_global": 25_000.0,
+                "size": 1_000.0,
+                "key": "hit-real",
+            },
+            {
+                "source_tile": "field.png",
+                "x_global": 50_000.0,
+                "y_global": 25_000.0,
+                "size": 1_000.0,
+                "key": "hit-open",
+            },
+        ]
+    )
+    labels = pd.DataFrame(
+        [
+            {
+                "source_tile": "field.png",
+                "x_global": 20_000.0,
+                "y_global": 25_000.0,
+                "size": 1_000.0,
+                "key": "hit-real",
+                "label": "particle",
+                "source_csv": "particles.csv",
+            },
+            {
+                "source_tile": "field.png",
+                "x_global": 80_000.0,
+                "y_global": 25_000.0,
+                "size": 1_000.0,
+                "key": "miss-1",
+                "label": "particle",
+                "source_csv": MISS_SOURCE,
+            },
+        ]
+    )
+    path = write_marked_mosaic(
+        {
+            "output_dir": str(out),
+            "input_dir": str(tmp_path),
+            "pixel_size_nm": 1000.0,
+            "report": {"downsample": 1},
+        },
+        hits,
+        labels,
+        mosaic=mosaic,
+    )
+    assert path == out / MARKED_MOSAIC_NAME
+    assert path.is_file()
+    assert not (out / "mosaic_overlay.png").is_file()
+    saved = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    assert saved is not None
+
+    def ring(x: int) -> np.ndarray:
+        return saved[11, x]
+
+    particle = ring(20)
+    unlabeled = ring(50)
+    missed = ring(80)
+    assert int(particle[1]) > int(particle[2])
+    assert int(particle[1]) > 100
+    assert tuple(int(v) for v in LABEL_CIRCLE_COLORS["particle"])[1] == 180
+    assert int(unlabeled[2]) > int(unlabeled[1])
+    assert int(missed[1]) > int(missed[2])
+    assert int(missed[1]) < int(particle[1])
+
+
+def test_write_marked_mosaic_skips_a_run_with_no_tiles(tmp_path: Path) -> None:
+    from src.main_pipeline.stitching.stitcher import LazyMosaic
+    from src.verification.inspect import MARKED_MOSAIC_NAME, write_marked_mosaic
+
+    out = tmp_path / "out"
+    out.mkdir()
+    path = write_marked_mosaic(
+        {"output_dir": str(out), "input_dir": str(tmp_path), "pixel_size_nm": 1000.0},
+        pd.DataFrame(),
+        pd.DataFrame(),
+        mosaic=LazyMosaic([]),
+    )
+    assert path is None
+    assert not (out / MARKED_MOSAIC_NAME).is_file()

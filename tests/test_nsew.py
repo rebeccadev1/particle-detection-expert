@@ -10,8 +10,10 @@ from PIL import Image
 from src.main_pipeline.nsew import (
     MIN_COUNTS,
     combine_nsew_folder,
+    combine_worker_count,
     find_nsew_images,
     list_direction_images,
+    load_flattened_nsew,
     nsew_output_dir,
     positional_cell_sides,
     prepare_detection_paths,
@@ -79,7 +81,6 @@ def test_combine_writes_same_size_in_folder(tmp_path: Path) -> None:
             assert path.is_file()
             with Image.open(path) as image:
                 assert image.size == (width, height)
-                # BMP inputs often have dpi (0,0); we must not copy that.
                 dpi = image.info.get("dpi")
                 if dpi is not None:
                     assert dpi[0] > 0 and dpi[1] > 0
@@ -140,7 +141,6 @@ def test_min_count_uses_matching_rank() -> None:
 def test_orthogonal_2of4_rejects_opposite_pair() -> None:
     dark = np.zeros((2, 2), dtype=np.float32)
     bright = np.ones((2, 2), dtype=np.float32)
-    # DIRECTIONS order: N, S, E, W — only opposite N–S bright.
     opposite = np.stack([bright, bright, dark, dark], axis=0)
     ortho_iso, _ = symmetry_signal_orthogonal_2of4(opposite)
     classic = np.sort(opposite, axis=0)
@@ -148,20 +148,44 @@ def test_orthogonal_2of4_rejects_opposite_pair() -> None:
     assert float(classic_iso.mean()) > 0.5
     assert float(ortho_iso.mean()) < 0.05
 
-    # Adjacent N–E bright.
     adjacent = np.stack([bright, dark, bright, dark], axis=0)
     adjacent_iso, _ = symmetry_signal_orthogonal_2of4(adjacent)
     assert float(adjacent_iso.mean()) > 0.5
 
 
-def test_scale_combi_uint8_keeps_a_hot_pixel_from_crushing_the_tile() -> None:
-    image = np.full((200, 200), 2.0, dtype=np.float32)
-    image[50:60, 50:60] = 40.0
+def test_scale_combi_uint8_keeps_a_flat_field_at_the_source_gray() -> None:
+    image = np.full((200, 200), 1.0, dtype=np.float32)
+    image[50:60, 50:60] = 2.0
     image[0, 0] = 10_000.0
-    scaled = scale_combi_uint8(image)
+    scaled = scale_combi_uint8(image, gain=60.0)
     assert scaled[0, 0] == 255
-    assert scaled[55, 55] == 255
-    assert int(scaled[10, 10]) < 30
+    assert scaled[55, 55] == 120
+    assert int(scaled[10, 10]) == 60
+
+
+def test_combine_worker_count_caps_at_ten_cores(monkeypatch) -> None:
+    monkeypatch.setattr("src.main_pipeline.nsew.cpu_count", lambda: 10)
+    assert combine_worker_count(1) == 1
+    assert combine_worker_count(4) == 4
+    assert combine_worker_count(70) == 10
+    monkeypatch.setattr("src.main_pipeline.nsew.cpu_count", lambda: 4)
+    assert combine_worker_count(70) == 4
+
+
+def test_combine_restores_opencv_threads_before_the_blur(tmp_path: Path, monkeypatch) -> None:
+    import cv2
+
+    for name, value in (("N", 40), ("S", 50), ("E", 60), ("W", 70)):
+        _write_gray(tmp_path / f"{name}.png", value)
+    calls: list[int] = []
+    monkeypatch.setattr(cv2, "setNumThreads", lambda count: calls.append(count))
+    load_flattened_nsew(
+        tmp_path / "N.png",
+        tmp_path / "S.png",
+        tmp_path / "E.png",
+        tmp_path / "W.png",
+    )
+    assert calls[0] == -1
 
 
 def test_write_combi_2of4_lands_in_the_input_folder(tmp_path: Path) -> None:
@@ -173,7 +197,7 @@ def test_write_combi_2of4_lands_in_the_input_folder(tmp_path: Path) -> None:
     assert out.is_file()
 
 
-def test_prepare_detection_paths_keeps_combi_and_uniform(tmp_path: Path) -> None:
+def test_prepare_detection_paths_keeps_only_the_combi(tmp_path: Path) -> None:
     folder = tmp_path / "v4"
     folder.mkdir()
     for name in (
@@ -188,15 +212,7 @@ def test_prepare_detection_paths_keeps_combi_and_uniform(tmp_path: Path) -> None
     _write_gray(other, 10)
     paths = prepare_detection_paths([*(folder.iterdir()), other])
     names = sorted(path.name for path in paths)
-    assert names == [
-        "combi_2of4.png",
-        "plain.png",
-        "wafer_shot_0_quad0_exp1.png",
-        "wafer_shot_1_quad1_exp1.png",
-        "wafer_shot_2_quad2_exp1.png",
-        "wafer_shot_3_quad3_exp1.png",
-        "wafer_shot_4_all_exp1.png",
-    ]
+    assert names == ["combi_2of4.png", "plain.png"]
     assert (folder / "combi_2of4.png").is_file()
 
 
@@ -213,7 +229,7 @@ def test_positional_cell_sides_finds_the_four_pictures(tmp_path: Path) -> None:
     assert set(direction_images_for_combined(combi)) == {"N", "S", "E", "W"}
 
 
-def test_prepare_detection_paths_combines_grid_sides_and_loads_them(
+def test_prepare_detection_paths_combines_grid_sides_and_keeps_the_combi(
     tmp_path: Path,
 ) -> None:
     for row, col in ((1, 3), (2, 1)):
@@ -228,15 +244,7 @@ def test_prepare_detection_paths_combines_grid_sides_and_loads_them(
     assert sorted(path.name for path in paths) == [
         "(1,1).png",
         "(1,3).png",
-        "(1,3)_E.png",
-        "(1,3)_N.png",
-        "(1,3)_S.png",
-        "(1,3)_W.png",
         "(2,1).png",
-        "(2,1)_E.png",
-        "(2,1)_N.png",
-        "(2,1)_S.png",
-        "(2,1)_W.png",
     ]
     assert (tmp_path / "(1,3).png").is_file()
     assert (tmp_path / "(2,1).png").is_file()
@@ -255,13 +263,7 @@ def test_prepare_detection_paths_keeps_a_fresh_grid_combi(tmp_path: Path) -> Non
     stamp = combi.stat().st_mtime_ns
     again = prepare_detection_paths(list(tmp_path.iterdir()))
     assert combi.stat().st_mtime_ns == stamp
-    assert sorted(path.name for path in again) == [
-        "(1,3).png",
-        "(1,3)_E.png",
-        "(1,3)_N.png",
-        "(1,3)_S.png",
-        "(1,3)_W.png",
-    ]
+    assert sorted(path.name for path in again) == ["(1,3).png"]
 
 
 def test_prepare_detection_paths_skips_an_incomplete_grid_cell(tmp_path: Path) -> None:
@@ -317,4 +319,4 @@ def test_pipeline_detects_the_combined_grid_cell(tmp_path: Path) -> None:
     )
     assert [placement.name for placement in mosaic.placements] == ["(1,3).png"]
     found = [event for event in events if "tile" in event[2]]
-    assert found[0][1] == 5
+    assert found[0][1] == 1

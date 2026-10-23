@@ -17,7 +17,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.training.train import (  # noqa: E402
+from src.training.train import (
     _layouts_for_meta,
     collect_unmarked_dataset,
     default_train_config,
@@ -27,7 +27,7 @@ from src.training.train import (  # noqa: E402
     v4_scores_for_layouts,
 )
 
-LABELS = ROOT / "labels" / "labels.csv"
+LABELS = ROOT / "labels" / "all_labels.csv"
 MANIFEST = ROOT.parent / "Outputs" / "v6_train_keys.csv"
 MODEL = ROOT / "models" / "particle_clf_v6.joblib"
 V4_MODEL = ROOT / "models" / "particle_clf_v4_residual.joblib"

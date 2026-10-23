@@ -17,15 +17,27 @@ _MEDIAN_SAMPLE = 250_000
 
 
 def to_float(image: np.ndarray) -> np.ndarray:
-    """Convert a tile to float32 in approximately [0, 1] if integer-valued."""
+    """Convert a tile to float32 in [0, 1] on the file's full scale.
+
+    An 8-bit photo is divided by 255 and a 16-bit photo by 65535. The brightest
+    pixel in this image is not the scale: that would lift a dark photo before
+    denoise, flatten, and the contrast stretch.
+    """
     array = np.asarray(image)
     if array.size == 0:
         return np.asarray(array, dtype=_FLOAT)
+    if np.issubdtype(array.dtype, np.integer):
+        scale = _FLOAT(np.iinfo(array.dtype).max)
+        return np.ascontiguousarray(array, dtype=_FLOAT) / scale
     array = np.ascontiguousarray(array, dtype=_FLOAT)
-    vmax = float(array.max())
-    if vmax > 1.5:
-        array = array / _FLOAT(max(vmax, 1.0))
-    return array
+    peak = float(np.max(array))
+    if peak <= 1.5:
+        return array
+    if peak <= 255.0:
+        return array / _FLOAT(255.0)
+    if peak <= 65535.0:
+        return array / _FLOAT(65535.0)
+    return array / _FLOAT(peak)
 
 
 def _gaussian_blur(image: np.ndarray, sigma: float) -> np.ndarray:

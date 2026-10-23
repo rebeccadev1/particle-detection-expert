@@ -90,6 +90,35 @@ def test_apply_ml_filter_errors_when_enabled_without_model(tmp_path: Path) -> No
         )
 
 
+def test_nsew_v8_is_a_combi_residual_model() -> None:
+    from src.overall.config import PACKAGE_ROOT
+
+    artifact = load_artifact(PACKAGE_ROOT / "models" / "particle_clf_v8.joblib")
+    assert artifact["kind"] == "residual"
+    assert artifact["feature_names"] == FEATURE_COLUMNS
+    assert artifact["threshold"] == pytest.approx(0.37)
+    assert artifact["train_tiles"] == "v3_2of4 + v5_2of4"
+    assert artifact["held_out"] == "v6_2of4"
+    assert artifact["n_positive"] == 339
+    assert artifact["n_negative"] == 353
+    assert "not in the fit" in artifact["dataset"]
+
+
+def test_combi_manifest_drops_direction_tiles(tmp_path: Path) -> None:
+    from src.training.train_nsew import combi_manifest
+
+    path = tmp_path / "keys.csv"
+    pd.DataFrame(
+        [
+            {"key": "a", "source_tile": "v3_2of4.png", "label": "particle", "split": "train", "set_id": "v3", "size": 1},
+            {"key": "b", "source_tile": "v3_N.png", "label": "particle", "split": "train", "set_id": "v3", "size": 1},
+            {"key": "c", "source_tile": "v6_2of4.png", "label": "not_particle", "split": "holdout_tile", "set_id": "v6", "size": 1},
+        ]
+    ).to_csv(path, index=False)
+    kept = combi_manifest(path)
+    assert list(kept["key"]) == ["a", "c"]
+
+
 def test_keep_all_threshold_is_min_positive_score() -> None:
     from src.training.train import keep_all_threshold, hard_negative_weights
 

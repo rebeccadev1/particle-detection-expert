@@ -18,12 +18,12 @@ from src.main_pipeline.detection.detector import CANDIDATE_FEATURE_FIELDS, Parti
 DIRECTION_STEMS = ("N", "S", "E", "W")
 DISPLAY_DIRECTION_ORDER = ("N", "W", "E", "S")
 LIGHTING_ROLES = ("quad0", "quad1", "quad2", "quad3", "all")
-# Ring command 0..3 in arduino_camera_v3, clockwise from the top of the image.
 QUAD_DIRECTIONS = ("N", "E", "S", "W")
 DEFAULT_NSEW_MERGE_RADIUS_PX = 24.0
 DEFAULT_NSEW_SIZE_MATCH_FRACTION = 0.4
 _PARTICLES_ONLY_PREFIX = "particles_only"
 _SET_DIR = re.compile(r"^v\d+$", re.IGNORECASE)
+_GRID_TILE = re.compile(r"^\(\d+,\d+\)$")
 _WAFER_LIGHT = re.compile(
     r"^wafer_shot_\d+_(quad[0-3]|all)_exp\d+$",
     re.IGNORECASE,
@@ -131,6 +131,12 @@ def is_nsew_family_tile(source_tile: str) -> bool:
     return is_direction_tile(source_tile) or is_particles_only_tile(source_tile)
 
 
+def is_grid_tile(source_tile: str) -> bool:
+    """``(row,col).png``. The same filename is used in every scan folder."""
+    stem = Path(str(source_tile).replace("\\", "/")).stem
+    return _GRID_TILE.fullmatch(stem) is not None
+
+
 def is_combi_tile(source_tile: str) -> bool:
     """True for a combined image written from N, S, E, and W."""
     stem = Path(str(source_tile).replace("\\", "/")).stem.lower()
@@ -231,11 +237,29 @@ def combi_key_family(source_tile: str) -> str:
     return ""
 
 
+def input_relative_tile(path: str | Path) -> str:
+    """``folder/(1,1).png`` under Inputs. The filename alone is not a tile id."""
+    file_path = Path(path)
+    try:
+        resolved = file_path.resolve()
+    except OSError:
+        resolved = file_path
+    try:
+        return resolved.relative_to(DEFAULT_INPUT_DIR.resolve()).as_posix()
+    except ValueError:
+        return file_path.name
+
+
 def lighting_source_name(path: str | Path) -> str:
-    """``v7/wafer_shot_….png`` when this file is one shot of a submap folder."""
+    """``v7/wafer_shot_….png`` for one submap shot. A ``(row,col)`` file keeps its folder.
+
+    Other photos keep the filename. N/S/E/W labels share only inside that set.
+    """
     file_path = Path(path)
     if is_submap_lighting_tile(file_path.name) and _SET_DIR.fullmatch(file_path.parent.name):
         return f"{file_path.parent.name}/{file_path.name}"
+    if is_grid_tile(file_path.name):
+        return input_relative_tile(file_path)
     return file_path.name
 
 

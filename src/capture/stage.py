@@ -50,11 +50,8 @@ SCAN_HEIGHT_MM = 40.0
 DEFAULT_FEED = 1000
 DEFAULT_DWELL_MS = 1000
 DEFAULT_BAUD = 115200
-# Stock Creality Ender-3 V3 SE firmware homes X and Y toward the minimum
-# endstops. With the platform offset on, that park is reported as these positions.
 HOME_X_MM = -13.0
 HOME_Y_MM = -15.0
-# Extra time after the light settle and the shutter, for trigger, readout, and save.
 PAUSE_MARGIN_MS = 500
 
 

@@ -10,18 +10,36 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
-from src.verification.queue import detection_key, nsew_key_aliases
+from src.overall.config import PACKAGE_ROOT
+from src.verification.queue import detection_key, label_covers_uniform, nsew_key_aliases
 from src.main_pipeline.measurement.measurer import (
     is_nsew_family_tile,
     is_submap_lighting_tile,
+    lighting_role,
 )
 from src.main_pipeline.report.report_generator import encode_overlay_jpeg
 
 LABEL_VALUES = ("particle", "not_sure", "not_particle")
-CAMPAIGNS = ("groundup", "glovebox")
+DATABASES = ("uniform", "nsew", "glovebox")
+CAMPAIGNS = DATABASES
+ALL_LABELS_NAME = "all_labels.csv"
+LEGACY_LABELS_NAME = "labels.csv"
+SPLIT_FILES = {
+    "uniform": "labels_uniform.csv",
+    "nsew": "labels_nsew.csv",
+    "glovebox": "labels_glovebox.csv",
+}
 
-# R1, R2, … are glovebox tiles. R0_1_1 lives in Groundup v1.
-# n2/n3/bf shots are the R4–R7 glovebox folders; their names do not start with R.
+def default_labels_path() -> Path:
+    """Canonical label table. Falls back to ``labels.csv`` before the first split."""
+    root = PACKAGE_ROOT / "labels"
+    current = root / ALL_LABELS_NAME
+    legacy = root / LEGACY_LABELS_NAME
+    if current.is_file() or not legacy.is_file():
+        return current
+    return legacy
+
+
 _GLOVEBOX_TILE = re.compile(r"^(?:R[1-9]|n2_|n3_|bf_)", re.IGNORECASE)
 
 COLUMNS = (
@@ -44,15 +62,20 @@ class LabelStore:
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
-        self.csv_path = self.root / "labels.csv"
+        self.csv_path = self.root / ALL_LABELS_NAME
         self.crops_dir = self.root / "crops"
         for label in LABEL_VALUES:
             (self.crops_dir / label).mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy()
 
     def load(self) -> pd.DataFrame:
-        if not self.csv_path.exists():
+        path = self.csv_path
+        if not path.exists():
+            legacy = self.root / LEGACY_LABELS_NAME
+            path = legacy if legacy.exists() else path
+        if not path.exists():
             return _empty_table()
-        df = pd.read_csv(self.csv_path)
+        df = pd.read_csv(path)
         for column in COLUMNS:
             if column not in df.columns:
                 df[column] = pd.NA
@@ -186,12 +209,35 @@ class LabelStore:
         key = str(df.loc[idx, "key"])
         return self.unlabel(key)
 
-    def _write(self, df: pd.DataFrame) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        if df.empty:
-            _empty_table().to_csv(self.csv_path, index=False)
+    def _migrate_legacy(self) -> None:
+        """Copy ``labels.csv`` to ``all_labels.csv`` and the split files once."""
+        legacy = self.root / LEGACY_LABELS_NAME
+        if self.csv_path.exists() or not legacy.is_file():
             return
-        df.loc[:, list(COLUMNS)].to_csv(self.csv_path, index=False)
+        df = pd.read_csv(legacy)
+        for column in COLUMNS:
+            if column not in df.columns:
+                df[column] = pd.NA
+        self._write(df.loc[:, list(COLUMNS)])
+
+    def _write(self, df: pd.DataFrame) -> None:
+        """Write every row to all_labels and to that row's uniform, NSEW, or glovebox file.
+
+        A photo with no database (the 3-of-6 angle set) stays in all_labels only.
+        An NSEW label that shares the uniform shot's key is also written to the
+        uniform file. all_labels still holds that hit once.
+        """
+        self.root.mkdir(parents=True, exist_ok=True)
+        table = _empty_table() if df.empty else df.loc[:, list(COLUMNS)]
+        table.to_csv(self.csv_path, index=False)
+        for database, filename in SPLIT_FILES.items():
+            if table.empty:
+                part = _empty_table()
+            else:
+                part = table.loc[_in_database(table, database)]
+                if part.empty:
+                    part = _empty_table()
+            part.to_csv(self.root / filename, index=False)
 
 
 def _label_key(record: Mapping[str, Any]) -> str:
@@ -224,22 +270,49 @@ def _label_row(
     }
 
 
-def label_campaign(source_tile: object) -> str:
-    """``glovebox`` or ``groundup`` from the photo file name."""
+def label_database(source_tile: object) -> str | None:
+    """``uniform``, ``nsew``, or ``glovebox`` from the photo file name.
+
+    ``None`` stays in all_labels only. That is the 3-of-6 angle set, which is
+    not uniform light and not an NSEW combi.
+    """
     name = Path(str(source_tile or "")).name
     if _GLOVEBOX_TILE.match(name):
         return "glovebox"
-    return "groundup"
+    stem = Path(name).stem.lower()
+    if "3of6" in stem:
+        return None
+    if lighting_role(name) == "all" or stem in {"all", "uniform"}:
+        return "uniform"
+    return "nsew"
+
+
+def label_campaign(source_tile: object) -> str:
+    """Database name for this photo. Unassigned rows return an empty string."""
+    return label_database(source_tile) or ""
+
+
+def _in_database(df: pd.DataFrame, database: str) -> pd.Series:
+    """Rows that belong in one split file.
+
+    NSEW photos stay in NSEW. When their key is the shared quad/uniform
+    identity, the same row is also listed under uniform.
+    """
+    primary = df["source_tile"].map(label_database)
+    mask = primary == database
+    if database == "uniform" and "key" in df.columns:
+        shared = df["key"].map(label_covers_uniform) & (primary == "nsew")
+        mask = mask | shared
+    return mask
 
 
 def rows_for_campaign(df: pd.DataFrame, campaign: str) -> pd.DataFrame:
-    """Keep rows whose source photo belongs to ``groundup`` or ``glovebox``."""
+    """Keep rows that belong on one database tab."""
     if campaign not in CAMPAIGNS:
         raise ValueError(f"Unknown campaign {campaign!r}")
     if df is None or df.empty or "source_tile" not in df.columns:
         return df
-    mask = df["source_tile"].map(label_campaign) == campaign
-    return df.loc[mask].reset_index(drop=True)
+    return df.loc[_in_database(df, campaign)].reset_index(drop=True)
 
 
 def newest_first(df: pd.DataFrame) -> pd.DataFrame:

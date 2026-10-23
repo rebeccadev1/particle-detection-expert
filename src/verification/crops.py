@@ -31,13 +31,14 @@ from src.main_pipeline.measurement.measurer import (
     lighting_role,
     quad_direction,
     is_direction_tile,
+    is_grid_tile,
     is_particles_only_tile,
     is_submap_lighting_tile,
     submap_id,
 )
 from src.main_pipeline.stitching.stitcher import LazyMosaic, TilePlacement, placement_from_tile
 
-CIRCLE_COLOR = (255, 140, 40)  # unlabeled
+CIRCLE_COLOR = (255, 140, 40)
 CIRCLE_THICKNESS = 3
 MIN_CIRCLE_RADIUS = 14
 MIN_HALF_PX = 96
@@ -899,6 +900,93 @@ def list_direction_images(folder: str | Path) -> dict[str, Path]:
             continue
         found[stem] = path
     return found
+
+
+def _combi_file_in_folder(folder: Path) -> Path | None:
+    """``combi_2of4`` written beside N, S, E, and W. Other combi names are a fallback."""
+    if not folder.is_dir():
+        return None
+    found = [
+        path
+        for path in folder.iterdir()
+        if path.is_file()
+        and path.suffix.lower() in TILE_SUFFIXES
+        and is_combi_tile(path.name)
+    ]
+    if not found:
+        return None
+    found.sort(key=lambda path: (0 if "2of4" in path.stem.lower() else 1, path.name.lower()))
+    return found[0]
+
+
+def nsew_combi_path(tile_path: str | Path) -> Path | None:
+    """Combi file for an NSEW hit. Groundup quads and the uniform shot stay out.
+
+    A letter image, or ``(row,col)_N``, points at the combi beside it. A hit
+    already stored on the combi, a staged ``vN_2of4``, or particles-only stays
+    on that combined file.
+    """
+    path = Path(tile_path)
+    if _is_groundup_review_hit(str(path)):
+        return None
+    if (
+        is_combi_tile(path.name)
+        or is_particles_only_tile(path.name)
+        or _STAGED_2OF4.fullmatch(path.stem)
+    ):
+        return path
+    parsed = positional_direction(path)
+    if parsed is not None:
+        row, col, _direction = parsed
+        for suffix in TILE_SUFFIXES:
+            candidate = path.parent / f"({int(row)},{int(col)}){suffix}"
+            if candidate.is_file():
+                return candidate
+        return None
+    if is_grid_tile(path.name) and positional_cell_sides(path):
+        return path
+    if is_direction_tile(path.name):
+        return _combi_file_in_folder(path.parent)
+    return None
+
+
+def nsew_combi_crop(
+    row: pd.Series | dict[str, Any],
+    config: dict[str, Any],
+    mosaic: LazyMosaic | None = None,
+    cache: TileImageCache | None = None,
+    origin_cache: dict[str, tuple[int, int]] | None = None,
+) -> ParticleCrop | None:
+    """Crop the NSEW combi. The N, S, E, and W pictures are not shown."""
+    record = dict(row) if not isinstance(row, dict) else dict(row)
+    tile_name = str(record.get("source_tile", "") or "")
+    if not tile_name or _is_groundup_review_hit(tile_name):
+        return None
+    input_dir = cfg_get(config, "input_dir", None)
+    try:
+        tile_path = find_tile_path(tile_name, input_dir=input_dir, mosaic=mosaic)
+    except (FileNotFoundError, OSError):
+        return None
+    combi_path = nsew_combi_path(tile_path)
+    if combi_path is None:
+        return None
+    crop = crop_particle(
+        record,
+        config,
+        mosaic=mosaic,
+        cache=cache,
+        origin_cache=origin_cache,
+        tile_path=combi_path,
+    )
+    return ParticleCrop(
+        rgb=crop.rgb,
+        x_local=crop.x_local,
+        y_local=crop.y_local,
+        crop_x0=crop.crop_x0,
+        crop_y0=crop.crop_y0,
+        tile_path=crop.tile_path,
+        direction="Combi",
+    )
 
 
 def nsew_direction_crops(

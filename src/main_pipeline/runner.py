@@ -80,7 +80,6 @@ def _set_worker_state(
     limit_threads: bool = False,
 ) -> None:
     if limit_threads:
-        # One OpenCV thread per process so N workers do not oversubscribe.
         cv2.setNumThreads(1)
     _WORKER_STATE["fft_mask"] = fft_mask
     _WORKER_STATE["thumbnail_factor"] = int(thumbnail_factor)
@@ -224,7 +223,6 @@ def _process_tile(
         origin_x = float(placement.x0)
         origin_y = float(placement.y0)
     else:
-        # A side file keeps the combi's place on the wafer, and stays off the mosaic.
         placement = None
         origin_x = 0.0
         origin_y = 0.0
@@ -248,6 +246,7 @@ def _process_tile(
         config,
         fft_mask=_WORKER_STATE.get("fft_mask"),
         structure_filters=not score_before_structure,
+        photo=tile.image,
     )
     source_name = (
         combi_source_name(tile.path)
@@ -298,7 +297,7 @@ def _collect_tile_result(
         placements.append(result.placement)
         placed_particles.extend(result.particles)
         if result.thumbnail is not None:
-            thumbnails[result.name] = result.thumbnail
+            thumbnails[result.placement.name] = result.thumbnail
         return
     unplaced_particles.setdefault(result.name, []).extend(result.particles)
 
@@ -312,8 +311,6 @@ def _combine_particle_tables(
     directional: list[Particle] = []
     lighting: dict[str, list[Particle]] = {}
     for name, particles in unplaced_particles.items():
-        # Combi joins the quads and uniform shot of the same vN folder so one
-        # particle found on both pictures keeps one id.
         if is_submap_lighting_tile(name) or (is_combi_tile(name) and submap_id(name)):
             lighting.setdefault(submap_id(name) or name, []).extend(particles)
         elif is_nsew_family_tile(name):
@@ -322,8 +319,6 @@ def _combine_particle_tables(
             frames.append(measure_and_dedupe(particles, config))
     fraction = float(cfg_get(config, "measurement.nsew_size_match_fraction", 0.4))
     for particles in lighting.values():
-        # Four quads plus the uniform shot of one submap are one field.
-        # Another vN folder is a different field, even with the same filenames.
         frames.append(
             measure_and_dedupe(
                 particles,
@@ -333,7 +328,6 @@ def _combine_particle_tables(
             )
         )
     if directional:
-        # Same wafer location in N/W/E/S is one particle; reported size may differ.
         frames.append(
             measure_and_dedupe(
                 directional,
@@ -435,8 +429,6 @@ def run_pipeline(
     unplaced_particles: dict[str, list[Particle]] = {}
     placements: list[TilePlacement] = []
     thumbnails: dict[str, np.ndarray] = {}
-    # Threads, not processes: ProcessPoolExecutor spawned from Streamlit hangs
-    # on macOS (workers re-import the server) and the UI stays on "Idle".
     if progress_cb is not None:
         kind = "thread" if workers > 1 else "serial"
         progress_cb(0, total, f"starting {workers} {kind} worker(s)…")
@@ -486,6 +478,7 @@ def run_pipeline(
             raise
         finally:
             pool.shutdown(wait=True, cancel_futures=False)
+            cv2.setNumThreads(-1)
 
     _raise_if_stopped(should_stop)
     n_gathered = len(placed_particles) + sum(len(v) for v in unplaced_particles.values())

@@ -54,11 +54,12 @@ def test_resolve_input_dir_finds_workspace_tile_folder() -> None:
     found = resolve_input_dir("R3 04-08")
     assert found.is_dir()
     assert found.name == "R3 04-08"
-    assert found.parent == DEFAULT_INPUT_DIR.resolve()
+    assert DEFAULT_INPUT_DIR.resolve() in found.parents
+    assert (found / "R3_1_26_5X.tif").is_file()
 
     via_dotdot = resolve_input_dir("../Single image test big boy")
     assert via_dotdot.name == "Single image test big boy"
-    assert via_dotdot.parent == DEFAULT_INPUT_DIR.resolve()
+    assert DEFAULT_INPUT_DIR.resolve() in via_dotdot.parents
 
 
 def test_resolve_output_dir_uses_workspace_outputs(tmp_path: Path) -> None:
@@ -348,7 +349,6 @@ def test_seam_particle_is_not_double_counted() -> None:
     overlap = 0.25
     width = 64
     step = width * (1.0 - overlap)
-    # Global seam at x = step; particle at (x=step, y=32)
     left = ParticleCandidate(y_local=32.0, x_local=step, size=10.0, confidence=0.8)
     right = ParticleCandidate(y_local=32.0, x_local=0.0, size=9.0, confidence=0.7)
     from_left = measure_candidates([left], origin_x=0.0, origin_y=0.0, pixel_size_nm=1.0, source_tile="tile_r0_c0.tif")
@@ -561,11 +561,35 @@ def test_pipeline_caches_mosaic_thumbnails(tmp_path: Path) -> None:
         assert thumb.shape == (height // 4, width // 4)
 
 
+def test_photo_mosaic_keeps_saved_brightness() -> None:
+    from src.main_pipeline.report.report_generator import _photo_display_rgb
+
+    dark = np.full((8, 8), 20, np.float32)
+    assert int(_photo_display_rgb(dark).mean()) == 20
+
+
+def test_grid_tile_mosaic_keeps_the_photo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``(row,col)`` hit stores a folder path. The stitch still uses the filename."""
+    monkeypatch.setattr(
+        "src.main_pipeline.measurement.measurer.DEFAULT_INPUT_DIR",
+        tmp_path,
+    )
+    image = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])
+    write_tile_tiff(tmp_path / "(1,1).tif", image)
+    config = detector_test_config(report={"downsample": 4, "target_mb": 20.0})
+    config["filename_pattern"] = r"\((?P<row>\d+),(?P<col>\d+)\)\.(?:tiff?|png)"
+    config["input_dir"] = str(tmp_path)
+    config["output_dir"] = str(tmp_path / "out")
+    _table, mosaic = run_pipeline(config)
+    assert set(mosaic.thumbnails) == {"(1,1).tif"}
+    preview = mosaic.preview(downsample=4, workers=1)
+    assert float(preview.max()) > 0.0
+
+
 def test_pipeline_seam_on_synthetic_tiffs(tmp_path: Path) -> None:
     overlap = 0.25
     height, width = 96, 96
     step = int(width * (1.0 - overlap))
-    # Place the blob inside the overlap so both tiles see a full particle, not a clip.
     y_p, x_global = 48.0, float(step + 12)
     sigma = 4.0
 
@@ -678,7 +702,7 @@ def test_pipeline_table_includes_feature_columns(tmp_path: Path) -> None:
     assert "size" not in loaded.columns
 
 
-def test_pipeline_detects_combi_and_the_four_directions(tmp_path: Path) -> None:
+def test_pipeline_detects_only_the_combi(tmp_path: Path) -> None:
     image = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])
     write_tile_tiff(tmp_path / "N.tif", image)
     write_tile_tiff(tmp_path / "S.tif", image)
@@ -692,14 +716,17 @@ def test_pipeline_detects_combi_and_the_four_directions(tmp_path: Path) -> None:
     assert mosaic.placements == []
     assert not table.empty
     sources = {Path(name).name for name in table["source_tile"].astype(str)}
-    assert "combi_2of4.tif" in sources
+    assert sources == {"combi_2of4.tif"}
+    from src.main_pipeline.report.report_generator import unstitched_tile_paths
+
+    assert [path.name for path in unstitched_tile_paths(config)] == ["combi_2of4.tif"]
     dirs = {
         part.strip()
         for text in table["nsew_dirs"].fillna("").astype(str)
         for part in text.split(",")
         if part.strip()
     }
-    assert {"N", "S", "E", "W"} <= dirs
+    assert dirs == {"COMBI"}
 
 
 def test_pipeline_detects_unmatched_names_without_stitching(tmp_path: Path) -> None:

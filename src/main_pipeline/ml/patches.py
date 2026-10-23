@@ -40,7 +40,7 @@ class UnmarkedPatch:
     source_tile: str
     x_local: float
     y_local: float
-    channels: np.ndarray  # (2, PATCH_SIZE, PATCH_SIZE) float32
+    channels: np.ndarray
 
 
 class TileResidualCache:
@@ -309,7 +309,7 @@ def collect_unmarked_dataset(
     if not patches:
         raise ValueError(
             "No unmarked patches could be extracted. Check that the labeled "
-            "tiles exist under Inputs/ and that labels.csv has coordinates."
+            "tiles exist under Inputs/ and that all_labels.csv has coordinates."
         )
     meta = pd.DataFrame(rows)
     y = (meta["label"].astype(str) == POSITIVE).astype(int).to_numpy()

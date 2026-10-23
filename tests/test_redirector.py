@@ -80,7 +80,6 @@ def test_exit_intensity_counts_each_refraction() -> None:
     assert trace.status == "exited"
     assert trace.reflections == 1
     single = fresnel_unpolarized(1.0, 1.49, 1.0)[1]
-    # One total internal reflection keeps R = 1. Entering and leaving each keep T.
     assert trace.intensity == pytest.approx(single * single, abs=0.01)
     assert 0.0 < trace.intensity < single
 

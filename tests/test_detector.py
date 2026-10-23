@@ -65,6 +65,48 @@ def test_equivalent_diameter_uses_photo_not_floor() -> None:
     assert abs(diameter - 20.0) < 1.5
 
 
+def test_size_gate_uses_original_photo() -> None:
+    """Peaks are found on the preprocessed tile. The diameter is the photograph.
+
+    A narrow core on a wide skirt is large after contrast stretch and small on
+    the starting image. Under the minimum, that peak is not a hit.
+    """
+    yy, xx = np.mgrid[0:160, 0:160]
+    r2 = (yy - 80) ** 2 + (xx - 80) ** 2
+    image = (1.0 + 30.0 * np.exp(-r2 / (2.0 * 10.0**2)) + 200.0 * np.exp(-r2 / (2.0 * 2.2**2))).astype(
+        np.float32
+    )
+    detection = {
+        "min_size_nm": 10.0,
+        "max_size_nm": 80.0,
+        "blob_min_sigma": 1.2,
+        "blob_max_sigma": 8.0,
+        "min_circularity": 0.0,
+        "min_prominence": 0.1,
+        "blob_threshold": 0.04,
+        "structure_neighbor_px": 0.0,
+        "min_confidence": 0.0,
+    }
+    config = detector_test_config(detection=detection)
+    corrected = apply_corrections(image, config)
+
+    def _at_center(found: list) -> object:
+        near = [c for c in found if abs(c.y_local - 80.0) + abs(c.x_local - 80.0) < 4.0]
+        return near[0] if near else None
+
+    stretched = _at_center(detect_particles(corrected, config))
+    assert stretched is not None
+    assert stretched.size > 20.0
+
+    dropped = _at_center(detect_particles(corrected, config, photo=image))
+    assert dropped is None
+
+    loose = detector_test_config(detection={**detection, "min_size_nm": 4.0})
+    kept = _at_center(detect_particles(corrected, loose, photo=image))
+    assert kept is not None
+    assert kept.size < 12.0
+
+
 def test_equivalent_diameter_separates_two_scales() -> None:
     small = make_structured_tile(particles=[(40.0, 40.0, 2.0)])
     large = make_structured_tile(particles=[(40.0, 40.0, 6.0)])
@@ -136,6 +178,15 @@ def test_shared_fft_mask_not_built_for_per_tile() -> None:
 
     config = detector_test_config(detection={"method": "fft", "fft_mask": "per_tile"})
     assert _prepare_fft_mask([Path("unused.tif")], config) is None
+
+
+def test_to_float_uses_the_file_scale_not_the_brightest_pixel() -> None:
+    from src.main_pipeline.preprocessing.corrections import to_float
+
+    dark = np.full((8, 8), 40, dtype=np.uint8)
+    scaled = to_float(dark)
+    assert scaled.dtype == np.float32
+    assert abs(float(scaled.max()) - 40 / 255) < 1e-6
 
 
 def test_apply_corrections_stays_float32() -> None:

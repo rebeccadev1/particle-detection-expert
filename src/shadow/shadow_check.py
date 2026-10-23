@@ -4,7 +4,7 @@ Example::
 
     python src/shadow/shadow_check.py --key R3_1_17_5X_42943680_1240320 --light-from N
 
-``--csv`` is ``labels/labels.csv`` (ID = ``particle_id``) or a run's
+``--csv`` is ``labels/all_labels.csv`` (ID = ``particle_id``) or a run's
 ``particles.csv`` (ID = ``id``). Label IDs repeat across runs: narrow them
 with ``--run`` (substring of ``source_csv``) or pass ``--key``.
 
@@ -23,8 +23,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.overall.config import load_config  # noqa: E402
-from src.shadow.shadow import (  # noqa: E402
+from src.overall.config import load_config
+from src.shadow.shadow import (
     DEFAULT_OUT,
     LABELS_CSV,
     LIGHT_HEIGHT_MM,
@@ -39,7 +39,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ids", type=float, nargs="*", default=[], help="Particle IDs.")
     parser.add_argument("--key", nargs="*", default=[], help="Exact label keys.")
     parser.add_argument("--csv", type=Path, default=LABELS_CSV,
-                        help="labels.csv (default) or a run's particles.csv.")
+                        help="all_labels.csv (default) or a run's particles.csv.")
     parser.add_argument("--run", default=None, help="Substring of source_csv to narrow labels.")
     parser.add_argument("--config", type=Path, default=ROOT / "config.yaml")
     parser.add_argument("--input-dir", default=None,

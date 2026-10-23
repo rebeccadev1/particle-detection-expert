@@ -48,8 +48,6 @@ _SET_LIGHT_KEY = re.compile(
 _LIGHT_KEY = re.compile(r"^(?:LIGHT|quad[0-3]|all)_(-?\d+)_(-?\d+)$", re.IGNORECASE)
 _SET_2OF4_STEM = re.compile(r"^(v\d+)_2of4$", re.IGNORECASE)
 _SET_DIR_NAME = re.compile(r"v\d+$", re.IGNORECASE)
-# Same physical field at two exposures. Other folders keep every vN separate:
-# Groundup v4 v3 and v4 are different fields.
 EXPOSURE_FIELD_PAIRS: dict[str, tuple[tuple[str, str], ...]] = {
     "Groundup v5 combi": (("v3", "v4"),),
 }
@@ -108,6 +106,18 @@ def detection_key(row: Mapping[str, Any] | pd.Series) -> str:
             return f"{set_id}_NSEW_{x_nm}_{y_nm}"
         return f"NSEW_{x_nm}_{y_nm}"
     return f"{Path(tile).stem}_{x_nm}_{y_nm}"
+
+
+def label_covers_uniform(key: object) -> bool:
+    """True when this key is the shared quad, combi, and uniform identity.
+
+    Letter N/S/E/W keys do not cover the uniform ``all`` shot.
+    """
+    text = str(key or "")
+    return (
+        _SET_LIGHT_KEY.fullmatch(text) is not None
+        or _LIGHT_KEY.fullmatch(text) is not None
+    )
 
 
 def nsew_key_aliases(key: str) -> set[str]:

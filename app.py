@@ -17,18 +17,16 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import src.capture.camera_automation as _camera  # noqa: E402
-import src.overall.io.tile_loader as _tile_loader  # noqa: E402
+import src.capture.camera_automation as _camera
+import src.overall.io.tile_loader as _tile_loader
 
-# Streamlit reruns this file but keeps already imported modules. Reload so a
-# name added after the process started, such as latest_run_folder, is present.
 importlib.reload(_camera)
 importlib.reload(_tile_loader)
 latest_run_folder = _camera.latest_run_folder
 input_folder_labels = _tile_loader.input_folder_labels
 
-from src.capture.capture_ui import keep_capture_inputs, keep_stage_inputs, render_capture_tab, suspend_live_view  # noqa: E402
-from src.overall.config import (  # noqa: E402
+from src.capture.capture_ui import keep_capture_inputs, keep_stage_inputs, render_capture_tab, suspend_live_view
+from src.overall.config import (
     DEFAULT_INPUT_DIR,
     apply_nsew_settings,
     beta_preset_rows,
@@ -40,21 +38,30 @@ from src.overall.config import (  # noqa: E402
     output_folder_choices,
     resolve_output_dir,
 )
-from src.overall.io.results_writer import excel_bytes, result_table, write_csv, write_xlsx  # noqa: E402
-from src.verification.ui import (  # noqa: E402
+from src.overall.io.results_writer import excel_bytes, result_table, write_csv, write_xlsx
+import src.verification.inspect as _inspect
+import src.verification.ui as _verification_ui
+import src.main_pipeline.report.report_generator as _report
+
+importlib.reload(_inspect)
+importlib.reload(_verification_ui)
+importlib.reload(_report)
+label_colors_for_hits = _inspect.label_colors_for_hits
+
+from src.verification.ui import (
+    labels_store,
     render_collection_tab,
     render_label_tab,
     render_labeled_tiles_tab,
     render_tile_inspect_tab,
     request_last_run,
 )
-from src.verification.queue import load_last_pipeline, load_particles_csv, write_last_pipeline  # noqa: E402
-from src.main_pipeline.ml.infer import next_versioned_model_path  # noqa: E402
-from src.training.train import default_label_path, main as train_main  # noqa: E402
-from src.main_pipeline.job import claim_pipeline_result, pipeline_status, start_pipeline, stop_pipeline  # noqa: E402
-from src.redirector.redirector import render_redirector_tab  # noqa: E402
-from src.main_pipeline.report.report_generator import (  # noqa: E402
-    draw_overlay_markers,
+from src.verification.queue import load_last_pipeline, load_particles_csv, write_last_pipeline
+from src.main_pipeline.ml.infer import next_versioned_model_path
+from src.training.train import default_label_path, main as train_main
+from src.main_pipeline.job import claim_pipeline_result, pipeline_status, start_pipeline, stop_pipeline
+from src.redirector.redirector import render_redirector_tab
+from src.main_pipeline.report.report_generator import (
     encode_overlay_jpeg,
     overlay_downsample,
     overlay_rgb,
@@ -65,7 +72,10 @@ from src.main_pipeline.report.report_generator import (  # noqa: E402
     unstitched_tile_paths,
     unstitched_tile_rgb,
 )
-from src.shadow.shadow import keep_shadow_inputs, render_shadow_tab  # noqa: E402
+from src.main_pipeline.runner import load_report_mosaic
+
+draw_overlay_markers = _report.draw_overlay_markers
+from src.shadow.shadow import keep_shadow_inputs, render_shadow_tab
 
 st.set_page_config(
     page_title="Particle Detection Software",
@@ -181,9 +191,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-# Number fields are <input type="number">, so a Dutch browser paints 1,0
-# while every caption and metric already uses 1.0. Keep the field as text
-# so the printed value stays with a period. A typed comma becomes a period.
 st.html(
     """
     <div id="dot-decimals"></div>
@@ -243,7 +250,7 @@ st.html(
 st.title("Particle Detection Software")
 
 NM_PER_UM = 1000.0
-UI_SCHEMA = "mixed_layout_v25"
+UI_SCHEMA = "mixed_layout_v28"
 
 def _nm_to_um(nm: float) -> float:
     return float(nm) / NM_PER_UM
@@ -297,7 +304,7 @@ def _widget_defaults(base: dict) -> dict:
         "ui_local_snr_sigma": float(det.get("local_snr_sigma", 0.0)),
         "ui_edge_soften_sigma": float(det.get("edge_soften_sigma", 12.0)),
         "ui_edge_soften_strength": float(det.get("edge_soften_strength", 2.0)),
-        "ui_edge_exclude_px": float(det.get("edge_exclude_px", 12.0)),
+        "ui_edge_exclude_px": float(det["edge_exclude_px"]),
         "ui_min_circularity": float(det.get("min_circularity", 0.0)),
         "ui_structure_neighbor_px": float(det.get("structure_neighbor_px", 48.0)),
         "ui_ml_enabled": bool((base.get("ml") or {}).get("enabled", False)),
@@ -416,11 +423,11 @@ def _assign_widget(key: str, value, *, previous_epoch: int | None = None) -> Non
         st.session_state[key] = value
 
 def _apply_beta_preset(base: dict, *, previous_epoch: int | None = None, clear_trained: bool = False) -> None:
-    """Point the ML model and threshold slider at the selected beta's preset."""
+    """Point the ML model and threshold slider at this mode's beta preset."""
     beta = float(
         st.session_state.get(_live_key("ui_f_beta"), st.session_state.get("ui_f_beta", 1.0))
     )
-    preset = preset_for_beta(beta_preset_rows(base), beta)
+    preset = preset_for_beta(beta_preset_rows(_selected_profile(base)), beta)
     _assign_widget("ui_ml_threshold", float(preset["threshold"]), previous_epoch=previous_epoch)
     st.session_state["ui_beta_model_path"] = str(preset["model_path"])
     if clear_trained:
@@ -527,7 +534,11 @@ def _prepare_ui_state(base: dict) -> None:
         _apply_standard_settings(base, "", clear_trained=True)
         st.session_state["ui_schema"] = UI_SCHEMA
         st.session_state["ui_initialized"] = True
-        st.session_state["ui_sidebar_frontend_seeded"] = True
+        st.session_state["ui_param_mount"] = "session"
+    elif st.session_state.get("ui_param_mount") != "session":
+        _apply_standard_settings(base, clear_trained=False)
+        st.session_state["ui_param_mount"] = "session"
+        st.session_state["ui_sidebar_frontend_seeded"] = False
     _backfill_held_widgets(base)
     _keep_filename_pattern(base)
     _apply_capture_suggestion()
@@ -540,7 +551,6 @@ def _prepare_ui_state(base: dict) -> None:
 
 
 def _capture_folder_label(folder: Path) -> str:
-    """``Inputs``-relative name, such as ``Groundup/v1 2026-10-20``."""
     try:
         return folder.resolve().relative_to(DEFAULT_INPUT_DIR.resolve()).as_posix()
     except ValueError:
@@ -565,6 +575,7 @@ def _render_adjust_parameters(base: dict) -> None:
         ("Uniform", "NSEW"),
         horizontal=True,
         key="ui_settings_profile",
+        persist_state="session",
         on_change=_on_profile_choice,
         args=(base,),
         help="Uniform or NSEW standard settings.",
@@ -573,7 +584,7 @@ def _render_adjust_parameters(base: dict) -> None:
         "Reset to standard values",
         on_click=_on_reset_standard,
         args=(base,),
-        help="Restore settings for the profile selected above.",
+        help="Restore settings for the profile (Uniform or NSEW) selected above.",
         width="stretch",
     )
 
@@ -646,6 +657,7 @@ def _render_adjust_parameters(base: dict) -> None:
                 placeholder="Start typing a folder name",
                 accept_new_options=True,
                 filter_mode="fuzzy",
+                persist_state="session",
                 key=input_key,
                 on_change=_on_input_folder,
                 args=(base,),
@@ -655,6 +667,7 @@ def _render_adjust_parameters(base: dict) -> None:
         else:
             st.text_input(
                 "Tile folder",
+                persist_state="session",
                 key=input_key,
                 placeholder="Start typing a folder name",
                 on_change=_on_input_folder,
@@ -666,6 +679,7 @@ def _render_adjust_parameters(base: dict) -> None:
             min_value=0.0,
             max_value=0.5,
             step=0.01,
+            persist_state="session",
             key=_live_key("ui_overlap_fraction"),
             help="The fraction of the tile that is overlapped by the next tile.",
         )
@@ -674,6 +688,7 @@ def _render_adjust_parameters(base: dict) -> None:
             min_value=0.001,
             step=0.1,
             format="%.3f",
+            persist_state="session",
             key=_live_key("ui_pixel_size_um"),
             help="Select the physical pixel size.",
         )
@@ -681,12 +696,14 @@ def _render_adjust_parameters(base: dict) -> None:
             "Parallel workers",
             min_value=1,
             max_value=32,
+            persist_state="session",
             key=_live_key("ui_workers"),
             help="How many tiles to process at once. The minimum is 1.",
         )
         with st.expander("Filename pattern"):
             st.text_input(
                 "Filename pattern (regex)",
+                persist_state="session",
                 key=_live_key("ui_filename_pattern"),
                 help="Names that do not match still run detection; they are left out of the mosaic.",
             )
@@ -694,28 +711,33 @@ def _render_adjust_parameters(base: dict) -> None:
         _restore_widgets(_SIDEBAR_SECTIONS["Preprocessing"], force=seed_frontend)
         st.checkbox(
             "Denoise",
+            persist_state="session",
             key=_live_key("ui_denoise"),
             help="Small blur so sensor speckle is not detected as particles.",
         )
         st.number_input(
             "Denoise sigma",
             min_value=0.0,
+            persist_state="session",
             key=_live_key("ui_denoise_sigma"),
             help="Blur radius in pixels; larger values also round off real particles.",
         )
         st.checkbox(
             "Flatten illumination",
+            persist_state="session",
             key=_live_key("ui_flatten_illumination"),
             help="Divide each tile by a wide blur of itself to remove vignetting.",
         )
         st.number_input(
             "Flatten sigma",
             min_value=1.0,
+            persist_state="session",
             key=_live_key("ui_flatten_sigma"),
             help="Large values flatten only illumination; small values halo region edges.",
         )
         st.checkbox(
             "Contrast stretch",
+            persist_state="session",
             key=_live_key("ui_contrast_stretch"),
             help="Map each tile's 1st–99th percentiles onto 0–1 so contrast matches before detection.",
         )
@@ -724,11 +746,13 @@ def _render_adjust_parameters(base: dict) -> None:
         st.selectbox(
             "Background suppression",
             options=["fft", "tophat"],
+            persist_state="session",
             key=_live_key("ui_method"),
             help="fft notches the repeating lattice and falls back to top-hat when a tile has no peaks.",
         )
         st.checkbox(
             "Particles are bright",
+            persist_state="session",
             key=_live_key("ui_particles_bright"),
             help="Off inverts the residual so dark debris is found the same way.",
         )
@@ -736,18 +760,21 @@ def _render_adjust_parameters(base: dict) -> None:
             "FFT peak threshold",
             0.05,
             0.95,
+            persist_state="session",
             key=_live_key("ui_fft_peak_threshold"),
             help="Lower notches more of the lattice and can also remove real structure.",
         )
         st.selectbox(
             "FFT notch source",
             options=["per_tile", "shared"],
+            persist_state="session",
             key=_live_key("ui_fft_mask"),
             help="per_tile notches each tile from its own spectrum; shared reuses the first tile.",
         )
         st.number_input(
             "Top-hat radius (px)",
             min_value=1,
+            persist_state="session",
             key=_live_key("ui_tophat_radius"),
             help="Must be larger than the biggest particle, or large debris is erased.",
         )
@@ -756,6 +783,7 @@ def _render_adjust_parameters(base: dict) -> None:
             min_value=0.1,
             step=0.5,
             format="%.2f",
+            persist_state="session",
             key=_live_key("ui_min_size_um"),
             help="Keep particles larger than this.",
         )
@@ -764,6 +792,7 @@ def _render_adjust_parameters(base: dict) -> None:
             min_value=0.1,
             step=0.5,
             format="%.2f",
+            persist_state="session",
             key=_live_key("ui_max_size_um"),
             help="Drop particles larger than this.",
         )
@@ -771,6 +800,7 @@ def _render_adjust_parameters(base: dict) -> None:
             "Blob threshold",
             0.001,
             0.5,
+            persist_state="session",
             key=_live_key("ui_blob_threshold"),
             help="DoG peak height after 0–1 scaling; lower keeps dimmer candidates.",
         )
@@ -778,6 +808,7 @@ def _render_adjust_parameters(base: dict) -> None:
             "Min prominence",
             min_value=0.0,
             max_value=0.8,
+            persist_state="session",
             key=_live_key("ui_min_prominence"),
             help="Zero residual weaker than this before detection; 0 disables.",
         )
@@ -786,42 +817,49 @@ def _render_adjust_parameters(base: dict) -> None:
             min_value=0,
             max_value=100,
             step=1,
+            persist_state="session",
             key=_live_key("ui_min_confidence_pct"),
             help="Drop blobs whose residual at the peak is below this; 0 disables.",
         )
         st.number_input(
             "Blob min sigma",
             min_value=0.5,
+            persist_state="session",
             key=_live_key("ui_blob_min_sigma"),
             help="Smallest scale searched; diameter is about 2.8 times sigma.",
         )
         st.number_input(
             "Blob max sigma",
             min_value=1.0,
+            persist_state="session",
             key=_live_key("ui_blob_max_sigma"),
             help="Largest scale searched; raise it with Max size so large flakes are found.",
         )
         st.number_input(
             "Local SNR sigma (0 = auto)",
             min_value=0.0,
+            persist_state="session",
             key=_live_key("ui_local_snr_sigma"),
             help="Envelope for local energy; 0 turns this on for FFT residuals and off for top-hat.",
         )
         st.number_input(
             "Edge soften sigma",
             min_value=0.0,
+            persist_state="session",
             key=_live_key("ui_edge_soften_sigma"),
             help="Coarse blur before the region-border gradient; 0 disables.",
         )
         st.number_input(
             "Edge soften strength",
             min_value=0.0,
+            persist_state="session",
             key=_live_key("ui_edge_soften_strength"),
             help="How hard to attenuate residual on area borders; 0 disables.",
         )
         st.number_input(
             "Edge exclude (px)",
             min_value=0.0,
+            persist_state="session",
             key=_live_key("ui_edge_exclude_px"),
             help="Ignore blobs this close to a region border, including pad corners.",
         )
@@ -829,17 +867,20 @@ def _render_adjust_parameters(base: dict) -> None:
             "Min circularity",
             min_value=0.0,
             max_value=1.0,
+            persist_state="session",
             key=_live_key("ui_min_circularity"),
             help="Drop elongated hits; 0 keeps every blob.",
         )
         st.number_input(
             "Structure neighbor radius (px)",
             min_value=0.0,
+            persist_state="session",
             key=_live_key("ui_structure_neighbor_px"),
-            help="Drop blobs that have two or more neighbours this close; 0 disables.",
+            help="Drop blobs with at least this profile's minimum neighbours this close. Uniform uses 3, NSEW uses 2. 0 disables.",
         )
         st.checkbox(
             "Apply ML filter",
+            persist_state="session",
             key=_live_key("ui_ml_enabled"),
             help="Score each proposal with the trained model and drop false positives.",
         )
@@ -857,6 +898,7 @@ def _render_adjust_parameters(base: dict) -> None:
             min_value=ml_min,
             max_value=ml_max,
             step=0.01,
+            persist_state="session",
             key=_live_key("ui_ml_threshold"),
             help="Keep blobs with at least this probability; 0 keeps every proposal.",
         )
@@ -893,6 +935,7 @@ def _render_adjust_parameters(base: dict) -> None:
                 placeholder="Start typing a folder name",
                 accept_new_options=True,
                 filter_mode="fuzzy",
+                persist_state="session",
                 key=output_key,
                 help=output_help,
                 **output_kwargs,
@@ -900,6 +943,7 @@ def _render_adjust_parameters(base: dict) -> None:
         else:
             st.text_input(
                 "Output folder",
+                persist_state="session",
                 key=output_key,
                 placeholder="Start typing a folder name",
                 help=output_help,
@@ -907,12 +951,14 @@ def _render_adjust_parameters(base: dict) -> None:
         st.number_input(
             "Merge radius (px)",
             min_value=0.0,
+            persist_state="session",
             key=_live_key("ui_merge_radius_px"),
             help="Hits closer than this on overlapping tiles count as one particle; 0 skips the merge.",
         )
         st.selectbox(
             "Cluster size aggregation",
             options=["max", "mean"],
+            persist_state="session",
             key=_live_key("ui_size_aggregation"),
             help="max keeps the largest diameter in a merged cluster; mean averages them.",
         )
@@ -921,12 +967,14 @@ def _render_adjust_parameters(base: dict) -> None:
             min_value=1.0,
             max_value=200.0,
             step=1.0,
+            persist_state="session",
             key=_live_key("ui_target_mb"),
             help="Each tile is downsampled before stitching so the full mosaic is about this large.",
         )
         st.number_input(
             "Overlay downsample (0 = auto)",
             min_value=0,
+            persist_state="session",
             key=_live_key("ui_downsample"),
             help="0 picks a factor from the target size; a value above 0 forces that factor.",
         )
@@ -936,6 +984,7 @@ def _render_adjust_parameters(base: dict) -> None:
             "Beta",
             options=beta_options,
             format_func=lambda value: f"{float(value):.2f}",
+            persist_state="session",
             key=_live_key("ui_f_beta"),
             on_change=_on_beta_change,
             args=(base,),
@@ -990,7 +1039,9 @@ def _config_from_state(base: dict) -> dict:
     ml["enabled"] = bool(_widget_value("ui_ml_enabled"))
     ml_min, ml_max = 0.0, 1.0
     ml["threshold"] = min(ml_max, max(ml_min, float(_widget_value("ui_ml_threshold"))))
-    beta_choice = preset_for_beta(beta_preset_rows(base), float(_widget_value("ui_f_beta")))
+    beta_choice = preset_for_beta(
+        beta_preset_rows(_selected_profile(base)), float(_widget_value("ui_f_beta"))
+    )
     if not st.session_state.get("ui_beta_model_path"):
         st.session_state["ui_beta_model_path"] = str(beta_choice["model_path"])
     trained_model = st.session_state.get("ui_trained_model")
@@ -1095,8 +1146,6 @@ def _pipeline_buttons(config: dict, *, running: bool) -> None:
                     st.code(detail)
             else:
                 _advance_output_folder(config)
-                # A run can finish before this fragment draws progress. A full
-                # rerun is what shows the table or the error.
                 if pipeline_status()["pending"]:
                     st.rerun(scope="app")
                 else:
@@ -1129,8 +1178,6 @@ def _pipeline_controls(config: dict) -> None:
         st.progress(fraction, text=label)
         _pipeline_buttons(config, running=True)
         return
-    # pending stays set until the full page claims the result. Retry the full
-    # rerun on every tick so a missed refresh cannot leave the page blank.
     if status["pending"]:
         st.caption("Updating results…")
         st.rerun(scope="app")
@@ -1293,7 +1340,6 @@ def _saved_plain_mosaic(saved: Path, config: dict) -> np.ndarray:
 
         import src.main_pipeline.runner as pipeline_runner
 
-        # Streamlit keeps the runner module from when this process started.
         if not hasattr(pipeline_runner, "load_report_mosaic"):
             pipeline_runner = importlib.reload(pipeline_runner)
         mosaic = pipeline_runner.load_report_mosaic(config)
@@ -1306,14 +1352,70 @@ def _saved_plain_mosaic(saved: Path, config: dict) -> np.ndarray:
     return rgb
 
 
+def _labels_stamp() -> int:
+    """Change when Tinder writes a mark, so the mosaic is drawn again."""
+    path = ROOT / "labels" / "all_labels.csv"
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
 def _mosaic_labels_on() -> bool:
-    """Checkbox for orange detection circles on the stitched mosaic. On by default."""
+    """Checkbox for detection circles on the stitched mosaic. On by default."""
     return st.checkbox(
         "Labels",
         value=True,
         key="mosaic_show_labels",
-        help="Orange circles around detected particles.",
+        help="Circles on detected particles. Green is a particle you marked, "
+        "red is not a particle, blue is not sure, and orange is not marked yet.",
     )
+
+
+def _mosaic_with_review_labels(
+    saved: Path,
+    table: pd.DataFrame,
+    config: dict,
+) -> np.ndarray | None:
+    """Draw this run's Tinder colours on the plain mosaic.
+
+    The file saved at the end of the pipeline is always orange, because the
+    marks did not exist yet. This redraws those circles from the label table.
+    """
+    plain_path = saved.parent / "mosaic_plain.png"
+    if not plain_path.is_file():
+        return None
+    try:
+        stamp = (plain_path.stat().st_mtime_ns, _labels_stamp(), int(len(table)))
+    except OSError:
+        return None
+    cache_key = ("review_mosaic", str(plain_path), stamp)
+    if st.session_state.get("review_mosaic_key") == cache_key:
+        cached = st.session_state.get("review_mosaic_rgb")
+        if isinstance(cached, np.ndarray):
+            return cached
+    bgr = cv2.imread(str(plain_path), cv2.IMREAD_COLOR)
+    if bgr is None:
+        return None
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    try:
+        mosaic = load_report_mosaic(config)
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+    if not getattr(mosaic, "placements", None) or int(mosaic.full_width) < 1:
+        return None
+    scale = rgb.shape[1] / float(mosaic.full_width)
+    colors = label_colors_for_hits(
+        table,
+        labels_store(ROOT).load(),
+        run_dir=str(config.get("input_dir") or "") or None,
+    )
+    marked = draw_overlay_markers(
+        rgb, mosaic, table, config, colors=colors, scale=scale
+    )
+    st.session_state["review_mosaic_key"] = cache_key
+    st.session_state["review_mosaic_rgb"] = marked
+    return marked
 
 
 def _saved_mosaic_path(active_config: dict) -> Path | None:
@@ -1549,16 +1651,27 @@ def _render_finished_run(config: dict) -> bool:
             show_labels = _mosaic_labels_on()
             if saved is not None:
                 if show_labels:
-                    st.image(
-                        str(saved),
-                        caption="Saved mosaic with labels",
-                        width="stretch",
-                    )
-                    download_name = saved.name
-                    download_bytes = saved.read_bytes()
-                    download_mime = (
-                        "image/png" if saved.suffix.lower() == ".png" else "image/jpeg"
-                    )
+                    review = _mosaic_with_review_labels(saved, table, active_config)
+                    if review is None:
+                        st.image(
+                            str(saved),
+                            caption="Saved mosaic with labels",
+                            width="stretch",
+                        )
+                        download_name = saved.name
+                        download_bytes = saved.read_bytes()
+                        download_mime = (
+                            "image/png" if saved.suffix.lower() == ".png" else "image/jpeg"
+                        )
+                    else:
+                        st.image(
+                            review,
+                            caption="Saved mosaic with labels",
+                            width="stretch",
+                        )
+                        download_name = "mosaic_overlay.jpg"
+                        download_bytes = encode_overlay_jpeg(review)
+                        download_mime = "image/jpeg"
                 else:
                     try:
                         if not (saved.parent / "mosaic_plain.png").is_file():
@@ -1607,17 +1720,24 @@ def _render_finished_run(config: dict) -> bool:
                 float(active_config.get("report", {}).get("target_mb", 20.0)),
                 int(active_config.get("report", {}).get("downsample", 0) or 0),
                 len(table),
+                _labels_stamp(),
             )
             if st.session_state.get("overlay_key") != overlay_key:
                 try:
                     plain = overlay_rgb(mosaic, active_config, crop=None)
                     st.session_state["overlay_plain"] = plain
+                    review_colors = label_colors_for_hits(
+                        table,
+                        labels_store(ROOT).load(),
+                        run_dir=str(active_config.get("input_dir") or "") or None,
+                    )
                     st.session_state["overlay"] = draw_overlay_markers(
                         plain,
                         mosaic,
                         table,
                         active_config,
                         crop=None,
+                        colors=review_colors,
                     )
                 except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
                     st.error("The mosaic was not stitched. The particle table below is still available.")
@@ -1680,7 +1800,16 @@ def _render_finished_run(config: dict) -> bool:
                     cropped = overlay_rgb(mosaic, active_config, crop=crop)
                     if show_labels:
                         cropped = draw_overlay_markers(
-                            cropped, mosaic, table, active_config, crop=crop
+                            cropped,
+                            mosaic,
+                            table,
+                            active_config,
+                            crop=crop,
+                            colors=label_colors_for_hits(
+                                table,
+                                labels_store(ROOT).load(),
+                                run_dir=str(active_config.get("input_dir") or "") or None,
+                            ),
                         )
                     caption = (
                         "Cropped region with labels"
@@ -1795,13 +1924,17 @@ if page == "Verify":
                 key="database_area_line",
                 help="Outline the measured particle area on the particle crops.",
             )
-            groundup_tab, glovebox_tab = st.tabs(
-                ["Groundup", "Glovebox"],
+            st.caption(
+                "Angle labels named 3of6 stay in all_labels only, until they are placed."
+            )
+            uniform_tab, nsew_tab, glovebox_tab = st.tabs(
+                ["Uniform", "NSEW", "Glovebox"],
                 on_change="rerun",
                 key="database_campaign_tabs",
             )
             for campaign_tab, campaign in (
-                (groundup_tab, "groundup"),
+                (uniform_tab, "uniform"),
+                (nsew_tab, "nsew"),
                 (glovebox_tab, "glovebox"),
             ):
                 if not campaign_tab.open:

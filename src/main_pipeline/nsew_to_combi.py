@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.main_pipeline.nsew import combine_nsew_folder, find_nsew_images  # noqa: E402
+from src.main_pipeline.nsew import combine_nsew_folder, find_nsew_images
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

@@ -197,7 +197,10 @@ class LazyMosaic:
 
         if use_cache:
             for index, placement in enumerate(self.placements):
-                small_tiles[index] = self.thumbnails.get(placement.name)
+                small = self.thumbnails.get(placement.name)
+                if small is None:
+                    small = _load_downsampled(placement.path, factor)
+                small_tiles[index] = small
                 if progress_cb is not None:
                     progress_cb(index + 1, total, placement.name)
         elif n_workers == 1:

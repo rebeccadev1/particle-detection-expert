@@ -108,18 +108,44 @@ def test_score_table_matches_groundup_v3_particles_only_last_run() -> None:
     assert round(float(two["unhappiness"]), 2) == 43.93
 
 
+def test_uniform_and_nsew_list_the_same_preprocess_and_detect_keys() -> None:
+    from src.overall.config import load_config
+
+    uniform = load_config(PACKAGE_ROOT / "config.yaml")
+    nsew = load_nsew_overlay()
+    assert set(nsew["preprocessing"]) == set(uniform["preprocessing"])
+    assert set(nsew["detection"]) == set(uniform["detection"])
+    assert "min_prominence" in uniform["detection"]
+
+
 def test_nsew_config_file_has_sidebar_keys() -> None:
     overlay = load_nsew_overlay()
-    assert overlay["pixel_size_nm"] == 3500.0
-    assert overlay["ml"]["enabled"] is True
-    assert "threshold" in overlay["ml"]
-    assert "min_confidence" in overlay["detection"]
     merged = apply_nsew_settings(
-        {"pixel_size_nm": 960.0, "ml": {"threshold": 0.0165}, "detection": {"min_confidence": 0.5}}
+        {
+            "pixel_size_nm": 960.0,
+            "preprocessing": {"denoise_sigma": 9.0},
+            "detection": {"min_confidence": 0.01, "tophat_radius": 1},
+            "ml": {
+                "enabled": False,
+                "threshold": 0.23,
+                "model_path": "models/particle_clf_v4_residual.joblib",
+            },
+            "report": {
+                "f_beta": 2.0,
+                "beta_presets": [
+                    {
+                        "beta": 1.0,
+                        "model_path": "models/particle_clf_v4_residual.joblib",
+                        "threshold": 0.23,
+                    }
+                ],
+            },
+        }
     )
-    assert merged["pixel_size_nm"] == 3500.0
-    assert merged["ml"]["enabled"] is True
-    assert merged["ml"]["threshold"] == overlay["ml"]["threshold"]
+    assert merged["pixel_size_nm"] == overlay["pixel_size_nm"]
+    for section in ("preprocessing", "detection", "ml", "report"):
+        for key, value in overlay[section].items():
+            assert merged[section][key] == value
 
 
 def test_app_sidebar_has_nsew_toggle() -> None:

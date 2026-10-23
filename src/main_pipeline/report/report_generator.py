@@ -19,6 +19,7 @@ from src.overall.io.tile_loader import (
     resolve_input_dir,
     try_parse_tile_filename,
 )
+from src.main_pipeline.nsew import prepare_detection_paths
 from src.main_pipeline.stitching.stitcher import (
     LazyMosaic,
     downsample_for_target,
@@ -149,7 +150,7 @@ def overlay_rgb(
     """
     downsample = overlay_downsample(mosaic, config, crop=crop)
     preview = mosaic.preview(downsample=downsample, crop=crop, progress_cb=progress_cb)
-    return _to_display_rgb(preview)
+    return _photo_display_rgb(preview)
 
 def draw_overlay_markers(
     rgb: np.ndarray,
@@ -157,12 +158,17 @@ def draw_overlay_markers(
     particles: pd.DataFrame,
     config: dict[str, Any],
     crop: tuple[int, int, int, int] | None = None,
+    colors: Mapping[str, tuple[int, int, int]] | None = None,
+    scale: float | None = None,
 ) -> np.ndarray:
-    """Copy ``rgb`` and draw orange circles on detected particles.
+    """Copy ``rgb`` and draw circles on detected particles.
 
     Marker positions are converted back to mosaic pixels using ``pixel_size_nm``.
     ``crop`` is ``(y, x, h, w)`` in full-resolution mosaic pixels, matching the
-    crop used to build ``rgb``.
+    crop used to build ``rgb``. Unlabeled hits stay orange. ``colors`` maps a
+    detection key to the review colour (green particle, red not a particle,
+    blue not sure). ``scale`` is display pixels per full-resolution mosaic
+    pixel; it overrides the downsample used when ``rgb`` is an already saved image.
     """
     if particles.empty or np.asarray(rgb).size == 0:
         return rgb
@@ -176,25 +182,32 @@ def draw_overlay_markers(
         if particles.empty:
             return rgb
 
-    downsample = overlay_downsample(mosaic, config, crop=crop)
+    if scale is None:
+        scale = 1.0 / float(overlay_downsample(mosaic, config, crop=crop))
     pixel_size = float(cfg_get(config, "pixel_size_nm", 1.0))
     if pixel_size <= 0:
         pixel_size = 1.0
     y_off = 0 if crop is None else crop[0]
     x_off = 0 if crop is None else crop[1]
     marked = np.array(rgb, copy=True)
+    unlabeled = (255, 140, 40)
 
     for _, row in particles.iterrows():
         x_px = float(row["x_global"]) / pixel_size
         y_px = float(row["y_global"]) / pixel_size
-        x_d = int(round((x_px - x_off) / downsample))
-        y_d = int(round((y_px - y_off) / downsample))
+        x_d = int(round((x_px - x_off) * scale))
+        y_d = int(round((y_px - y_off) * scale))
         if not (0 <= x_d < marked.shape[1] and 0 <= y_d < marked.shape[0]):
             continue
-        particle_r = float(row["size"]) / pixel_size / downsample / 2.0
+        particle_r = float(row["size"]) / pixel_size * scale / 2.0
         radius = max(int(round(particle_r)) + 10, 14)
+        color = unlabeled
+        if colors:
+            key = str(row["key"]) if "key" in row.index and pd.notna(row["key"]) else ""
+            if key:
+                color = colors.get(key, unlabeled)
         cv2.circle(
-            marked, (x_d, y_d), radius, (255, 140, 40), thickness=3, lineType=cv2.LINE_AA
+            marked, (x_d, y_d), radius, color, thickness=3, lineType=cv2.LINE_AA
         )
     return marked
 
@@ -214,19 +227,32 @@ def overlay_markers(
     rgb = overlay_rgb(mosaic, config, crop=crop, progress_cb=progress_cb)
     return draw_overlay_markers(rgb, mosaic, particles, config, crop=crop)
 
-def _to_display_rgb(image: np.ndarray) -> np.ndarray:
+def _photo_display_rgb(image: np.ndarray) -> np.ndarray:
+    """RGB of a photograph at its saved gray levels.
+
+    An 8-bit tile stays as saved. A 0–1 float is scaled by 255. Wider counts
+    are scaled by their own maximum. There is no percentile stretch, which
+    was lifting dark microscope photos.
+    """
     array = np.asarray(image, dtype=np.float64)
     if array.size == 0:
         return np.zeros((0, 0, 3), dtype=np.uint8)
-    low, high = np.percentile(array, (1.0, 99.5))
-    if high <= low:
-        high = low + 1e-6
-    scaled = np.clip((array - low) / (high - low), 0.0, 1.0)
-    gray = (scaled * 255).astype(np.uint8)
+    finite = array[np.isfinite(array)]
+    peak = float(finite.max()) if finite.size else 0.0
+    if peak <= 1.0:
+        scaled = np.clip(array, 0.0, 1.0) * 255.0
+    elif peak <= 255.0:
+        scaled = np.clip(array, 0.0, 255.0)
+    else:
+        scaled = np.clip(array, 0.0, None) * (255.0 / peak)
+    gray = np.nan_to_num(scaled, nan=0.0).astype(np.uint8)
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
 
-# Pages are a JPEG of an A4 raster. 150 dpi at Pillow's default JPEG
-# quality is what made the type look soft; 220 dpi keeps the same layout.
+
+def _to_display_rgb(image: np.ndarray) -> np.ndarray:
+    """Display a photo at its saved gray levels. No contrast stretch."""
+    return _photo_display_rgb(image)
+
 _DPI = 220.0
 _BASE_DPI = 150.0
 
@@ -286,7 +312,6 @@ def _last_run_pages(
         pages.extend(_unstitched_pages(unstitched, folder))
     return pages
 
-# 1 pt in page pixels. Font sizes stay in points and track ``_DPI``.
 _PT_PX = _DPI / 72.0
 _H1 = round(18 * _PT_PX)
 _H2 = round(14 * _PT_PX)
@@ -661,10 +686,11 @@ def _filename_is_placeable(filename: str, pattern: str) -> bool:
     return "row" in meta and "col" in meta
 
 def unstitched_tile_paths(config: Mapping[str, Any]) -> list[Path]:
-    """Images in the input folder whose names have no grid pattern.
+    """Images detection ran that have no grid pattern.
 
-    These still run through detection. They are shown one by one instead of
-    being stitched.
+    Directional N/S/E/W shots are combined first and left out, the same way
+    the pipeline does. A combi with no row and column is shown on its own
+    page. Grid combis are stitched instead.
     """
     folder = str(config.get("input_dir") or "").strip()
     if not folder:
@@ -678,7 +704,8 @@ def unstitched_tile_paths(config: Mapping[str, Any]) -> list[Path]:
             config.get("magnification"),
             include_unmatched=True,
         )
-    except (FileNotFoundError, OSError):
+        paths = prepare_detection_paths(paths)
+    except (FileNotFoundError, OSError, ValueError):
         return []
     return [path for path in paths if not _filename_is_placeable(path.name, pattern)]
 
@@ -748,7 +775,7 @@ def unstitched_tile_pair(
     image = load_tile_image(tile_path)
     factor = _tile_preview_factor(int(image.shape[0]), int(image.shape[1]), config)
     small = downsample_image(np.asarray(image, dtype=np.float32), factor)
-    plain = _to_display_rgb(small)
+    plain = _photo_display_rgb(small)
     labeled = _draw_local_markers(
         plain, _particles_for_path(table, tile_path), config, factor
     )

@@ -15,7 +15,6 @@ import tifffile
 from src.overall.config import DEFAULT_INPUT_DIR, PACKAGE_ROOT, WORKSPACE_ROOT
 from src.main_pipeline.measurement.measurer import is_combi_tile, is_submap_lighting_tile
 
-# Example: R3_5_32_5X.tif → run=3, row=5, col=32, mag=5
 _IMAGE_SUFFIX = r"(?:tiff?|bmp|png|jpe?g)"
 DEFAULT_FILENAME_PATTERN = (
     rf"R(?P<run>\d+)_(?P<row>\d+)_(?P<col>\d+)_(?P<mag>[\d.]+)X\.{_IMAGE_SUFFIX}"
@@ -154,7 +153,6 @@ def list_tile_paths(folder: str | Path) -> list[Path]:
     paths: list[Path] = []
     for pattern in TILE_GLOBS:
         paths.extend(sorted(directory.glob(pattern)))
-    # glob("*.tif") also matches ".tiff" on some platforms; unique keep order
     unique: list[Path] = []
     seen: set[Path] = set()
     for path in paths:
@@ -382,7 +380,6 @@ def matching_tile_paths(
             continue
         if mag_filter is not None and abs(float(meta.get("mag", -1)) - mag_filter) > 1e-6:
             continue
-        # Column 0 is outside the wafer grid (e.g. R3_2_0_5X.tif).
         if "col" in meta and int(meta["col"]) == 0:
             continue
         matched.append(path)

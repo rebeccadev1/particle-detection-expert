@@ -73,12 +73,10 @@ def test_drawn_mask_shadow_on_dark_hair() -> None:
     assert result.particle_type == "dark"
     assert int(debug["particle"].any(axis=0).sum()) >= 80
     assert result.length_px >= 20.0
-    # Drawn body must not be counted as shadow.
     assert not np.any(debug["shadow"] & debug["particle"])
 
 
 def test_mask_from_canvas_fills_outline() -> None:
-    # Display-sized RGBA with a hollow green rectangle outline.
     canvas = np.zeros((100, 100, 4), dtype=np.uint8)
     for sl in ((slice(20, 80), slice(20, 25)), (slice(20, 80), slice(75, 80)),
                (slice(20, 25), slice(20, 80)), (slice(75, 80), slice(20, 80))):
@@ -91,8 +89,8 @@ def test_mask_from_canvas_fills_outline() -> None:
 
 def test_mask_from_canvas_ignores_full_frame_background() -> None:
     canvas = np.zeros((80, 80, 4), dtype=np.uint8)
-    canvas[:] = (90, 90, 90, 255)  # baked background
-    canvas[30:50, 20:60] = (40, 180, 70, 255)  # green pen
+    canvas[:] = (90, 90, 90, 255)
+    canvas[30:50, 20:60] = (40, 180, 70, 255)
     mask = mask_from_canvas(canvas, (80, 80), close_px=3)
     assert mask[40, 40]
     assert not mask[5, 5]
@@ -140,11 +138,9 @@ def test_light_from_compass_and_stem() -> None:
 
 
 def test_light_distance_edge_centre_far_edge() -> None:
-    # Light from N: top edge 6.6 mm, centre 10 mm, bottom edge 13.4 mm.
     assert abs(light_distance_mm(1023.5, 0.0, 2048, 2048, 0.0) - 6.6) < 0.01
     assert abs(light_distance_mm(1023.5, 1023.5, 2048, 2048, 0.0) - 10.0) < 1e-9
     assert abs(light_distance_mm(1023.5, 2047.0, 2048, 2048, 0.0) - 13.4) < 0.01
-    # Light from E: right edge is closest.
     assert abs(light_distance_mm(2047.0, 1023.5, 2048, 2048, 90.0) - 6.6) < 0.01
 
 

@@ -19,9 +19,6 @@ _SNR_PERCENTILE = 99.5
 _CIRCULARITY_MASS_FRACTION = 0.4
 _SUPPORT_AREA_FACTOR = 6.0
 _LOCAL_PEAK_SNR = 2.5
-# Keep a clustered / in-line blob if it is clearly bigger or brighter than
-# the layout nodes around it. 1.30× recovers ~20 µm flakes sitting in a
-# 13 µm top-hat lattice; equal-size bead chains still drop.
 _STRUCTURE_SIZE_RATIO = 1.30
 _STRUCTURE_LINE_MAX_GAP_PX = 48.0
 _STRUCTURE_SNR_RATIO = 2.5
@@ -31,10 +28,6 @@ _HIST_BINS = 512
 _MEDIAN_SAMPLE = 250_000
 _LATTICE_PROBE_MIN = 320
 _LATTICE_PROBE_SIZE = 256
-# Compact residual islands that sit on a layout ridge. DoG only sees the rim
-# after edge softening zeros the interior. ≥ island_large_nm always protected;
-# ≥ island_min_nm protected only on a *single* edge (not an L-junction / pad
-# corner). Sizes are nm; convert with pixel_size_nm.
 _ISLAND_MIN_NM = 20_000.0
 _ISLAND_LARGE_NM = 40_000.0
 _ISLAND_MAX_ASPECT = 3.0
@@ -1090,7 +1083,7 @@ def _tile_residual_maps(
     max_sigma = float(cfg_get(config, "detection.blob_max_sigma", 8.0))
     edge_sigma = float(cfg_get(config, "detection.edge_soften_sigma", 12.0))
     edge_strength = float(cfg_get(config, "detection.edge_soften_strength", 2.0))
-    exclude_px = float(cfg_get(config, "detection.edge_exclude_px", 12.0))
+    exclude_px = float(cfg_get(config, "detection.edge_exclude_px"))
     min_length = float(cfg_get(config, "detection.edge_min_length_px", 40.0))
     min_prominence = float(cfg_get(config, "detection.min_prominence", 0.30))
     edge_distance = (
@@ -1171,6 +1164,7 @@ def _gate_blob(
     edge_distance: np.ndarray | None,
     config: dict[str, Any],
     protect: np.ndarray | None = None,
+    photo: np.ndarray | None = None,
 ) -> tuple[ParticleCandidate | None, str]:
     """Return a candidate or the first gate that drops this DoG peak."""
     config = with_recall_profile(config)
@@ -1179,7 +1173,7 @@ def _gate_blob(
     min_circ = float(cfg_get(config, "detection.min_circularity", 0.0))
     min_confidence = float(cfg_get(config, "detection.min_confidence", 0.0))
     min_prominence = float(cfg_get(config, "detection.min_prominence", 0.30))
-    exclude_px = float(cfg_get(config, "detection.edge_exclude_px", 12.0))
+    exclude_px = float(cfg_get(config, "detection.edge_exclude_px"))
     max_support = float(cfg_get(config, "detection.max_support_area_px", 0.0) or 0.0)
     mass_fraction = float(
         cfg_get(config, "detection.size_mass_fraction", _CIRCULARITY_MASS_FRACTION)
@@ -1222,8 +1216,9 @@ def _gate_blob(
     if support > support_cap:
         return None, "support"
     size_half = max(int(np.ceil(3.0 * radius)), int(np.ceil(0.55 * max_d)), 4)
+    size_image = array if photo is None else photo
     measured = blob_equivalent_diameter(
-        array,
+        size_image,
         float(y),
         float(x),
         radius,
@@ -1231,8 +1226,6 @@ def _gate_blob(
         bright=particles_bright,
         half=size_half,
     )
-    # Size bounds apply only to the photo equivalent diameter. The DoG scale
-    # is a search scale and must not reject a peak on its own.
     if measured <= 0:
         return None, "measured_size"
     diameter = measured
@@ -1276,7 +1269,7 @@ def apply_structure_filters(
     clustered = reject_clustered_candidates(
         counted,
         float(cfg_get(config, "detection.structure_neighbor_px", 48.0)),
-        int(cfg_get(config, "detection.structure_min_neighbors", 2)),
+        int(cfg_get(config, "detection.structure_min_neighbors")),
         size_ratio=size_ratio,
     )
     return reject_axis_aligned_chains(
@@ -1296,6 +1289,7 @@ def detect_particles(
     config: dict[str, Any],
     fft_mask: np.ndarray | None = None,
     structure_filters: bool = True,
+    photo: np.ndarray | None = None,
 ) -> list[ParticleCandidate]:
     """Detect particle candidates on a single preprocessed tile.
 
@@ -1306,6 +1300,10 @@ def detect_particles(
     anywhere, are protected), then runs DoG blobs (LoG if ``blob_method``
     is ``log``). Elongated and clustered layout hits are dropped when
     ``structure_filters`` is true. Returns local pixel coordinates.
+
+    ``photo`` is the tile before preprocessing. The equivalent diameter and
+    the size gate use it. Peaks are still found on ``image``. Omit ``photo``
+    only when ``image`` is already the photograph to measure.
     """
     config = with_recall_profile(config)
     _array, residual, edge_distance, blobs, protect = _residual_and_blobs(
@@ -1325,6 +1323,7 @@ def detect_particles(
             edge_distance,
             config,
             protect=protect,
+            photo=photo,
         )
         if cand is not None:
             candidates.append(cand)
@@ -1339,14 +1338,19 @@ def trace_locations(
     locations: list[tuple[float, float]],
     fft_mask: np.ndarray | None = None,
     near_px: float = 20.0,
+    photo: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
-    """Explain why each ``(y_local, x_local)`` is not a kept hit."""
+    """Explain why each ``(y_local, x_local)`` is not a kept hit.
+
+    ``photo`` is the unprocessed tile, used for the size gate, matching
+    ``detect_particles``.
+    """
     config = with_recall_profile(config)
     array, residual, edge_distance, blobs, protect = _residual_and_blobs(
         image, config, fft_mask
     )
     height, width = residual.shape
-    exclude_px = float(cfg_get(config, "detection.edge_exclude_px", 12.0))
+    exclude_px = float(cfg_get(config, "detection.edge_exclude_px"))
     min_prominence = float(cfg_get(config, "detection.min_prominence", 0.30))
     rows: list[dict[str, Any]] = []
     blob_xy = (
@@ -1366,6 +1370,7 @@ def trace_locations(
             edge_distance,
             config,
             protect=protect,
+            photo=photo,
         )
         if cand is not None:
             gated.append(cand)
@@ -1386,7 +1391,7 @@ def trace_locations(
     clustered = reject_clustered_candidates(
         pre,
         float(cfg_get(config, "detection.structure_neighbor_px", 48.0)),
-        int(cfg_get(config, "detection.structure_min_neighbors", 2)),
+        int(cfg_get(config, "detection.structure_min_neighbors")),
         size_ratio=size_ratio,
     )
     chained = reject_axis_aligned_chains(

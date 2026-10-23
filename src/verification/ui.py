@@ -21,17 +21,14 @@ def _failure(action: str, next_step: str, exc: BaseException) -> None:
         st.code(detail)
 
 
-from src.overall.config import cfg_get, resolve_output_dir
+from src.overall.config import cfg_get
 from src.overall.io.tile_loader import DEFAULT_FILENAME_PATTERN, matching_tile_paths
 from src.verification.crops import (
     TileImageCache,
-    brightest_direction_crop,
-    brightest_prominence_direction_row,
     combi_or_uniform_crop,
-    compass_direction,
     config_for_hit_placement,
     crop_particle,
-    nsew_direction_crops,
+    nsew_combi_crop,
     direction_images_for_combined,
     find_tile_path,
     local_px_to_global_nm,
@@ -45,6 +42,7 @@ from src.verification.inspect import (
     GRID_N,
     INSPECT_DISPLAY_WIDTH,
     LABEL_CIRCLE_COLORS,
+    MARKED_MOSAIC_NAME,
     MISSED_PARTICLE_COLOR,
     OVERVIEW_MAX_SIDE,
     ZOOM_MAX_SIDE,
@@ -53,14 +51,18 @@ from src.verification.inspect import (
     circles_from_rows,
     detections_on_review_picture,
     display_xy_to_local,
+    fresh_inspect_click,
     expand_direction_tile_names,
     expand_submap_lighting_names,
     label_color_for_key,
     labeled_particle_recovery,
     label_on_run_tiles,
+    with_grid_folder,
     crop_metric_cells,
     f_beta_score,
     std_of_crop_cells,
+    std_of_tile_scores,
+    subfolder_score_rows,
     last_run_class_counts,
     last_run_class_counts_by_tile,
     unhappiness_score,
@@ -70,6 +72,7 @@ from src.verification.inspect import (
     outline_particle_crop_file,
     photo_particle_edge,
     verify_missed_photo_sizes,
+    write_marked_mosaic,
     overlay_view,
     pointer_miss_rows,
     pointer_direction_tiles,
@@ -83,7 +86,6 @@ from src.verification.queue import (
     clear_label_queue,
     expand_labeled_keys,
     label_queue_is_cleared,
-    last_run_csv,
     load_last_pipeline,
     restore_label_queue,
     use_last_pipeline_queue,
@@ -114,7 +116,7 @@ from src.main_pipeline.stitching.stitcher import LazyMosaic
 
 try:
     from streamlit_image_coordinates import streamlit_image_coordinates
-except ImportError:  # pragma: no cover - UI-only optional
+except ImportError:
     streamlit_image_coordinates = None
 
 NM_PER_UM = 1000.0
@@ -160,6 +162,7 @@ def _labels_for_scene(
 ) -> pd.DataFrame:
     if labels_df is None or labels_df.empty:
         return labels_df
+    run_dir = str(cfg_get(config, "input_dir", "") or "") or None
     scene = related_scene_tile_names(
         cfg_get(config, "input_dir", None), extra_tiles
     )
@@ -169,8 +172,12 @@ def _labels_for_scene(
         lambda path: str(path).replace("\\", "/").rsplit("/", 1)[-1]
     )
     kept = labels_df.loc[tile.isin(scene)]
-    # A Tinder label is often stored on a quad. Combi and uniform still show
-    # that hit, so the label has to come along.
+    if run_dir and "source_tile" in kept.columns:
+        kept = kept.loc[
+            kept["source_tile"].astype(str).map(
+                lambda name: label_on_run_tiles(name, scene, run_dir)
+            )
+        ]
     review_sets = {
         submap_id(name)
         for name in (extra_tiles or ())
@@ -244,16 +251,25 @@ def render_label_tab(
     table: pd.DataFrame | None,
     mosaic: LazyMosaic | None,
 ) -> None:
-    """One unlabeled crop at a time, labeled with arrow-key buttons."""
+    """One unlabeled crop at a time, labeled with arrow-key buttons.
+
+    The queue is the last pipeline run, and only after Load last run.
+    ``table`` is the live Analyse result and is not queued here.
+    """
+    del table
     store = labels_store(project_root)
     cache = st.session_state.setdefault("label_tile_cache", TileImageCache())
     origin_cache = st.session_state.setdefault("label_origin_cache", {})
 
     st.header("Label detections")
     st.caption("One crop at a time. The key for each action is on its button.")
+    _show_marked_mosaic_note()
 
     pipeline_csv, pipeline_config = load_last_pipeline(config)
-    if not st.session_state.get("load_last_run"):
+    use_last_pipeline = use_last_pipeline_queue(
+        st.session_state.get("label_source"), pipeline_csv
+    )
+    if not use_last_pipeline:
         st.button(
             "Load last run",
             key="label_load_last_run",
@@ -267,17 +283,9 @@ def render_label_tab(
         )
         st.caption("Last run stays unloaded until you click Load last run.")
         return
-    use_last_pipeline = use_last_pipeline_queue(
-        st.session_state.get("label_source"), pipeline_csv
-    )
-    if use_last_pipeline:
-        last_csv = pipeline_csv
-        crop_config = pipeline_config
-        tables = _last_pipeline_tables(pipeline_csv)
-    else:
-        last_csv = last_run_csv(project_root, config)
-        crop_config = config
-        tables = _detection_tables(project_root, table, config)
+    last_csv = pipeline_csv
+    crop_config = pipeline_config
+    tables = _last_pipeline_tables(pipeline_csv)
     tables = [
         shared
         for frame in tables
@@ -401,19 +409,20 @@ def render_label_tab(
             cache=cache,
             origin_cache=origin_cache,
         )
-        views = {}
+        nsew_combi = None
         if review is not None:
             crop, _review_prominence = review
         else:
-            views = nsew_direction_crops(
+            nsew_combi = nsew_combi_crop(
                 current,
                 crop_config,
                 mosaic=mosaic,
                 cache=cache,
                 origin_cache=origin_cache,
             )
-            if views:
-                crop = next(iter(views.values()))
+            if nsew_combi is not None:
+                crop = nsew_combi
+                _review_prominence = float(current.get("confidence") or 0.0)
             else:
                 crop = crop_particle(
                     current,
@@ -428,7 +437,7 @@ def render_label_tab(
         return
 
     size_um = float(current["size"]) / NM_PER_UM
-    if review is not None:
+    if review is not None or nsew_combi is not None:
         image_col, _ = st.columns([LABEL_IMAGE_WIDTH, 800])
         image_col.image(
             crop.rgb,
@@ -437,20 +446,6 @@ def render_label_tab(
                 f"{size_um:.2f} µm · prominence {_review_prominence:.3f}"
             ),
             width=LABEL_IMAGE_WIDTH,
-        )
-    elif views:
-        cols = st.columns(len(views))
-        for column, (direction, view) in zip(cols, views.items()):
-            column.image(
-                view.rgb,
-                caption=f"{direction} · {view.tile_path.name}",
-                width="stretch",
-            )
-        dirs = ", ".join(views)
-        st.caption(
-            f"id {current.get('id', '')} · {size_um:.2f} µm · "
-            f"confidence {float(current.get('confidence', 0.0)):.3f} · "
-            f"same location on {dirs} (one label for all)"
         )
     else:
         image_col, _ = st.columns([LABEL_IMAGE_WIDTH, 800])
@@ -488,16 +483,18 @@ def render_label_tab(
         disabled=labeled_n == 0,
     )
 
+    run_dir = str(cfg_get(crop_config, "input_dir", "") or "") or None
+    marked = with_grid_folder(current, run_dir)
     if is_particle:
-        store.apply_label(current, "particle", crop.rgb)
+        store.apply_label(marked, "particle", crop.rgb)
         st.session_state.pop("label_front_key", None)
         st.rerun()
     if not_sure:
-        store.apply_label(current, "not_sure", crop.rgb)
+        store.apply_label(marked, "not_sure", crop.rgb)
         st.session_state.pop("label_front_key", None)
         st.rerun()
     if not_particle:
-        store.apply_label(current, "not_particle", crop.rgb)
+        store.apply_label(marked, "not_particle", crop.rgb)
         st.session_state.pop("label_front_key", None)
         st.rerun()
     if undo:
@@ -580,7 +577,7 @@ def _all_hits_crop(
     cache: TileImageCache,
     origin_cache: dict,
 ) -> tuple[ParticleCrop, float]:
-    """Combi or uniform when this is a Groundup hit, else the brightest N/S/E/W."""
+    """Combi or uniform for a Groundup hit. The combi for an NSEW hit."""
     review = combi_or_uniform_crop(
         record,
         crop_config,
@@ -593,43 +590,16 @@ def _all_hits_crop(
     )
     if review is not None:
         return review
-    best = brightest_prominence_direction_row(
+    combi = nsew_combi_crop(
         record,
-        candidates,
-        merge_radius_nm=merge_radius_nm,
-        size_match_fraction=size_match_fraction,
+        crop_config,
+        mosaic=mosaic,
+        cache=cache,
+        origin_cache=origin_cache,
     )
-    if best is not None:
-        shown = dict(record)
-        shown["source_tile"] = best.get("source_tile", shown.get("source_tile"))
-        shown["x_global"] = best.get("x_global", shown.get("x_global"))
-        shown["y_global"] = best.get("y_global", shown.get("y_global"))
-        if float(best.get("size") or 0.0) > 0:
-            shown["size"] = best["size"]
-        if best.get("confidence") not in (None, ""):
-            shown["confidence"] = best["confidence"]
-        crop = crop_particle(
-            shown,
-            crop_config,
-            mosaic=mosaic,
-            cache=cache,
-            origin_cache=origin_cache,
-        )
-        direction = compass_direction(str(shown.get("source_tile") or "")) or ""
-        prominence = float(shown.get("confidence") or 0.0)
-        return (
-            ParticleCrop(
-                rgb=crop.rgb,
-                x_local=crop.x_local,
-                y_local=crop.y_local,
-                crop_x0=crop.crop_x0,
-                crop_y0=crop.crop_y0,
-                tile_path=crop.tile_path,
-                direction=direction,
-            ),
-            prominence,
-        )
-    crop = _tinder_crop(
+    if combi is not None:
+        return combi, float(record.get("confidence") or 0.0)
+    crop = crop_particle(
         record,
         crop_config,
         mosaic=mosaic,
@@ -639,31 +609,55 @@ def _all_hits_crop(
     return crop, float(record.get("confidence") or 0.0)
 
 
-def _tinder_crop(
-    record: dict[str, Any],
-    crop_config: dict[str, Any],
-    *,
-    mosaic: LazyMosaic | None,
-    cache: TileImageCache,
-    origin_cache: dict,
-):
-    """Directional crop when the hit is on a combined image, otherwise the source tile."""
-    bright = brightest_direction_crop(
-        record,
-        crop_config,
-        mosaic=mosaic,
-        cache=cache,
-        origin_cache=origin_cache,
-    )
-    if bright is not None:
-        return bright
-    return crop_particle(
-        record,
-        crop_config,
-        mosaic=mosaic,
-        cache=cache,
-        origin_cache=origin_cache,
-    )
+def _detection_frame(detections: pd.DataFrame | list[pd.DataFrame] | None) -> pd.DataFrame:
+    """One table, whether the caller has the run frame or the label queues."""
+    if isinstance(detections, pd.DataFrame):
+        return detections
+    frames = [
+        frame
+        for frame in (detections or [])
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    ]
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def _save_marked_mosaic(
+    config: dict[str, Any],
+    detections: pd.DataFrame | list[pd.DataFrame] | None,
+    labels: pd.DataFrame | None,
+) -> tuple[str, str]:
+    """Write the review mosaic for this run. The note is ``ok``, ``missing``, or ``error``."""
+    try:
+        with st.spinner("Writing the mosaic with markings…"):
+            path = write_marked_mosaic(
+                config,
+                _detection_frame(detections),
+                labels,
+            )
+    except (OSError, ValueError, RuntimeError) as exc:
+        detail = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        return ("error", detail[:160])
+    if path is None:
+        return ("missing", "")
+    return ("ok", str(path))
+
+
+def _show_marked_mosaic_note(note: tuple[str, str] | None = None) -> None:
+    """Tell the user where All done put the marked mosaic."""
+    if note is None:
+        stored = st.session_state.pop("marked_mosaic_note", None)
+        note = stored if isinstance(stored, tuple) else None
+    if note is None:
+        return
+    kind, detail = note
+    if kind == "ok":
+        st.success(f"Wrote the mosaic with markings to {detail}")
+    elif kind == "missing":
+        st.warning("This run has no stitched mosaic, so no marked image was written.")
+    elif kind == "error":
+        st.error(f"The marked mosaic was not written. {detail}")
 
 
 def _render_all_hits(
@@ -713,7 +707,8 @@ def _render_all_hits(
         key="label_all_done",
         help=(
             f"Save {int(pressed.sum())} marked hits as {marked_phrase} and "
-            f"label the other {remaining} as {rest_phrase}, including other pages."
+            f"label the other {remaining} as {rest_phrase}, including other pages. "
+            f"Also writes {MARKED_MOSAIC_NAME} in the output folder."
         ),
     )
     n_pages = max(1, (len(queue) + MARK_PAGE_SIZE - 1) // MARK_PAGE_SIZE)
@@ -732,7 +727,7 @@ def _render_all_hits(
         f"{len(queue)} hits · {int(pressed.sum())} marked {marked_phrase} · "
         f"page {page} of {n_pages}. "
         "Each Groundup picture is the combi or the uniform image with the highest prominence. "
-        "A letter N/S/E/W hit stays on its brightest direction. "
+        "An NSEW hit is shown on the combi. "
         f"Press {button_label} on the ones you want. Click it again to clear that mark. "
         f"All done saves the marked ones as {marked_phrase} and every other hit "
         f"as {rest_phrase}, including hits on other pages."
@@ -771,8 +766,13 @@ def _render_all_hits(
             st.session_state.pop("label_front_key", None)
         if failed:
             st.error("Left unlabeled: " + "; ".join(failed[:8]))
+        note = _save_marked_mosaic(crop_config, detections, store.load())
+        if failed:
+            _show_marked_mosaic_note(note)
             return
         st.session_state["all_hits_marked_keys"] = []
+        if note is not None:
+            st.session_state["marked_mosaic_note"] = note
         st.rerun()
 
     start = (page - 1) * MARK_PAGE_SIZE
@@ -937,7 +937,8 @@ def _queued_label_items(
         except (FileNotFoundError, ValueError, OSError) as exc:
             failed.append(str(exc))
             continue
-        items.append((record, label, crop.rgb))
+        run_dir = str(cfg_get(crop_config, "input_dir", "") or "") or None
+        items.append((with_grid_folder(record, run_dir), label, crop.rgb))
     return items, failed
 
 
@@ -963,6 +964,15 @@ def _on_empty_label_queue(csv_path: str) -> None:
     st.session_state["all_hits_marked_keys"] = []
 
 
+def _drop_inspect_mark() -> None:
+    """Remove the unsaved dark-green mark.
+
+    The click time stays. The image widget keeps returning that press, and
+    forgetting the time would draw it again on the crop that just opened.
+    """
+    st.session_state.pop("inspect_pending", None)
+
+
 def _advance_inspect_tile(delta: int) -> None:
     """Move to the previous/next tile. Must run in a button callback (before widgets)."""
     names = list(st.session_state.get("_inspect_tile_names") or [])
@@ -972,27 +982,23 @@ def _advance_inspect_tile(delta: int) -> None:
     index = names.index(current) if current in names else 0
     st.session_state["inspect_tile"] = names[(index + delta) % len(names)]
     st.session_state["inspect_cell"] = None
-    st.session_state.pop("inspect_pending", None)
-    st.session_state.pop("inspect_click_sig", None)
+    _drop_inspect_mark()
 
 
 def _on_inspect_tile_selected() -> None:
     st.session_state["inspect_cell"] = None
-    st.session_state.pop("inspect_pending", None)
-    st.session_state.pop("inspect_click_sig", None)
+    _drop_inspect_mark()
 
 
 def _set_inspect_cell(row: int, col: int) -> None:
     current = st.session_state.get("inspect_cell")
     st.session_state["inspect_cell"] = None if current == (row, col) else (row, col)
-    st.session_state.pop("inspect_pending", None)
-    st.session_state.pop("inspect_click_sig", None)
+    _drop_inspect_mark()
 
 
 def _clear_inspect_cell() -> None:
     st.session_state["inspect_cell"] = None
-    st.session_state.pop("inspect_pending", None)
-    st.session_state.pop("inspect_click_sig", None)
+    _drop_inspect_mark()
 
 
 def _last_pipeline_view(
@@ -1103,8 +1109,7 @@ def render_tile_inspect_tab(
     if st.session_state.get("inspect_tile") not in names:
         st.session_state["inspect_tile"] = names[0]
         st.session_state["inspect_cell"] = None
-        st.session_state.pop("inspect_pending", None)
-        st.session_state.pop("inspect_click_sig", None)
+        _drop_inspect_mark()
     nav = st.columns([1, 4, 1])
     nav[0].button(
         "Previous",
@@ -1195,7 +1200,7 @@ def render_tile_inspect_tab(
                 width="stretch",
                 hide_index=True,
             )
-    scene_labels = _labels_for_scene(labels_df, config, names)
+    scene_labels = _labels_for_scene(labels_df, run_config, names)
 
     if detections is None:
         detections = pd.DataFrame()
@@ -1212,12 +1217,30 @@ def render_tile_inspect_tab(
             detections,
             tile_name,
             folder_tiles=list(
-                related_scene_tile_names(cfg_get(config, "input_dir", None), names) or names
+                related_scene_tile_names(
+                    cfg_get(run_config, "input_dir", None), names
+                )
+                or names
             ),
+            run_dir=str(cfg_get(run_config, "input_dir", "") or "") or None,
         )
         if not misses.empty:
             tile_hits = pd.concat([tile_hits, misses], ignore_index=True)
         label_map = label_map_with_aliases(scene_labels)
+
+    if st.button(
+        "All done",
+        type="primary",
+        key="inspect_all_done",
+        help=(
+            f"Write {MARKED_MOSAIC_NAME} in the output folder. "
+            "Green, red, and blue are Label marks. Orange is still unlabeled. "
+            "Dark green is a particle clicked here."
+        ),
+    ):
+        _show_marked_mosaic_note(
+            _save_marked_mosaic(run_config, detections, labels_df)
+        )
 
     cache = st.session_state.setdefault("label_tile_cache", TileImageCache())
     origin_cache = st.session_state.setdefault("label_origin_cache", {})
@@ -1347,23 +1370,38 @@ def render_tile_inspect_tab(
                     jpeg_quality=85,
                     cursor="crosshair",
                 )
-    if click:
-        disp_scale = display_w / max(int(view.rgb.shape[1]), 1)
-        sig = (int(click["x"]), int(click["y"]), tile_name, selected)
-        if st.session_state.get("inspect_click_sig") != sig:
-            x_local, y_local = display_xy_to_local(
-                float(click["x"]) / disp_scale,
-                float(click["y"]) / disp_scale,
-                view,
+    seen = st.session_state.get("inspect_click_sig")
+    if isinstance(seen, tuple) and isinstance(click, dict):
+        same_press = False
+        try:
+            same_press = (int(click.get("x")), int(click.get("y"))) == (
+                int(seen[0]),
+                int(seen[1]),
             )
-            st.session_state["inspect_click_sig"] = sig
-            st.session_state["inspect_pending"] = {
-                "x_local": x_local,
-                "y_local": y_local,
-                "tile": tile_name,
-            }
-            st.session_state["inspect_footprint_grow"] = 1.0
-            st.rerun()
+        except (TypeError, ValueError, IndexError):
+            same_press = False
+        carried = fresh_inspect_click(click, None)
+        if same_press and carried is not None:
+            st.session_state["inspect_click_sig"] = carried
+            seen = carried
+        else:
+            seen = None
+    stamp = fresh_inspect_click(click, seen)
+    if stamp is not None:
+        disp_scale = display_w / max(int(view.rgb.shape[1]), 1)
+        x_local, y_local = display_xy_to_local(
+            float(click["x"]) / disp_scale,
+            float(click["y"]) / disp_scale,
+            view,
+        )
+        st.session_state["inspect_click_sig"] = stamp
+        st.session_state["inspect_pending"] = {
+            "x_local": x_local,
+            "y_local": y_local,
+            "tile": tile_name,
+        }
+        st.session_state["inspect_footprint_grow"] = 1.0
+        st.rerun()
 
     pending = st.session_state.get("inspect_pending")
     if pending and pending.get("tile") == tile_name:
@@ -1428,7 +1466,10 @@ def render_tile_inspect_tab(
             if 0 < saved_nm < 20_000.0:
                 st.warning("That yellow area is under 20 µm, so it is not kept.")
             else:
-                record = missed_particle_record(tile_name, x_global, y_global, saved_nm)
+                record = with_grid_folder(
+                    missed_particle_record(tile_name, x_global, y_global, saved_nm),
+                    str(cfg_get(run_config, "input_dir", "") or "") or None,
+                )
                 saved = preview_click_crop(
                     image,
                     float(pending["x_local"]),
@@ -1438,12 +1479,10 @@ def render_tile_inspect_tab(
                     zoom=8.0,
                 )
                 store.apply_label(record, "particle", saved)
-                st.session_state.pop("inspect_pending", None)
-                st.session_state.pop("inspect_click_sig", None)
+                _drop_inspect_mark()
                 st.rerun()
         if mark_cols[1].button("Cancel click", width="stretch", key="inspect_cancel"):
-            st.session_state.pop("inspect_pending", None)
-            st.session_state.pop("inspect_click_sig", None)
+            _drop_inspect_mark()
             st.rerun()
 
     if not tile_hits.empty:
@@ -1566,6 +1605,7 @@ def _tile_crop_cells(
         min_size_nm=min_size_nm,
         folder_tiles=folder_tiles,
         beta=beta,
+        run_dir=str(cfg_get(run_config, "input_dir", "") or "") or None,
     )
 
 
@@ -1599,7 +1639,7 @@ def _render_last_run_summary(
     *,
     min_size_nm: float = 0.0,
     beta: float = 1.0,
-    crop_std: dict[str, float | None] | None = None,
+    score_std: dict[str, float | None] | None = None,
 ) -> None:
     floor_um = float(min_size_nm) / NM_PER_UM if min_size_nm else 20.0
     miss_title = f"Undetected real ≥ {floor_um:.0f} µm"
@@ -1637,24 +1677,24 @@ def _render_last_run_summary(
             "#8a3b2b18",
         ),
     ]
-    if crop_std is not None:
+    if score_std is not None:
         rates_row.extend(
             [
                 _last_run_stat_card(
                     "P std",
-                    _last_run_std_text(crop_std.get("precision")),
+                    _last_run_std_text(score_std.get("precision")),
                     "#4b5d8a",
                     "#4b5d8a18",
                 ),
                 _last_run_stat_card(
                     "R std",
-                    _last_run_std_text(crop_std.get("recall")),
+                    _last_run_std_text(score_std.get("recall")),
                     "#6b3fa0",
                     "#6b3fa018",
                 ),
                 _last_run_stat_card(
                     "Fβ std",
-                    _last_run_std_text(crop_std.get("f_beta")),
+                    _last_run_std_text(score_std.get("f_beta")),
                     "#8a3b2b",
                     "#8a3b2b18",
                 ),
@@ -1746,49 +1786,31 @@ def _metric_row(
 
 def _render_score_table(
     per_tile_table: pd.DataFrame | None,
-    cells_by_tile: dict[str, list[dict[str, Any]]],
     *,
     beta: float,
+    folder_name: str = "",
+    std_tiles: pd.DataFrame | None = None,
 ) -> None:
-    """One table: every crop, then each tile scored as a whole."""
-    if per_tile_table is None or per_tile_table.empty or "tile" not in per_tile_table.columns:
-        return
-    order = [name for row in CELL_NAMES for name in row]
-    crop_rows: list[dict[str, str]] = []
-    whole_rows: list[dict[str, str]] = []
-    for record in per_tile_table.to_dict(orient="records"):
-        tile = str(record["tile"])
-        label = _review_tile_label(tile)
-        by_name = {
-            CELL_NAMES[int(cell["row"])][int(cell["col"])]: cell
-            for cell in cells_by_tile.get(tile, [])
-            if "row" in cell and "col" in cell
-        }
-        for name in order:
-            cell = by_name.get(name) or {}
-            crop_rows.append(
-                _metric_row(
-                    label,
-                    name,
-                    n_detected=cell.get("n_detected"),
-                    n_real=cell.get("n_real"),
-                    n_undetected=cell.get("n_undetected"),
-                    precision=cell.get("precision"),
-                    recall=cell.get("recall"),
-                    beta=beta,
-                )
-            )
+    """One row per subfolder, with every tile in that folder scored together."""
+    grouped = subfolder_score_rows(
+        per_tile_table,
+        folder_name=folder_name,
+        beta=beta,
+        std_tiles=std_tiles,
+    )
+    rows: list[dict[str, str]] = []
+    for record in grouped:
         detected = int(record.get("n_detected") or 0)
         real_total = int(record.get("n_real_total") or 0)
-        whole_rows.append(
+        rows.append(
             _metric_row(
-                label,
+                str(record["name"]),
                 "All together",
                 n_detected=detected if detected else None,
                 n_real=int(record.get("n_real") or 0) if detected else None,
                 n_undetected=int(record.get("n_undetected") or 0) if detected or real_total else None,
-                precision=float(record.get("precision") or 0.0) if detected else None,
-                recall=float(record.get("recall") or 0.0) if real_total else None,
+                precision=record.get("precision"),
+                recall=record.get("recall"),
                 beta=beta,
                 precision_std=record.get("precision_std"),
                 recall_std=record.get("recall_std"),
@@ -1796,15 +1818,12 @@ def _render_score_table(
                 show_std=True,
             )
         )
-    rows = crop_rows + whole_rows
     if not rows:
         return
     st.caption(
-        "Each row is one ninth of that picture, NW through SE, or the whole picture. "
-        "Detected, Real, and Undetected are the counts in that crop. "
-        "All together is that tile on its own. "
-        "P std, R std, and Fβ std are the spread of its nine crops. "
-        "N, S, E, and W appear when this run detected those pictures."
+        "Each row is one subfolder, with its tiles scored together. "
+        "Detected, Real, and Undetected are the counts on those pictures. "
+        "P std, R std, and Fβ std are the spread across every tile in that subfolder."
     )
     st.table(pd.DataFrame(rows).set_index(["Tile", "Crop"]))
 
@@ -1839,8 +1858,6 @@ def render_labeled_tiles_tab(
         except (ValueError, OSError) as exc:
             _failure("The detection table could not be read.", "Run the pipeline again.", exc)
             return
-        # The open session can still hold an older run. The summary follows the
-        # CSV last_pipeline.json points at.
         mosaic = None
     elif table is not None:
         detections = tag_table(table, last_csv)
@@ -1858,6 +1875,7 @@ def render_labeled_tiles_tab(
     scene_tiles = related_scene_tile_names(
         cfg_get(run_config, "input_dir", None), run_tiles
     )
+    run_dir = str(cfg_get(run_config, "input_dir", "") or "") or None
     if labels_df is not None and not labels_df.empty and (scene_tiles or run_tiles):
         keep_names = {Path(str(name)).name for name in (scene_tiles or ())}
         keep_names.update(Path(str(name)).name for name in run_tiles)
@@ -1868,7 +1886,7 @@ def render_labeled_tiles_tab(
         )
         labels_df = labels_df.loc[
             labels_df["source_tile"].astype(str).map(
-                lambda name: label_on_run_tiles(name, keep_names)
+                lambda name: label_on_run_tiles(name, keep_names, run_dir)
             )
         ].copy()
     detections = _collapse_review_hits(detections, labels_df, run_config)
@@ -1895,40 +1913,50 @@ def render_labeled_tiles_tab(
         metric_tiles,
         min_size_nm=size_floor_nm,
         folder_tiles=label_tiles,
+        run_dir=run_dir,
     )
     folder_counts = _sum_tile_counts(per_tile_table)
     raw_beta = cfg_get(config, "report.f_beta", 1.0)
     beta = 1.0 if raw_beta is None else float(raw_beta)
     origin_cache = st.session_state.setdefault("label_origin_cache", {})
-    crop_cells_by_tile: dict[str, list[dict[str, Any]]] = {}
+    std_names = sorted(run_tiles) if run_tiles else list(metric_tiles)
+    if set(std_names) == set(metric_tiles):
+        tile_score_table = per_tile_table
+    else:
+        tile_score_table = last_run_class_counts_by_tile(
+            detections,
+            labels_df,
+            std_names,
+            min_size_nm=size_floor_nm,
+            folder_tiles=label_tiles,
+            run_dir=run_dir,
+        )
+    folder_score_std = std_of_tile_scores(tile_score_table, beta=beta)
+    n_folder_tiles = (
+        0 if tile_score_table is None or tile_score_table.empty else int(len(tile_score_table))
+    )
     crop_std_by_tile: dict[str, dict[str, float | None]] = {}
     if per_tile_table is not None and not per_tile_table.empty:
         for tile in per_tile_table["tile"].astype(str):
-            cells = _tile_crop_cells(
-                tile,
-                detections,
-                labels_df,
-                run_config,
-                mosaic,
-                origin_cache,
-                min_size_nm=size_floor_nm,
-                folder_tiles=label_tiles,
-                beta=beta,
+            crop_std_by_tile[tile] = std_of_crop_cells(
+                _tile_crop_cells(
+                    tile,
+                    detections,
+                    labels_df,
+                    run_config,
+                    mosaic,
+                    origin_cache,
+                    min_size_nm=size_floor_nm,
+                    folder_tiles=label_tiles,
+                    beta=beta,
+                )
             )
-            crop_cells_by_tile[tile] = cells
-            crop_std_by_tile[tile] = std_of_crop_cells(cells)
-        per_tile_table = per_tile_table.copy()
-        tiles = per_tile_table["tile"].astype(str)
-        per_tile_table["precision_std"] = pd.to_numeric(
-            [crop_std_by_tile[tile]["precision"] for tile in tiles], errors="coerce"
-        )
-        per_tile_table["recall_std"] = pd.to_numeric(
-            [crop_std_by_tile[tile]["recall"] for tile in tiles], errors="coerce"
-        )
-        per_tile_table["f_beta_std"] = pd.to_numeric(
-            [crop_std_by_tile[tile]["f_beta"] for tile in tiles], errors="coerce"
-        )
-    _render_score_table(per_tile_table, crop_cells_by_tile, beta=beta)
+    _render_score_table(
+        per_tile_table,
+        beta=beta,
+        folder_name=folder_label,
+        std_tiles=tile_score_table,
+    )
 
     scope = st.radio(
         "Metrics",
@@ -1977,6 +2005,7 @@ def render_labeled_tiles_tab(
                 tile_names=[tile_name],
                 min_size_nm=size_floor_nm,
                 folder_tiles=label_tiles,
+                run_dir=run_dir,
             )
         else:
             counts = folder_counts
@@ -1997,13 +2026,23 @@ def render_labeled_tiles_tab(
             counts,
             min_size_nm=size_floor_nm,
             beta=beta,
-            crop_std=crop_std_by_tile.get(selected),
+            score_std=crop_std_by_tile.get(selected),
         )
         _render_size_threshold_table(
             detections_on_review_picture(detections, tile_name) if tile_name else detections
         )
     else:
-        _render_last_run_summary(folder_counts, min_size_nm=size_floor_nm, beta=beta)
+        _render_last_run_summary(
+            folder_counts,
+            min_size_nm=size_floor_nm,
+            beta=beta,
+            score_std=folder_score_std,
+        )
+        if n_folder_tiles:
+            st.caption(
+                "P std, R std, and Fβ std are the spread across all "
+                f"{n_folder_tiles} tiles in the input folder."
+            )
         _render_size_threshold_table(detections)
 
     if not names:
@@ -2029,7 +2068,11 @@ def render_labeled_tiles_tab(
 
     detected_hits = detections_on_review_picture(detections, tile_name)
     misses = pointer_miss_rows(
-        labels_df, detections, tile_name, folder_tiles=label_tiles
+        labels_df,
+        detections,
+        tile_name,
+        folder_tiles=label_tiles,
+        run_dir=run_dir,
     )
     if misses.empty:
         tile_hits = detected_hits
@@ -2334,23 +2377,6 @@ def _last_pipeline_tables(csv_path: Path | None) -> list[pd.DataFrame]:
     if csv_path is None or not Path(csv_path).is_file():
         return []
     return [load_particles_csv(csv_path)]
-
-
-def _detection_tables(
-    project_root: str | Path,
-    table: pd.DataFrame | None,
-    config: dict[str, Any],
-) -> list[pd.DataFrame]:
-    frames: list[pd.DataFrame] = []
-    last_csv = last_run_csv(project_root, config)
-    if last_csv.is_file():
-        frames.append(load_particles_csv(last_csv))
-    out = resolve_output_dir(config.get("output_dir")) / "particles.csv"
-    if out.is_file() and Path(out).resolve() != Path(last_csv).resolve():
-        frames.append(load_particles_csv(out))
-    if table is not None and not table.empty:
-        frames.append(tag_table(table, out))
-    return frames
 
 
 def _undo_row(store: LabelStore, counts: dict[str, int]) -> None:

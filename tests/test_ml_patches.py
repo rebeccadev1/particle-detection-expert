@@ -77,7 +77,6 @@ def test_unmarked_channels_have_no_red_marker() -> None:
     channels = extract_unmarked_channels(raw, residual, 48.0, 48.0, size=96)
     assert channels.shape == (2, 96, 96)
     assert channels.max() <= 1.0 + 1e-5
-    # Two-channel float crop, not an RGB overlay with CIRCLE_COLOR.
     assert channels.ndim == 3 and channels.shape[0] == 2
 
 

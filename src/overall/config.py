@@ -159,7 +159,7 @@ def cfg_get(config: dict[str, Any], dotted_key: str, default: Any = None) -> Any
 def with_recall_profile(config: dict[str, Any]) -> dict[str, Any]:
     """Return ``config`` unchanged.
 
-    High-recall gates (edge exclude 12 px, confidence 0.50, circularity 0)
+    High-recall gates (uniform edge exclude 8 px, confidence 0.50, circularity 0)
     are the standard detection values, not a separate overlay.
     """
     return config
@@ -276,10 +276,5 @@ def save_nsew_overlay(overlay: dict[str, Any], path: str | Path | None = None) -
     payload = deepcopy(overlay)
     payload.pop("nsew_profile", None)
     text = yaml.safe_dump(payload, sort_keys=False, default_flow_style=False)
-    destination.write_text(
-        "# Groundup / N/S/E/W standard values.\n"
-        "# Sidebar toggle: NSEW.\n"
-        f"{text}",
-        encoding="utf-8",
-    )
+    destination.write_text(text, encoding="utf-8")
     return destination

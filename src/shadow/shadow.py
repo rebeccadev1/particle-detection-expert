@@ -37,12 +37,9 @@ from src.main_pipeline.report.report_generator import _to_display_rgb
 
 PICK_MAX_SIDE = 960
 
-LABELS_CSV = PACKAGE_ROOT / "labels" / "labels.csv"
+LABELS_CSV = PACKAGE_ROOT / "labels" / "all_labels.csv"
 DEFAULT_OUT = "Shadow check"
-# Compass bearing of the light source on the image, clockwise from the top edge.
 LIGHT_FROM_DEG = {"N": 0.0, "E": 90.0, "S": 180.0, "W": 270.0}
-# Ring-light geometry: height above the wafer, and horizontal distance to the
-# light for a particle at the image edge on the light side / at the image centre.
 LIGHT_HEIGHT_MM = 5.0
 RING_EDGE_MM = 6.6
 RING_CENTRE_MM = 10.0
@@ -119,7 +116,6 @@ def _segment_particle(
     center = float(patch[seed].mean()) if np.any(seed) else float(patch[py, px])
     lo = float(patch[seed].min()) if np.any(seed) else center
     seed_along = float(along[py, px])
-    # Keep the fiber body; do not walk far down the shadow cast.
     along_ok = along <= seed_along + 1.25 * seed_r
     close = max(3, int(round(seed_r)) | 1)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close, close))
@@ -177,14 +173,12 @@ def _crop_for_shadow(
     half_y = max(int(round(abs(dy) * along_half + abs(dx) * across_half)), along_half)
     if particle_mask is not None and np.any(particle_mask):
         ys, xs = np.where(particle_mask)
-        # Pad more on the shadow side so a long cast is inside the crop.
         pad_light = max(int(math.ceil(2.0 * r)), 16)
         pad_shadow = max(shadow_reach, 32)
         y0 = max(int(ys.min()) - (pad_shadow if dy < 0 else pad_light), 0)
         y1 = min(int(ys.max()) + (pad_shadow if dy > 0 else pad_light) + 1, height)
         x0 = max(int(xs.min()) - (pad_shadow if dx < 0 else pad_light), 0)
         x1 = min(int(xs.max()) + (pad_shadow if dx > 0 else pad_light) + 1, width)
-        # Also keep some room across the fiber.
         y0 = max(min(y0, int(ys.min()) - pad_light), 0)
         y1 = min(max(y1, int(ys.max()) + pad_light + 1), height)
         x0 = max(min(x0, int(xs.min()) - pad_light), 0)
@@ -230,7 +224,6 @@ def measure_shadow(
             ys, xs = np.where(full_mask)
             x = float(xs.mean())
             y = float(ys.mean())
-            # Use fiber thickness, not area-equivalent circle (long drawings blew up r).
             r = max(0.5 * _mask_thickness_px(full_mask), 1.0)
 
     patch, x0, y0, cx, cy = _crop_for_shadow(
@@ -245,7 +238,6 @@ def measure_shadow(
     across = -(xx - cx) * dy + (yy - cy) * dx
     dist = np.hypot(xx - cx, yy - cy)
 
-    # The shadow corridor is excluded so a long shadow does not lower the background.
     corridor = (along > 0) & (np.abs(across) <= 1.5 * r)
     ring = (dist >= 1.5 * r) & ~corridor
     if full_mask is not None and full_mask.any():
@@ -268,7 +260,6 @@ def measure_shadow(
         particle_type, particle = _segment_particle(
             patch, py, px, r, along, dist, background, noise, k_mad, mass_fraction
         )
-    # Re-estimate background away from the real particle body (not only the seed disc).
     if particle.any():
         ring = ~particle & ~corridor
         if np.count_nonzero(ring) >= 8:
@@ -295,19 +286,15 @@ def measure_shadow(
             comp = labels == label
             if not np.any(comp & touch):
                 continue
-            # Prefer mass on the shadow side of the particle, not only the centroid.
             if float(along[comp].mean()) <= particle_along_max:
                 continue
             found |= comp
         return found
 
     shadow = _collect_shadow(float(k_mad))
-    # Drawn masks / weak casts: retry once with a milder threshold.
     if not shadow.any() and full_mask is not None:
         shadow = _collect_shadow(max(float(k_mad) * 0.5, 0.25))
 
-    # Length is measured along the light on the particle's midline: the middle of its
-    # height for E/W light, the middle of its width for N/S light.
     length = 0.0
     width_px = 0.0
     mid_across = 0.0
@@ -463,9 +450,7 @@ def debug_image(
     shadow = np.asarray(debug["shadow"], dtype=bool)
     cx, cy = float(debug["cx"]), float(debug["cy"])
     dx, dy = debug["dir"]
-    lo, hi = np.percentile(patch, (1, 99))
-    gray = np.clip((patch - lo) / max(hi - lo, 1e-9) * 255.0, 0, 255).astype(np.uint8)
-    rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+    rgb = _to_display_rgb(patch)
     tint = rgb.copy()
     tint[shadow] = (255, 0, 0)
     rgb = cv2.addWeighted(tint, 0.45, rgb, 0.55, 0)
@@ -474,7 +459,6 @@ def debug_image(
                          fy=PNG_SCALE, interpolation=cv2.INTER_NEAREST)
     contours, _ = cv2.findContours(outline, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     cv2.drawContours(big, contours, -1, (0, 255, 0), 2)
-    # Yellow light-direction arrow in the upper-left.
     light_len = 0.18 * min(big.shape[:2])
     light_origin = (14, 40)
     cv2.arrowedLine(
@@ -484,8 +468,6 @@ def debug_image(
          int(round(light_origin[1] + dy * light_len))),
         (255, 255, 0), 3, tipLength=0.25, line_type=cv2.LINE_AA,
     )
-    # Red arrow: the measured segment, from the particle's outer edge on its midline
-    # to the outer edge of the last shadow pixel on that line.
     length_px = float(debug.get("length_px") or 0.0)
     if length_px > 0 and particle.any():
         mid_across = float(debug["mid_across"])
@@ -814,8 +796,6 @@ def run_shadow_check(
         if path not in cache:
             cache[path] = prepare_image(load_tile_image(path), config, preprocess)
         image = cache[path]
-        # Pointer marks were saved in whichever frame that folder used
-        # (folder grid, full wafer, or tile origin); keep the first that lands on the tile.
         placements = [placement_for_tile(label_path, run_configs[run_key])]
         placements += candidate_placements(label_path, run_configs[run_key])
         scale_nm = pixel_nm
@@ -1009,13 +989,10 @@ def _canvas_drawing_mask(arr: np.ndarray) -> np.ndarray:
         & (rgb[..., 1] >= rgb[..., 0] + 15.0)
         & (rgb[..., 1] >= rgb[..., 2] + 15.0)
     )
-    # Always prefer the green pen — even if the zoomed canvas is mostly painted.
     if green.any():
         return green
-    # Sparse alpha strokes (no baked background).
     if alpha_on.any() and float(alpha_on.mean()) < 0.55:
         return alpha_on
-    # Last resort: non-black opaque ink, still reject a full-frame dump.
     ink = alpha_on & (rgb.max(axis=-1) > 8.0)
     if ink.any() and float(ink.mean()) < 0.55:
         return ink
@@ -1357,7 +1334,7 @@ def _load_st_canvas() -> Any | None:
     import streamlit.elements.image as st_image
 
     if not hasattr(st_image, "image_to_url"):
-        st_image.image_to_url = _image_to_url_shim  # type: ignore[attr-defined]
+        st_image.image_to_url = _image_to_url_shim
     try:
         from streamlit_drawable_canvas import st_canvas
     except ImportError:
@@ -1465,7 +1442,6 @@ def _render_upload_shadow(
         except ImportError:
             streamlit_image_coordinates = None
         overview, ov_scale = display_preview(image, max_side=280)
-        # Mark the current zoom window on the overview.
         _preview_tmp, crop_tmp = zoom_preview(
             image, float(center[0]), float(center[1]), zoom, max_side=PICK_MAX_SIDE
         )
