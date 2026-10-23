@@ -66,6 +66,8 @@ class LabelStore:
         self.crops_dir = self.root / "crops"
         for label in LABEL_VALUES:
             (self.crops_dir / label).mkdir(parents=True, exist_ok=True)
+        self._frame: pd.DataFrame | None = None
+        self._frame_stamp: tuple[str, int, int] | None = None
         self._migrate_legacy()
 
     def load(self) -> pd.DataFrame:
@@ -75,11 +77,21 @@ class LabelStore:
             path = legacy if legacy.exists() else path
         if not path.exists():
             return _empty_table()
+        try:
+            stat = path.stat()
+            stamp = (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+        except OSError:
+            stamp = None
+        if stamp is not None and stamp == self._frame_stamp and self._frame is not None:
+            return self._frame.copy()
         df = pd.read_csv(path)
         for column in COLUMNS:
             if column not in df.columns:
                 df[column] = pd.NA
-        return df.loc[:, list(COLUMNS)]
+        frame = df.loc[:, list(COLUMNS)]
+        self._frame = frame
+        self._frame_stamp = stamp
+        return frame.copy()
 
     def labeled_keys(self) -> set[str]:
         df = self.load()
@@ -230,6 +242,16 @@ class LabelStore:
         self.root.mkdir(parents=True, exist_ok=True)
         table = _empty_table() if df.empty else df.loc[:, list(COLUMNS)]
         table.to_csv(self.csv_path, index=False)
+        self._frame = table
+        try:
+            stat = self.csv_path.stat()
+            self._frame_stamp = (
+                str(self.csv_path.resolve()),
+                int(stat.st_mtime_ns),
+                int(stat.st_size),
+            )
+        except OSError:
+            self._frame_stamp = None
         for database, filename in SPLIT_FILES.items():
             if table.empty:
                 part = _empty_table()

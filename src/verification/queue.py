@@ -90,10 +90,14 @@ def detection_key(row: Mapping[str, Any] | pd.Series) -> str:
     Groundup submaps do the same for ``quad0``–``quad3`` and ``all`` inside
     one ``vN`` folder. ``v7`` is not mixed with ``v8``.
     """
-    raw = str(row["source_tile"]).replace("\\", "/")
+    return _key_from_tile_xy(row["source_tile"], row["x_global"], row["y_global"])
+
+
+def _key_from_tile_xy(source_tile: object, x_global: object, y_global: object) -> str:
+    raw = str(source_tile).replace("\\", "/")
     tile = Path(raw).name
-    x_nm = int(round(float(row["x_global"])))
-    y_nm = int(round(float(row["y_global"])))
+    x_nm = int(round(float(x_global)))
+    y_nm = int(round(float(y_global)))
     family = combi_key_family(raw)
     if is_submap_lighting_tile(tile) or family == "light":
         set_id = submap_id(raw)
@@ -462,7 +466,7 @@ def load_particles_csv(path: str | Path) -> pd.DataFrame:
         raise ValueError(f"Results table missing columns: {missing}")
     tagged = df.copy()
     tagged["source_csv"] = str(destination)
-    tagged["key"] = [_row_key(row) for _, row in tagged.iterrows()]
+    tagged["key"] = _row_keys(tagged)
     return tagged
 
 
@@ -482,7 +486,7 @@ def tag_table(df: pd.DataFrame, source_csv: str | Path | None = None) -> pd.Data
         tagged["source_csv"] = tagged["source_csv"].where(
             tagged["source_csv"].astype(str).str.len() > 0, str(source_csv)
         )
-    tagged["key"] = [_row_key(row) for _, row in tagged.iterrows()]
+    tagged["key"] = _row_keys(tagged)
     return tagged
 
 
@@ -638,6 +642,32 @@ def _row_key(row: Mapping[str, Any] | pd.Series) -> str:
     if text in ("", "nan"):
         return detection_key(row)
     return text
+
+
+def _row_keys(frame: pd.DataFrame) -> list[str]:
+    if frame.empty:
+        return []
+    tiles = frame["source_tile"].tolist() if "source_tile" in frame.columns else [""] * len(frame)
+    xs = frame["x_global"].tolist() if "x_global" in frame.columns else [0] * len(frame)
+    ys = frame["y_global"].tolist() if "y_global" in frame.columns else [0] * len(frame)
+    computed = [
+        _key_from_tile_xy(tile, x_global, y_global)
+        for tile, x_global, y_global in zip(tiles, xs, ys)
+    ]
+    if "key" not in frame.columns:
+        return computed
+    keep: list[str] = []
+    for tile, value, fallback in zip(tiles, frame["key"].tolist(), computed):
+        text = str(tile or "")
+        if is_nsew_family_tile(text) or is_submap_lighting_tile(text):
+            keep.append(fallback)
+            continue
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            keep.append(fallback)
+            continue
+        existing = str(value)
+        keep.append(fallback if existing in ("", "nan") else existing)
+    return keep
 
 
 def _blank_text(value: object) -> str:

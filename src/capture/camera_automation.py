@@ -281,13 +281,23 @@ def _set_node(camera, name: str, value: str) -> None:
     node.Value = value
 
 
+_NO_CAMERA_UNTIL = 0.0
+_NO_CAMERA_BACKOFF_S = 5.0
+
+
 def _open_device():
+    global _NO_CAMERA_UNTIL
     pylon = pylon_module()
 
+    now = time.monotonic()
+    if now < _NO_CAMERA_UNTIL:
+        raise RuntimeError("no Basler camera found")
     factory = pylon.TlFactory.GetInstance()
     devices = factory.EnumerateDevices()
     if len(devices) == 0:
+        _NO_CAMERA_UNTIL = now + _NO_CAMERA_BACKOFF_S
         raise RuntimeError("no Basler camera found")
+    _NO_CAMERA_UNTIL = 0.0
     camera = pylon.InstantCamera(factory.CreateDevice(devices[0]))
     camera.Open()
     _disable_test_image(camera)

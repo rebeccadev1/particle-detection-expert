@@ -127,8 +127,17 @@ LAST_RUN_OVERVIEW_WIDTH = 720
 LAST_RUN_CROP_COLUMNS = 4
 
 
+_LABEL_STORES: dict[str, LabelStore] = {}
+
+
 def labels_store(project_root: str | Path) -> LabelStore:
-    return LabelStore(Path(project_root) / "labels")
+    root = Path(project_root) / "labels"
+    key = str(root.resolve())
+    store = _LABEL_STORES.get(key)
+    if store is None:
+        store = LabelStore(root)
+        _LABEL_STORES[key] = store
+    return store
 
 
 def _nsew_merge_radius_nm(config: dict[str, Any]) -> float:

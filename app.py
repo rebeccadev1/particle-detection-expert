@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -15,19 +14,14 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import src.capture.camera_automation as _camera
-import src.overall.io.tile_loader as _tile_loader
-
-importlib.reload(_camera)
-importlib.reload(_tile_loader)
-latest_run_folder = _camera.latest_run_folder
-input_folder_labels = _tile_loader.input_folder_labels
-
+from src.capture.camera_automation import latest_run_folder
+from src.overall.io.tile_loader import input_folder_labels
 from src.capture.capture_ui import keep_capture_inputs, keep_stage_inputs, render_capture_tab, suspend_live_view
 from src.overall.config import (
     DEFAULT_INPUT_DIR,
     apply_nsew_settings,
     beta_preset_rows,
+    cfg_get,
     load_config,
     preset_for_beta,
     advance_versioned_output_name,
@@ -37,15 +31,7 @@ from src.overall.config import (
     resolve_output_dir,
 )
 from src.overall.io.results_writer import excel_bytes, result_table, write_csv, write_xlsx
-import src.verification.inspect as _inspect
-import src.verification.ui as _verification_ui
-import src.main_pipeline.report.report_generator as _report
-
-importlib.reload(_inspect)
-importlib.reload(_verification_ui)
-importlib.reload(_report)
-label_colors_for_hits = _inspect.label_colors_for_hits
-
+from src.verification.inspect import label_colors_for_hits
 from src.verification.ui import (
     labels_store,
     render_collection_tab,
@@ -58,6 +44,7 @@ from src.verification.queue import load_last_pipeline, load_particles_csv, write
 from src.main_pipeline.job import claim_pipeline_result, pipeline_status, start_pipeline, stop_pipeline
 from src.redirector.redirector import render_redirector_tab
 from src.main_pipeline.report.report_generator import (
+    draw_overlay_markers,
     encode_overlay_jpeg,
     overlay_downsample,
     overlay_rgb,
@@ -69,8 +56,6 @@ from src.main_pipeline.report.report_generator import (
     unstitched_tile_rgb,
 )
 from src.main_pipeline.runner import load_report_mosaic
-
-draw_overlay_markers = _report.draw_overlay_markers
 from src.shadow.shadow import keep_shadow_inputs, render_shadow_tab
 
 st.set_page_config(
@@ -255,7 +240,35 @@ def _um_to_nm(um: float) -> float:
     return float(um) * NM_PER_UM
 
 def _base_config() -> dict:
-    return load_config(ROOT / "config.yaml")
+    path = ROOT / "config.yaml"
+    try:
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        stamp = 0
+    cached = st.session_state.get("_base_config_cache")
+    if cached is not None and cached[0] == stamp:
+        return deepcopy(cached[1])
+    config = load_config(path)
+    st.session_state["_base_config_cache"] = (stamp, config)
+    return deepcopy(config)
+
+
+def _excel_bytes_cached(table: pd.DataFrame, config: dict) -> bytes:
+    stamp = (
+        int(table.shape[0]),
+        tuple(table.columns),
+        int(pd.to_numeric(table["id"], errors="coerce").fillna(0).sum())
+        if "id" in table.columns
+        else 0,
+        str(cfg_get(config, "ml.model_path", "")),
+        float(cfg_get(config, "ml.threshold", 0.0) or 0.0),
+    )
+    cached = st.session_state.get("_excel_bytes_cache")
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    data = excel_bytes(table, config)
+    st.session_state["_excel_bytes_cache"] = (stamp, data)
+    return data
 
 def _widget_defaults(base: dict) -> dict:
     """Map config.yaml fields onto sidebar widget session-state keys."""
@@ -1197,13 +1210,7 @@ def _saved_plain_mosaic(saved: Path, config: dict) -> np.ndarray:
             raise OSError(f"Could not read {plain_path}")
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     else:
-        import importlib
-
-        import src.main_pipeline.runner as pipeline_runner
-
-        if not hasattr(pipeline_runner, "load_report_mosaic"):
-            pipeline_runner = importlib.reload(pipeline_runner)
-        mosaic = pipeline_runner.load_report_mosaic(config)
+        mosaic = load_report_mosaic(config)
         if not mosaic.placements:
             raise FileNotFoundError("No tiles could be placed for this mosaic.")
         rgb = overlay_rgb(mosaic, config, crop=None)
@@ -1492,7 +1499,7 @@ def _render_finished_run(config: dict) -> bool:
         with dl_xlsx:
             st.download_button(
                 "Download Excel",
-                data=excel_bytes(table, active_config),
+                data=_excel_bytes_cached(table, active_config),
                 file_name="particles.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="last_run_download_xlsx",

@@ -859,23 +859,29 @@ def _prune_overlapping_blobs(blobs: np.ndarray, overlap: float) -> np.ndarray:
     pairs = tree.query_pairs(float(2.0 * radii.max()) + 1e-6)
     if not pairs:
         return blobs
+    order = np.fromiter(
+        (value for pair in pairs for value in pair),
+        dtype=np.intp,
+        count=2 * len(pairs),
+    ).reshape(-1, 2)
+    first, second = order[:, 0], order[:, 1]
+    distance = np.hypot(
+        blobs[first, 0] - blobs[second, 0], blobs[first, 1] - blobs[second, 1]
+    )
+    radius_a, radius_b = radii[first], radii[second]
+    touching = distance < radius_a + radius_b
+    smaller = np.maximum(np.minimum(radius_a, radius_b), 1e-6)
+    contained = distance <= np.abs(radius_a - radius_b)
+    frac = np.where(contained, 1.0, (radius_a + radius_b - distance) / (2.0 * smaller))
+    hit = touching & (frac > overlap)
     drop = np.zeros(blobs.shape[0], dtype=bool)
-    for i, j in pairs:
-        if drop[i] or drop[j]:
+    for left, right in order[hit]:
+        if drop[left] or drop[right]:
             continue
-        d = float(np.hypot(blobs[i, 0] - blobs[j, 0], blobs[i, 1] - blobs[j, 1]))
-        r1 = float(radii[i])
-        r2 = float(radii[j])
-        if d >= r1 + r2:
-            continue
-        smaller = max(min(r1, r2), 1e-6)
-        contained = d <= abs(r1 - r2)
-        overlap_frac = 1.0 if contained else (r1 + r2 - d) / (2.0 * smaller)
-        if overlap_frac > overlap:
-            if blobs[i, 2] > blobs[j, 2]:
-                drop[j] = True
-            else:
-                drop[i] = True
+        if blobs[left, 2] > blobs[right, 2]:
+            drop[right] = True
+        else:
+            drop[left] = True
     return blobs[~drop]
 
 
@@ -991,7 +997,7 @@ def _compact_island_protect(
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)
-    protect = np.zeros(scaled_residual.shape, dtype=bool)
+    keep = np.zeros(n_labels, dtype=bool)
     for index in range(1, n_labels):
         area = float(stats[index, cv2.CC_STAT_AREA])
         if area < 4.0:
@@ -1011,8 +1017,8 @@ def _compact_island_protect(
         cy = float(centroids[index, 1])
         if ecd < large_d and _orthogonal_image_junction(image, cy, cx):
             continue
-        protect |= labels == index
-    return protect
+        keep[index] = True
+    return keep[labels]
 
 
 def _island_seed_blobs(protect: np.ndarray) -> np.ndarray:

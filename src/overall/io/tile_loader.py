@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import re
+import struct
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -293,7 +295,25 @@ def _shape_hw(image: np.ndarray, path: str | Path) -> tuple[int, int]:
 
 
 def peek_tile_hw(path: str | Path) -> tuple[int, int]:
-    """Return ``(height, width)`` from the TIFF header, or a raster decode, without keeping pixels."""
+    """Return ``(height, width)`` from the file header when possible."""
+    raw = Path(path)
+    try:
+        stat = raw.stat()
+        key = (str(raw.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        return _peek_tile_hw_uncached(raw)
+    return _peek_tile_hw_cached(key)
+
+
+@lru_cache(maxsize=512)
+def _peek_tile_hw_cached(key: tuple[str, int, int]) -> tuple[int, int]:
+    return _peek_tile_hw_uncached(Path(key[0]))
+
+
+def _peek_tile_hw_uncached(path: Path) -> tuple[int, int]:
+    header_size = _size_from_header(path)
+    if header_size is not None:
+        return header_size
     if _use_cv_decode(path):
         return _shape_hw(_load_cv_image(path), path)
     try:
@@ -304,6 +324,81 @@ def peek_tile_hw(path: str | Path) -> tuple[int, int]:
     if len(shape) < 2:
         raise ValueError(f"Tile {path} has unexpected shape {shape}")
     return int(shape[0]), int(shape[1])
+
+
+def _size_from_header(path: Path) -> tuple[int, int] | None:
+    with open(path, "rb") as handle:
+        head = handle.read(26)
+        kind = _header_kind(head)
+        if kind == "png":
+            if len(head) >= 24 and head[12:16] == b"IHDR":
+                width, height = struct.unpack(">II", head[16:24])
+                return int(height), int(width)
+            return None
+        if kind == "bmp":
+            if len(head) >= 26:
+                width, height = struct.unpack_from("<ii", head, 18)
+                return abs(int(height)), abs(int(width))
+            return None
+        if kind == "jpeg":
+            return _jpeg_hw(path, head, handle)
+    return None
+
+
+def _jpeg_hw(path: Path, head: bytes, handle) -> tuple[int, int] | None:
+    data = head
+    offset = 2
+    while True:
+        while offset + 1 < len(data) and data[offset] != 0xFF:
+            offset += 1
+        if offset + 3 >= len(data):
+            extra = handle.read(4096)
+            if not extra:
+                return None
+            data += extra
+            continue
+        if data[offset] != 0xFF:
+            return None
+        code = data[offset + 1]
+        if code in (0xD8, 0x01) or (0xD0 <= code <= 0xD7):
+            offset += 2
+            continue
+        if code == 0xD9:
+            return None
+        if offset + 4 > len(data):
+            extra = handle.read(4096)
+            if not extra:
+                return None
+            data += extra
+            continue
+        length = struct.unpack_from(">H", data, offset + 2)[0]
+        start = offset + 4
+        end = start + length - 2
+        if end > len(data):
+            extra = handle.read(end - len(data))
+            if len(extra) < end - len(data):
+                return None
+            data += extra
+        if code in (
+            0xC0,
+            0xC1,
+            0xC2,
+            0xC3,
+            0xC5,
+            0xC6,
+            0xC7,
+            0xC9,
+            0xCA,
+            0xCB,
+            0xCD,
+            0xCE,
+            0xCF,
+        ):
+            if end - start < 5:
+                return None
+            height, width = struct.unpack_from(">HH", data, start + 1)
+            return int(height), int(width)
+        offset = end
 
 
 def load_tile_image(path: str | Path) -> np.ndarray:
