@@ -428,7 +428,7 @@ def _jpeg_hw(path: Path, head: bytes, handle) -> tuple[int, int] | None:
 def load_tile_image(path: str | Path) -> np.ndarray:
     """Read a tile as 2D grayscale. Callers should not retain many at once.
 
-    Real microscope tiles are TIFF. BMP/PNG/JPEG are decoded with OpenCV.
+    true microscope tiles are TIFF. BMP/PNG/JPEG are decoded with OpenCV.
     Exports that keep a ``.tif`` name but contain JPEG or BMP bytes are decoded
     with OpenCV instead of failing in ``tifffile``.
     """

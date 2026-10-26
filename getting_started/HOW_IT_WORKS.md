@@ -17,7 +17,7 @@ Images land in `ASML SE/Inputs`. Detection writes to `ASML SE/Outputs`. Labels l
 
 ## Capture
 
-Capture drives three devices, shown on one status line: the **Arduino** (ring light), the **printer** (the stage), and the **camera**. The Arduino and the printer need different serial ports.
+Capture drives three devices, shown on one status line: the **Arduino** (ring light), the **printer** (the stage), and the **camera**. The Arduino and the printer need different serial ports. On Windows those ports are `COM` numbers. A CH340 board needs the WCH driver, and a Basler USB camera needs the pylon Camera Software Suite driver. The stage uses Printrun 2.2.0 (`python -m pip install --no-deps "Printrun==2.2.0"`), or a pipx Pronterface install on Mac or Windows.
 
 ### Lighting
 
@@ -97,7 +97,7 @@ On each image the worker:
 1. Loads it as gray. The raw gray is kept for the size measurement.
 2. Denoises (σ 1 px), flattens slow illumination (σ 160 px), and stretches contrast.
 3. Removes a periodic lattice with an FFT notch built on **this** tile. If the spectrum has no lattice peaks, it uses a white top-hat instead. Area borders survive both and are handled next.
-4. Boosts compact blobs relative to long edges (local SNR, FFT residuals only), then softens a band around long region borders. A compact residual island on a single edge (≥ 20 µm) or a large flake (≥ 40 µm) is protected so a real particle on a die step is not erased. Pad-corner L-junctions are not protected.
+4. Boosts compact blobs relative to long edges (local SNR, FFT residuals only), then softens a band around long region borders. A compact residual island on a single edge (≥ 20 µm) or a large flake (≥ 40 µm) is protected so a true particle on a die step is not erased. Pad-corner L-junctions are not protected.
 5. Finds blobs with difference-of-Gaussians (LoG if `blob_method` is `log`).
 6. Drops peaks that fail, in order: residual prominence, confidence, distance to a border, circularity, a local peak on the preprocessed tile, compact support, then measured size.
 7. Drops clusters and long axis-aligned rows of equal-sized hits. A blob much larger than its neighbours is kept.
@@ -124,7 +124,7 @@ Every other knob is in those YAML files and in the sidebar. `ml.score_before_str
 ### If the overlay looks wrong
 
 - Lattice or grain circled: raise `min_prominence` (0.30) or `min_confidence` (0.50), or the model threshold.
-- Pad corners circled: keep the border drop on (8 px Uniform, 12 px NSEW). Do not raise circularity. Labeled letters are as round as real flakes.
+- Pad corners circled: keep the border drop on (8 px Uniform, 12 px NSEW). Do not raise circularity. Labeled letters are as round as true flakes.
 - A large flake missing: the top-hat radius must be larger than the flake in pixels, and `max_size_nm` must be at least 100000.
 - The same particle twice: raise `merge_radius_px`, or set `overlap_fraction` to the overlap Capture actually used.
 - Positions shifted: placement is the filename grid plus overlap, not image registration.
@@ -196,7 +196,7 @@ cd particle-detection-expert
 streamlit run app.py
 ```
 
-Python 3.11 or newer. Setup is in [README.md](../README.md). On a Mac you can also open **getting_started/Particle Detection Expert.app**. On Windows, **getting_started/Start Particle Detection Expert.bat**.
+64-bit Python 3.11 or newer. Setup is in [README.md](../README.md), including Printrun for the stage and the Windows camera and serial drivers. On a Mac you can also open **getting_started/Particle Detection Expert.app**. On Windows, **getting_started/Start Particle Detection Expert.bat**. If the Windows launcher cannot find `.venv`, it leaves a message on screen and in `%LOCALAPPDATA%\ParticleDetectionExpert\launcher.log`.
 
 | Module | Use |
 |--------|-----|

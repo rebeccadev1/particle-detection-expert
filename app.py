@@ -731,7 +731,7 @@ def _render_adjust_parameters(base: dict) -> None:
             min_value=0.0,
             persist_state="session",
             key=_live_key("ui_denoise_sigma"),
-            help="Blur radius in pixels; larger values also round off real particles.",
+            help="Blur radius in pixels; larger values also round off true particles.",
         )
         st.checkbox(
             "Flatten illumination",
@@ -773,7 +773,7 @@ def _render_adjust_parameters(base: dict) -> None:
             0.95,
             persist_state="session",
             key=_live_key("ui_fft_peak_threshold"),
-            help="Lower notches more of the lattice and can also remove real structure.",
+            help="Lower notches more of the lattice and can also remove true structure.",
         )
         st.selectbox(
             "FFT notch source",
@@ -1797,9 +1797,6 @@ if page == "Verify":
                 value=True,
                 key="database_area_line",
                 help="Outline the measured particle area on the particle crops.",
-            )
-            st.caption(
-                "Angle labels named 3of6 stay in all_labels only, until they are placed."
             )
             uniform_tab, nsew_tab, glovebox_tab = st.tabs(
                 ["Uniform", "NSEW", "Glovebox"],

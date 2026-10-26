@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import builtins
 import math
+import os
 import sys
 import time
 import warnings
@@ -377,12 +378,42 @@ def scan_summary(step_mm: float, columns: int, rows: int, fov_mm: float = FOV_MM
     }
 
 
+def _pipx_printrun_roots() -> list[Path]:
+    """pipx venv folders for Pronterface. Layout differs by operating system."""
+    home = Path.home()
+    roots = [
+        home / "Library/Application Support/pipx/venvs/printrun",
+        home / ".local/pipx/venvs/printrun",
+        home / ".local/share/pipx/venvs/printrun",
+        home / "pipx/venvs/printrun",
+    ]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        roots.append(Path(local) / "pipx/venvs/printrun")
+    pipx_home = os.environ.get("PIPX_HOME")
+    if pipx_home:
+        roots.append(Path(pipx_home) / "venvs/printrun")
+    return roots
+
+
 def _pipx_printrun_site() -> Path | None:
-    root = Path.home() / "Library/Application Support/pipx/venvs/printrun/lib"
-    found = sorted(root.glob("python*/site-packages/printrun/printcore.py"))
+    """Site-packages of a pipx Pronterface install, on macOS or Windows.
+
+    Unix venvs keep packages in ``lib/python*/site-packages``. Windows venvs
+    keep them in ``Lib/site-packages``.
+    """
+    patterns = (
+        "lib/python*/site-packages/printrun/printcore.py",
+        "Lib/site-packages/printrun/printcore.py",
+        "lib/site-packages/printrun/printcore.py",
+    )
+    found: list[Path] = []
+    for root in _pipx_printrun_roots():
+        for pattern in patterns:
+            found.extend(root.glob(pattern))
     if not found:
         return None
-    return found[-1].parents[1]
+    return sorted(found)[-1].parents[1]
 
 
 def load_printcore():
@@ -396,8 +427,9 @@ def load_printcore():
             site = _pipx_printrun_site()
             if site is None:
                 raise ImportError(
-                    "Printrun is not available. Install it in the project "
-                    "environment with: .venv/bin/pip install Printrun"
+                    "Printrun is not available. With the virtual environment "
+                    "active, run: python -m pip install --no-deps "
+                    "\"Printrun==2.2.0\""
                 ) from None
             site_text = str(site)
             if site_text not in sys.path:

@@ -203,3 +203,44 @@ def test_scan_stops_follow_the_serpentine() -> None:
 def test_xy_jog_needs_a_printer() -> None:
     with pytest.raises(RuntimeError, match="Connect the printer"):
         move_axis("X", 1, 1000)
+
+
+def test_pipx_printrun_site_finds_a_unix_venv(tmp_path: Path, monkeypatch) -> None:
+    from src.capture import stage
+
+    root = tmp_path / "venvs" / "printrun"
+    site = root / "lib" / "python3.13" / "site-packages"
+    package = site / "printrun"
+    package.mkdir(parents=True)
+    (package / "printcore.py").write_text("# test\n", encoding="utf-8")
+    monkeypatch.setattr(stage, "_pipx_printrun_roots", lambda: [root])
+    found = stage._pipx_printrun_site()
+    assert found is not None
+    assert (found / "printrun" / "printcore.py").is_file()
+
+
+def test_pipx_printrun_site_finds_a_windows_venv(tmp_path: Path, monkeypatch) -> None:
+    from src.capture import stage
+
+    root = tmp_path / "venvs" / "printrun"
+    site = root / "Lib" / "site-packages"
+    package = site / "printrun"
+    package.mkdir(parents=True)
+    (package / "printcore.py").write_text("# test\n", encoding="utf-8")
+    monkeypatch.setattr(stage, "_pipx_printrun_roots", lambda: [root])
+    found = stage._pipx_printrun_site()
+    assert found is not None
+    assert (found / "printrun" / "printcore.py").is_file()
+
+
+def test_missing_printrun_asks_for_an_install_without_deps(monkeypatch) -> None:
+    import sys
+
+    from src.capture import stage
+
+    monkeypatch.setattr(stage, "_pipx_printrun_site", lambda: None)
+    monkeypatch.setitem(sys.modules, "printrun", None)
+    monkeypatch.setitem(sys.modules, "printrun.gcoder", None)
+    monkeypatch.setitem(sys.modules, "printrun.printcore", None)
+    with pytest.raises(ImportError, match="--no-deps"):
+        stage.load_printcore()

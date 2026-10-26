@@ -1,6 +1,6 @@
 """Live Basler view for the Capture tab.
 
-The camera stays open in a background thread. A real capture has to close it
+The camera stays open in a background thread. A true capture has to close it
 first, because the Basler device allows one connection.
 """
 

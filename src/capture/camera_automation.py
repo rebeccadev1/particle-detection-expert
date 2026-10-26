@@ -162,6 +162,26 @@ def request_line(ser, command: str, timeout_s: float = ACK_TIMEOUT_S) -> str:
     return line
 
 
+def _port_busy(exc: BaseException) -> bool:
+    """True when another program already holds the serial port.
+
+    macOS reports that as ``multiple access`` or ``returned no data``.
+    Windows reports it as ``Access is denied``.
+    """
+    if isinstance(exc, PermissionError):
+        return True
+    text = str(exc).lower()
+    return any(
+        phrase in text
+        for phrase in (
+            "multiple access",
+            "returned no data",
+            "access is denied",
+            "permissionerror",
+        )
+    )
+
+
 def _handshake(ser) -> str:
     """Return ``READY`` or ``OK OFF``.
 
@@ -177,7 +197,7 @@ def _handshake(ser) -> str:
         except TimeoutError:
             continue
         except Exception as exc:
-            if "multiple access" in str(exc) or "returned no data" in str(exc):
+            if _port_busy(exc):
                 raise RuntimeError(
                     f"{ser.port} is already open. Disconnect the other device "
                     "and choose a different port."
@@ -198,7 +218,15 @@ def open_arduino(port: str):
     """Open the transistor-ring sketch. It always has four sides, N E S W."""
     import serial
 
-    ser = serial.Serial(port, BAUD, timeout=0.2)
+    try:
+        ser = serial.Serial(port, BAUD, timeout=0.2)
+    except Exception as exc:
+        if _port_busy(exc):
+            raise RuntimeError(
+                f"{port} is already open. Disconnect the other device "
+                "and choose a different port."
+            ) from exc
+        raise
     try:
         _handshake(ser)
     except Exception:

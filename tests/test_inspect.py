@@ -175,7 +175,7 @@ def test_expand_submap_lighting_names_includes_combi() -> None:
     assert "v5/combi_2of4.png" not in names
 
 
-def test_last_run_class_counts_splits_real_fake_and_inspect_misses() -> None:
+def test_last_run_class_counts_splits_true_false_and_inspect_misses() -> None:
     detections = pd.DataFrame(
         {
             "id": [1, 2, 3],
@@ -184,12 +184,12 @@ def test_last_run_class_counts_splits_real_fake_and_inspect_misses() -> None:
             "size": [16000.0, 17000.0, 18000.0],
             "confidence": [0.9, 0.8, 0.7],
             "source_tile": ["a.tif", "a.tif", "a.tif"],
-            "key": ["real", "fake", "open"],
+            "key": ["true", "false", "open"],
         }
     )
     labels = pd.DataFrame(
         {
-            "key": ["real", "fake", "miss", "old_miss"],
+            "key": ["true", "false", "miss", "old_miss"],
             "label": ["particle", "not_particle", "particle", "particle"],
             "source_tile": ["a.tif", "a.tif", "a.tif", "a.tif"],
             "source_csv": ["run.csv", "run.csv", "tile_inspect", "older.csv"],
@@ -197,12 +197,12 @@ def test_last_run_class_counts_splits_real_fake_and_inspect_misses() -> None:
     )
     stats = last_run_class_counts(detections, labels, tile_names=["a.tif"])
     assert stats["n_detected"] == 3
-    assert stats["n_real"] == 1
-    assert stats["n_fake"] == 2
+    assert stats["n_true"] == 1
+    assert stats["n_false"] == 2
     assert stats["n_unlabeled"] == 1
     assert stats["n_undetected"] == 2
-    assert stats["n_real_total"] == stats["n_real"] + stats["n_undetected"]
-    assert stats["n_real_total"] == 3
+    assert stats["n_true_total"] == stats["n_true"] + stats["n_undetected"]
+    assert stats["n_true_total"] == 3
     assert stats["precision"] == 1 / 3
     assert stats["recall"] == 1 / 3
 
@@ -243,10 +243,10 @@ def test_last_run_counts_pointer_clicks_on_the_matching_field() -> None:
         min_size_nm=20000.0,
         folder_tiles=["v5_2of4.png", "v6_2of4.png"],
     )
-    assert stats["n_real"] == 1
+    assert stats["n_true"] == 1
     assert stats["n_undetected"] == 1
     assert stats["n_undetected_below"] == 1
-    assert stats["n_real_total"] == 2
+    assert stats["n_true_total"] == 2
     both = last_run_class_counts(
         detections,
         labels,
@@ -254,7 +254,7 @@ def test_last_run_counts_pointer_clicks_on_the_matching_field() -> None:
         min_size_nm=20000.0,
     )
     assert both["n_undetected"] == 2
-    assert both["n_real_total"] == 3
+    assert both["n_true_total"] == 3
 
 
 def test_submap_combi_does_not_inherit_letter_field_misses() -> None:
@@ -288,11 +288,11 @@ def test_submap_combi_does_not_inherit_letter_field_misses() -> None:
         folder_tiles=["v5/combi_2of4.png", "v5/wafer_shot_4_all_exp200000.png"],
     )
     assert stats["n_undetected"] == 1
-    assert stats["n_real_total"] == 1
+    assert stats["n_true_total"] == 1
 
 
 def test_submap_tiles_are_counted_separately() -> None:
-    """A quad fake is not a fake of the combi, and a quad hit is not a combi miss."""
+    """A quad false is not a false of the combi, and a quad hit is not a combi miss."""
     combi = "v6/combi_2of4.png"
     quad = "v6/wafer_shot_3_quad3_exp200000.png"
     uniform = "v6/wafer_shot_4_all_exp200000.png"
@@ -340,12 +340,12 @@ def test_submap_tiles_are_counted_separately() -> None:
         folder_tiles=tiles,
     )
     assert on_combi["n_detected"] == 1
-    assert on_combi["n_real"] == 1
-    assert on_combi["n_fake"] == 0
+    assert on_combi["n_true"] == 1
+    assert on_combi["n_false"] == 0
     assert on_combi["n_undetected"] == 1
     assert on_quad["n_detected"] == 2
-    assert on_quad["n_fake"] == 1
-    assert on_quad["n_real"] == 1
+    assert on_quad["n_false"] == 1
+    assert on_quad["n_true"] == 1
     assert on_quad["n_undetected"] == 0
 
 
@@ -374,7 +374,7 @@ def test_last_run_class_counts_drops_undetected_below_run_size_floor() -> None:
     )
     assert stats["n_undetected"] == 1
     assert stats["n_undetected_below"] == 1
-    assert stats["n_real_total"] == 1
+    assert stats["n_true_total"] == 1
     assert stats["precision"] == 0.0
     assert stats["recall"] == 0.0
 
@@ -385,25 +385,25 @@ def test_subfolder_score_rows_combines_tiles_and_splits_vn() -> None:
             {
                 "tile": "(1,1).png",
                 "n_detected": 2,
-                "n_real": 1,
+                "n_true": 1,
                 "n_undetected": 1,
             },
             {
                 "tile": "(3,3).png",
                 "n_detected": 2,
-                "n_real": 2,
+                "n_true": 2,
                 "n_undetected": 0,
             },
             {
                 "tile": "v5/quad.png",
                 "n_detected": 1,
-                "n_real": 1,
+                "n_true": 1,
                 "n_undetected": 0,
             },
             {
                 "tile": "v7/quad.png",
                 "n_detected": 4,
-                "n_real": 0,
+                "n_true": 0,
                 "n_undetected": 2,
             },
         ]
@@ -421,7 +421,7 @@ def test_subfolder_score_rows_combines_tiles_and_splits_vn() -> None:
     ]
     folder = by_name["v44 2026-10-20 N40 (10%) copy"]
     assert folder["n_detected"] == 4
-    assert folder["n_real"] == 3
+    assert folder["n_true"] == 3
     assert folder["n_undetected"] == 1
     assert folder["precision"] == pytest.approx(0.75)
     assert folder["recall"] == pytest.approx(0.75)
@@ -442,12 +442,12 @@ def test_last_run_class_counts_by_tile_splits_folder() -> None:
             "size": [20000.0, 20000.0, 20000.0],
             "confidence": [0.9, 0.8, 0.7],
             "source_tile": ["a.tif", "a.tif", "b.tif"],
-            "key": ["a_real", "a_fake", "b_real"],
+            "key": ["a_true", "a_false", "b_true"],
         }
     )
     labels = pd.DataFrame(
         {
-            "key": ["a_real", "a_fake", "a_miss", "b_real"],
+            "key": ["a_true", "a_false", "a_miss", "b_true"],
             "label": ["particle", "not_particle", "particle", "particle"],
             "source_tile": ["a.tif", "a.tif", "a.tif", "b.tif"],
             "size": [25000.0, 20000.0, 25000.0, 20000.0],
@@ -459,7 +459,7 @@ def test_last_run_class_counts_by_tile_splits_folder() -> None:
     by_tile = table.set_index("tile")
     assert list(table["tile"]) == ["a.tif", "b.tif"]
     assert int(by_tile.loc["a.tif", "n_detected"]) == 2
-    assert int(by_tile.loc["a.tif", "n_real"]) == 1
+    assert int(by_tile.loc["a.tif", "n_true"]) == 1
     assert int(by_tile.loc["a.tif", "n_undetected"]) == 1
     assert float(by_tile.loc["a.tif", "precision"]) == 0.5
     assert float(by_tile.loc["a.tif", "recall"]) == 0.5
@@ -522,9 +522,9 @@ def test_shared_combi_uniform_hit_counts_on_both_pictures() -> None:
 def test_std_of_tile_scores_uses_every_tile() -> None:
     table = pd.DataFrame(
         [
-            {"tile": "(1,1).png", "n_detected": 2, "n_real": 1, "n_undetected": 1},
-            {"tile": "(1,2).png", "n_detected": 2, "n_real": 2, "n_undetected": 0},
-            {"tile": "(1,3).png", "n_detected": 0, "n_real": 0, "n_undetected": 0},
+            {"tile": "(1,1).png", "n_detected": 2, "n_true": 1, "n_undetected": 1},
+            {"tile": "(1,2).png", "n_detected": 2, "n_true": 2, "n_undetected": 0},
+            {"tile": "(1,3).png", "n_detected": 0, "n_true": 0, "n_undetected": 0},
         ]
     )
     spread = std_of_tile_scores(table, beta=1.0)
@@ -584,9 +584,9 @@ def test_last_run_class_counts_by_tile_splits_particles_only() -> None:
     )
     by_tile = table.set_index("tile")
     assert int(by_tile.loc["particles_only.png", "n_detected"]) == 2
-    assert int(by_tile.loc["particles_only.png", "n_real"]) == 1
+    assert int(by_tile.loc["particles_only.png", "n_true"]) == 1
     assert int(by_tile.loc["particles_only_4of4.png", "n_detected"]) == 1
-    assert int(by_tile.loc["particles_only_4of4.png", "n_real"]) == 1
+    assert int(by_tile.loc["particles_only_4of4.png", "n_true"]) == 1
 
 
 def test_last_run_ignores_nsew_labels_from_another_folder() -> None:
@@ -617,9 +617,9 @@ def test_last_run_ignores_nsew_labels_from_another_folder() -> None:
         tile_names=["N.png", "E.png", "S.png", "W.png"],
         min_size_nm=20000.0,
     )
-    assert stats["n_real"] == 1
+    assert stats["n_true"] == 1
     assert stats["n_undetected"] == 1
-    assert stats["n_real_total"] == 2
+    assert stats["n_true_total"] == 2
 
 
 def test_grid_labels_stay_in_their_own_folder() -> None:
@@ -656,9 +656,9 @@ def test_grid_labels_stay_in_their_own_folder() -> None:
         min_size_nm=20000.0,
         run_dir="Groundup/wafer-a",
     )
-    assert stats["n_real"] == 1
+    assert stats["n_true"] == 1
     assert stats["n_undetected"] == 1
-    assert stats["n_real_total"] == 2
+    assert stats["n_true_total"] == 2
 
 
 def test_tinder_saves_a_grid_label_in_this_folder() -> None:
@@ -719,9 +719,9 @@ def test_last_run_particles_only_uses_same_scene_nsew_labels() -> None:
             "W.png",
         ],
     )
-    assert stats["n_real"] == 1
+    assert stats["n_true"] == 1
     assert stats["n_undetected"] == 1
-    assert stats["n_real_total"] == 2
+    assert stats["n_true_total"] == 2
 
 
 def test_last_run_snaps_particles_only_to_nearby_nsew_label() -> None:
@@ -759,7 +759,7 @@ def test_last_run_snaps_particles_only_to_nearby_nsew_label() -> None:
         min_size_nm=20000.0,
         folder_tiles=["particles_only_2of4.png", "N.png"],
     )
-    assert stats["n_real"] == 1
+    assert stats["n_true"] == 1
     assert stats["n_unlabeled"] == 0
     assert stats["n_undetected"] == 0
 
@@ -1304,7 +1304,7 @@ def test_write_marked_mosaic_saves_review_and_inspect_circles(tmp_path: Path) ->
                 "x_global": 20_000.0,
                 "y_global": 25_000.0,
                 "size": 1_000.0,
-                "key": "hit-real",
+                "key": "hit-true",
             },
             {
                 "source_tile": "field.png",
@@ -1322,7 +1322,7 @@ def test_write_marked_mosaic_saves_review_and_inspect_circles(tmp_path: Path) ->
                 "x_global": 20_000.0,
                 "y_global": 25_000.0,
                 "size": 1_000.0,
-                "key": "hit-real",
+                "key": "hit-true",
                 "label": "particle",
                 "source_csv": "particles.csv",
             },

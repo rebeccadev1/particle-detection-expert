@@ -69,7 +69,7 @@ def placement_from_tile(
 
 
 def grid_index_origin(paths: list[Path], pattern: str) -> tuple[int, int]:
-    """Smallest row/col among tiles so the mosaic starts at the first real column."""
+    """Smallest row/col among tiles so the mosaic starts at the first true column."""
     rows: list[int] = []
     cols: list[int] = []
     for path in paths:

@@ -80,7 +80,7 @@ def particle_label_rows(
     tile_names: Iterable[str] | None = None,
     inspect_only: bool = False,
 ) -> pd.DataFrame:
-    """Labeled real particles, optionally restricted to tiles / tile_inspect."""
+    """Labeled true particles, optionally restricted to tiles / tile_inspect."""
     if labels.empty:
         return labels.copy()
     keep = labels.loc[labels["label"].astype(str) == POSITIVE_LABEL].copy()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -304,21 +305,31 @@ _FIGURE = round(13 * _PT_PX)
 _BODY = round(11 * _PT_PX)
 _LABEL = round(9 * _PT_PX)
 
+def _windows_fonts(*names: str) -> tuple[str, ...]:
+    """Arial files shipped with Windows. Missing files are skipped later."""
+    windir = os.environ.get("WINDIR") or os.environ.get("SystemRoot") or r"C:\Windows"
+    folder = Path(windir) / "Fonts"
+    return tuple(str(folder / name) for name in names)
+
+
 _FONT_REGULAR = (
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/Library/Fonts/Arial Unicode.ttf",
     "/Library/Fonts/Arial.ttf",
+    *_windows_fonts("arial.ttf"),
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 )
 _FONT_BOLD = (
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    *_windows_fonts("arialbd.ttf"),
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
 )
 _FONT_ITALIC = (
     "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
+    *_windows_fonts("ariali.ttf"),
     "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
 )

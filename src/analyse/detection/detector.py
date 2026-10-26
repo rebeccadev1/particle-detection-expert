@@ -302,7 +302,7 @@ def coarse_edge_distance(
     morphological close rejoins broken segments. Compact particle halos are
     dropped (need an elongated or thin component at least ``min_length`` px).
     The mask is then skeletonized so distance is to the border *line*, not a
-    fat gradient band (which would swallow real specks sitting inside a pad).
+    fat gradient band (which would swallow true specks sitting inside a pad).
     The tile frame is included so truncated pads at the crop edge are not
     treated as particles. ``sigma <= 0`` returns a large constant.
     """
@@ -418,7 +418,7 @@ def reject_clustered_candidates(
 
     Isolated particles have no nearby hits. Region-border beads and repeating
     layout cells have several neighbors within ``neighbor_px``. A blob that is
-    clearly larger or higher-SNR than those neighbors is kept (real flake in
+    clearly larger or higher-SNR than those neighbors is kept (true flake in
     a scatter of small layout nodes). ``neighbor_px`` or ``min_neighbors``
     <= 0 disables the filter.
     """
@@ -780,7 +780,7 @@ def _snr_sigma_for_residual(
     """Local SNR sigma for this residual. ``< 0`` disables. Top-hat skips auto SNR.
 
     Top-hat is already a local-contrast map. Auto SNR on it boosts dark-field
-    noise into thousands of DoG hits, which then cluster-kill real particles.
+    noise into thousands of DoG hits, which then cluster-kill true particles.
     """
     configured = cfg_get(config, "detection.local_snr_sigma", None)
     if configured is not None and float(configured) < 0:
@@ -797,7 +797,7 @@ def _probe_has_lattice(
 ) -> bool:
     """True if a full-resolution FFT notch is worth running.
 
-    Small tiles skip the probe (the real FFT is cheap). Large mixed-layout
+    Small tiles skip the probe (the true FFT is cheap). Large mixed-layout
     tiles with no thumbnail peaks go straight to top-hat.
     """
     array = np.ascontiguousarray(image, dtype=_FLOAT)

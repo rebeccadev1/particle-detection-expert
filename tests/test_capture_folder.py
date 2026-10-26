@@ -6,12 +6,20 @@ import json
 
 from src.capture.camera_automation import (
     CAPTURES_DIR,
+    _port_busy,
     allocate_run_folder,
     latest_run_folder,
     next_run_folder,
     image_filename,
     write_manifest,
 )
+
+
+def test_a_busy_serial_port_is_recognized_on_mac_and_windows() -> None:
+    assert _port_busy(PermissionError(13, "Access is denied"))
+    assert _port_busy(OSError("could not open port: Access is denied."))
+    assert _port_busy(OSError("returned no data"))
+    assert not _port_busy(TimeoutError("no serial reply within 2.0s"))
 
 
 def test_picture_names_are_the_grid_position() -> None:

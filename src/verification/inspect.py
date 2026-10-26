@@ -757,18 +757,18 @@ def last_run_class_counts(
     """Last-run detection totals split by label, plus missed inspect marks.
 
     * ``n_detected`` — every last-run hit on these tiles
-    * ``n_real`` — detected and labeled particle (green)
-    * ``n_fake`` — detected and not labeled as particle (red, orange, blue)
-    * ``n_unlabeled`` — hits with no label (orange); also counted in ``n_fake``
+    * ``n_true`` — detected and labeled particle (green)
+    * ``n_false`` — detected and not labeled as particle (red, orange, blue)
+    * ``n_unlabeled`` — hits with no label (orange); also counted in ``n_false``
     * ``n_undetected`` — labeled particles on these tiles whose keys are not
       in the last run (inspect marks and other misses), at least
       ``min_size_nm`` when that floor is > 0 (Last Run shows this as
-      undetected real ≥ that size, typically 20 µm). A hit on another tile
+      undetected true ≥ that size, typically 20 µm). A hit on another tile
       in the same subfolder does not count. A grid label from another folder
       does not count. ``run_dir`` is that folder.
-    * ``n_real_total`` — ``n_real`` + ``n_undetected``
-    * ``precision`` — ``n_real / n_detected`` (unlabeled hits count as fake)
-    * ``recall`` — ``n_real / n_real_total``
+    * ``n_true_total`` — ``n_true`` + ``n_undetected``
+    * ``precision`` — ``n_true / n_detected`` (unlabeled hits count as false)
+    * ``recall`` — ``n_true / n_true_total``
     """
     tagged = tagged_if_needed(detections) if detections is not None else pd.DataFrame()
     if tile_names is not None and not tagged.empty and "source_tile" in tagged.columns:
@@ -784,16 +784,16 @@ def last_run_class_counts(
     label_map = label_map_with_aliases(scoped)
     particles = _particle_label_rows(scoped)
 
-    n_real = n_fake = n_not_sure = n_unlabeled = 0
+    n_true = n_false = n_not_sure = n_unlabeled = 0
     det_keys: set[str] = set()
     if n_detected and "key" in tagged.columns:
         for key in tagged["key"].astype(str):
             det_keys.add(str(key))
             name = label_map.get(str(key), "")
             if name == "particle":
-                n_real += 1
+                n_true += 1
             else:
-                n_fake += 1
+                n_false += 1
                 if name == "not_sure":
                     n_not_sure += 1
                 elif name != "not_particle":
@@ -810,18 +810,18 @@ def last_run_class_counts(
             missing = missing.loc[sizes >= floor]
         n_undetected = int(len(missing))
         n_undetected_below = max(0, n_all_missing - n_undetected)
-    n_real_total = n_real + n_undetected
-    precision = (n_real / n_detected) if n_detected else 0.0
-    recall = (n_real / n_real_total) if n_real_total else 0.0
+    n_true_total = n_true + n_undetected
+    precision = (n_true / n_detected) if n_detected else 0.0
+    recall = (n_true / n_true_total) if n_true_total else 0.0
     return {
         "n_detected": n_detected,
-        "n_real": n_real,
-        "n_fake": n_fake,
+        "n_true": n_true,
+        "n_false": n_false,
         "n_unlabeled": n_unlabeled,
         "n_undetected": n_undetected,
         "n_undetected_below": n_undetected_below,
         "n_not_sure": n_not_sure,
-        "n_real_total": n_real_total,
+        "n_true_total": n_true_total,
         "precision": precision,
         "recall": recall,
     }
@@ -866,7 +866,7 @@ def std_of_crop_cells(cells: Sequence[Mapping[str, Any]]) -> dict[str, float | N
     """Sample standard deviation of precision, recall, and Fβ across crops.
 
     A crop with no detections is left out of precision. A crop with no labeled
-    real particles is left out of recall. Fβ uses only crops where both are
+    true particles is left out of recall. Fβ uses only crops where both are
     defined. The result is undefined when fewer than two crops qualify.
     """
     precisions = [float(cell["precision"]) for cell in cells if cell.get("precision") is not None]
@@ -899,7 +899,7 @@ def std_of_tile_scores(
     """Sample standard deviation of precision, recall, and Fβ across tiles.
 
     Each tile is one observation, including a tile with no detections or no
-    labeled real particles (those scores are 0). The result is undefined when
+    labeled true particles (those scores are 0). The result is undefined when
     fewer than two tiles are present.
     """
     precisions: list[float] = []
@@ -907,11 +907,11 @@ def std_of_tile_scores(
     f_betas: list[float] = []
     for record in _score_records(records):
         n_detected = float(record.get("n_detected") or 0.0)
-        n_real = float(record.get("n_real") or 0.0)
+        n_true = float(record.get("n_true") or 0.0)
         n_undetected = float(record.get("n_undetected") or 0.0)
-        n_real_total = float(record.get("n_real_total") or (n_real + n_undetected))
-        precision = (n_real / n_detected) if n_detected else 0.0
-        recall = (n_real / n_real_total) if n_real_total else 0.0
+        n_true_total = float(record.get("n_true_total") or (n_true + n_undetected))
+        precision = (n_true / n_detected) if n_detected else 0.0
+        recall = (n_true / n_true_total) if n_true_total else 0.0
         precisions.append(precision)
         recalls.append(recall)
         f_betas.append(f_beta_score(precision, recall, beta))
@@ -962,8 +962,8 @@ def subfolder_score_rows(
     rows: list[dict[str, Any]] = []
     count_keys = (
         "n_detected",
-        "n_real",
-        "n_fake",
+        "n_true",
+        "n_false",
         "n_unlabeled",
         "n_undetected",
         "n_undetected_below",
@@ -976,19 +976,19 @@ def subfolder_score_rows(
             for name in count_keys:
                 totals[name] += float(record.get(name) or 0.0)
         n_detected = int(totals["n_detected"])
-        n_real = int(totals["n_real"])
+        n_true = int(totals["n_true"])
         n_undetected = int(totals["n_undetected"])
-        n_real_total = n_real + n_undetected
+        n_true_total = n_true + n_undetected
         spread = std_of_tile_scores(std_grouped.get(key, records), beta=beta)
         rows.append(
             {
                 "name": key or plain_name,
                 "n_detected": n_detected,
-                "n_real": n_real,
+                "n_true": n_true,
                 "n_undetected": n_undetected,
-                "n_real_total": n_real_total,
-                "precision": (n_real / n_detected) if n_detected else None,
-                "recall": (n_real / n_real_total) if n_real_total else None,
+                "n_true_total": n_true_total,
+                "precision": (n_true / n_detected) if n_detected else None,
+                "recall": (n_true / n_true_total) if n_true_total else None,
                 "precision_std": spread["precision"],
                 "recall_std": spread["recall"],
                 "f_beta_std": spread["f_beta"],
@@ -1016,7 +1016,7 @@ def crop_metric_cells(
 
     Cells are row-major, matching ``CELL_NAMES``. ``precision`` is missing when
     the crop has no detections. ``recall`` is missing when it has no labeled
-    real particles. ``f_beta`` is missing unless both are defined.
+    true particles. ``f_beta`` is missing unless both are defined.
     """
     if height < 1 or width < 1 or not placements or grid < 1:
         return []
@@ -1034,7 +1034,7 @@ def crop_metric_cells(
     particles = _particle_label_rows(scoped)
 
     cells = [
-        {"n_detected": 0, "n_real": 0, "n_undetected": 0}
+        {"n_detected": 0, "n_true": 0, "n_undetected": 0}
         for _ in range(grid * grid)
     ]
     det_keys: set[str] = set()
@@ -1056,7 +1056,7 @@ def crop_metric_cells(
             cell = cells[row * grid + col]
             cell["n_detected"] += 1
             if label_map.get(str(key), "") == "particle":
-                cell["n_real"] += 1
+                cell["n_true"] += 1
     if not particles.empty and "key" in particles.columns:
         found = expand_labeled_keys(det_keys)
         missing = particles.loc[~particles["key"].astype(str).isin(found)]
@@ -1081,10 +1081,10 @@ def crop_metric_cells(
     rated: list[dict[str, Any]] = []
     for index, cell in enumerate(cells):
         n_detected = int(cell["n_detected"])
-        n_real = int(cell["n_real"])
-        n_real_total = n_real + int(cell["n_undetected"])
-        precision = (n_real / n_detected) if n_detected else None
-        recall = (n_real / n_real_total) if n_real_total else None
+        n_true = int(cell["n_true"])
+        n_true_total = n_true + int(cell["n_undetected"])
+        precision = (n_true / n_detected) if n_detected else None
+        recall = (n_true / n_true_total) if n_true_total else None
         f_beta = (
             f_beta_score(precision, recall, beta)
             if precision is not None and recall is not None

@@ -1621,8 +1621,8 @@ def _sum_tile_counts(table: pd.DataFrame | None) -> dict[str, float]:
     """Add each tile's own totals. The same speck on two tiles counts twice."""
     keys = (
         "n_detected",
-        "n_real",
-        "n_fake",
+        "n_true",
+        "n_false",
         "n_unlabeled",
         "n_undetected",
         "n_undetected_below",
@@ -1633,11 +1633,11 @@ def _sum_tile_counts(table: pd.DataFrame | None) -> dict[str, float]:
         for key in keys:
             if key in table.columns:
                 totals[key] = float(pd.to_numeric(table[key], errors="coerce").fillna(0).sum())
-    totals["n_real_total"] = totals["n_real"] + totals["n_undetected"]
+    totals["n_true_total"] = totals["n_true"] + totals["n_undetected"]
     detected = totals["n_detected"]
-    real_total = totals["n_real_total"]
-    totals["precision"] = (totals["n_real"] / detected) if detected else 0.0
-    totals["recall"] = (totals["n_real"] / real_total) if real_total else 0.0
+    true_total = totals["n_true_total"]
+    totals["precision"] = (totals["n_true"] / detected) if detected else 0.0
+    totals["recall"] = (totals["n_true"] / true_total) if true_total else 0.0
     return totals
 
 
@@ -1649,15 +1649,15 @@ def _render_last_run_summary(
     score_std: dict[str, float | None] | None = None,
 ) -> None:
     floor_um = float(min_size_nm) / NM_PER_UM if min_size_nm else 20.0
-    miss_title = f"Undetected real ≥ {floor_um:.0f} µm"
+    miss_title = f"Undetected true ≥ {floor_um:.0f} µm"
     counts_row = [
         _last_run_stat_card("Detected", int(counts["n_detected"]), "#5b6472", "#5b647214"),
-        _last_run_stat_card("Real of detected", int(counts["n_real"]), "#1f9d3a", "#28b44622"),
-        _last_run_stat_card("Fake of detected", int(counts["n_fake"]), "#d61f1f", "#e3262622"),
-        _last_run_stat_card("Total real", int(counts["n_real_total"]), "#187a2e", "#28b44618"),
+        _last_run_stat_card("true of detected", int(counts["n_true"]), "#1f9d3a", "#28b44622"),
+        _last_run_stat_card("false of detected", int(counts["n_false"]), "#d61f1f", "#e3262622"),
+        _last_run_stat_card("Total true", int(counts["n_true_total"]), "#187a2e", "#28b44618"),
         _last_run_stat_card(miss_title, int(counts["n_undetected"]), "#c56a00", "#d9770618"),
     ]
-    rates_defined = int(counts["n_detected"]) > 0 and int(counts["n_real_total"]) > 0
+    rates_defined = int(counts["n_detected"]) > 0 and int(counts["n_true_total"]) > 0
     rates_row = [
         _last_run_stat_card(
             "P",
@@ -1672,7 +1672,7 @@ def _render_last_run_summary(
             "R",
             _last_run_rate_text(
                 float(counts.get("recall", 0.0)),
-                defined=int(counts["n_real_total"]) > 0,
+                defined=int(counts["n_true_total"]) > 0,
             ),
             "#6b3fa0",
             "#6b3fa018",
@@ -1765,7 +1765,7 @@ def _metric_row(
     recall: float | None,
     beta: float,
     n_detected: int | None = None,
-    n_real: int | None = None,
+    n_true: int | None = None,
     n_undetected: int | None = None,
     precision_std: float | None = None,
     recall_std: float | None = None,
@@ -1780,7 +1780,7 @@ def _metric_row(
         "Tile": tile,
         "Crop": crop,
         "Detected": _count_cell(n_detected),
-        "Real": _count_cell(n_real),
+        "true": _count_cell(n_true),
         "Undetected": _count_cell(n_undetected),
         "P": _percent_cell(precision),
         "R": _percent_cell(recall),
@@ -1808,14 +1808,14 @@ def _render_score_table(
     rows: list[dict[str, str]] = []
     for record in grouped:
         detected = int(record.get("n_detected") or 0)
-        real_total = int(record.get("n_real_total") or 0)
+        true_total = int(record.get("n_true_total") or 0)
         rows.append(
             _metric_row(
                 str(record["name"]),
                 "All together",
                 n_detected=detected if detected else None,
-                n_real=int(record.get("n_real") or 0) if detected else None,
-                n_undetected=int(record.get("n_undetected") or 0) if detected or real_total else None,
+                n_true=int(record.get("n_true") or 0) if detected else None,
+                n_undetected=int(record.get("n_undetected") or 0) if detected or true_total else None,
                 precision=record.get("precision"),
                 recall=record.get("recall"),
                 beta=beta,
@@ -1829,7 +1829,7 @@ def _render_score_table(
         return
     st.caption(
         "Each row is one subfolder, with its tiles scored together. "
-        "Detected, Real, and Undetected are the counts on those pictures. "
+        "Detected, true, and Undetected are the counts on those pictures. "
         "P std, R std, and Fβ std are the spread across every tile in that subfolder."
     )
     st.table(pd.DataFrame(rows).set_index(["Tile", "Crop"]))
@@ -1974,7 +1974,7 @@ def render_labeled_tiles_tab(
         horizontal=True,
         key="last_run_metrics_scope",
         help="Each tile is counted on its own. All tiles adds those tiles. "
-        "A fake on one picture is not a fake on the others.",
+        "A false on one picture is not a false on the others.",
     )
 
     if names:

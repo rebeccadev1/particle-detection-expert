@@ -81,6 +81,21 @@ def test_result_table_keeps_only_reported_columns() -> None:
     assert float(one_digit.loc[0, "size_um"]) == 15.6
 
 
+def test_summary_fonts_include_windows_arial() -> None:
+    from src.analyse.report.report_generator import (
+        _FONT_BOLD,
+        _FONT_ITALIC,
+        _FONT_REGULAR,
+    )
+
+    regular = [Path(path).name.lower() for path in _FONT_REGULAR]
+    bold = [Path(path).name.lower() for path in _FONT_BOLD]
+    italic = [Path(path).name.lower() for path in _FONT_ITALIC]
+    assert "arial.ttf" in regular
+    assert "arialbd.ttf" in bold
+    assert "ariali.ttf" in italic
+
+
 def test_count_table_is_only_as_wide_as_its_text() -> None:
     from src.analyse.report.report_generator import (
         _BODY,
