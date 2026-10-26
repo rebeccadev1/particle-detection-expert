@@ -157,6 +157,11 @@ st.markdown(
         font-size: 0.9rem !important;
         font-weight: 400 !important;
     }
+    [class*="st-key-block-stage"] [data-testid="stMetricValue"],
+    [class*="st-key-block-stage"] [data-testid="stMetricValue"] p {
+        font-size: calc(2.25rem - 6.66mm) !important;
+        line-height: 1.2 !important;
+    }
     [class*="st-key-block-last-run"] [data-testid="stVegaLiteChart"],
     [class*="st-key-block-last-run"] .vega-embed {
         margin: 0 !important;

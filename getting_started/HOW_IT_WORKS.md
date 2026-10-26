@@ -33,7 +33,7 @@ The left column is the live camera. The right column is the last saved capture. 
 
 The stage is a 3D-printer bed. You can jog it, then set the scan: field of view in millimetres, overlap fraction, columns, rows, and travel speed. The step size is the field of view times `(1 − overlap)`. The path is a serpentine: odd rows go left to right, even rows start at the right edge and walk back. The G-code for the current settings can be downloaded as `scanwafer.gcode`.
 
-**Focus** hill-climbs Z from the current height using the live image. **Check and correct focus during the scan** scores the frame after every seventh stage step and runs autofocus. If the best score stays at or below 80% of the sharpness at the start of that search, autofocus runs again. Leave the checkbox off to keep the current Z for the whole scan.
+**Focus** hill-climbs Z from the current height using the live image. **Check and correct focus during the scan** scores the frame after every fifth stage step and runs autofocus. If the best score stays at or below 80% of the sharpness at the start of that search, autofocus runs again. Leave the checkbox off to keep the current Z for the whole scan.
 
 **Scan and capture** moves through the grid and saves a picture at each stop, using the lighting mode and total exposure already chosen. Stop ends the scan. Sharpness at each stop, and each autofocus move, is written to `sharpness.json`.
 

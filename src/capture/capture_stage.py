@@ -149,7 +149,7 @@ def _render_focus(locked: bool) -> None:
             key="focus_during_scan",
             disabled=locked,
             help=(
-                "After every seventh stage step, score the frame and run autofocus. "
+                "After every fifth stage step, score the frame and run autofocus. "
                 "If the best score stays at or below 80% of the sharpness at the start of that search, "
                 "autofocus runs again. Leave this off to keep the current Z for the whole scan."
             ),

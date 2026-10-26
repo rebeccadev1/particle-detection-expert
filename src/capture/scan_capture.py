@@ -31,7 +31,7 @@ from src.capture.focus import (
 )
 from src.capture.stage import move_axis, move_z, printer_status, return_from_stop_moves, scan_stops
 
-FOCUS_EVERY_STEPS = 7
+FOCUS_EVERY_STEPS = 5
 FOCUS_MIN_RATIO = 0.8
 
 _JOB_LOCK = threading.Lock()
@@ -63,7 +63,7 @@ def refocus_due(
     *,
     enabled: bool = True,
 ) -> bool:
-    """True after the 7th, 14th, and later stage steps when focus during the scan is on."""
+    """True after the 5th, 10th, and later stage steps when focus during the scan is on."""
     if not enabled:
         return False
     steps_taken = int(steps_taken)
