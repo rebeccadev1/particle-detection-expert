@@ -1,4 +1,3 @@
-"""Stage, focus, and scan controls for the Capture tab."""
 
 from __future__ import annotations
 
@@ -62,7 +61,6 @@ FOCUS_WIDGET_DEFAULTS: dict = {
 
 
 def keep_stage_inputs() -> None:
-    """Call on every run so stage factors survive leaving the Capture tab."""
     for key in (*STAGE_WIDGET_DEFAULTS, *FOCUS_WIDGET_DEFAULTS):
         held = f"_held_{key}"
         if key in st.session_state:
@@ -72,12 +70,6 @@ def keep_stage_inputs() -> None:
 
 
 def _light_for_manual_autofocus(cap) -> bool:
-    """Set the ring before a standalone autofocus. Scan autofocus does not call this.
-
-    Uniform turns every side on. NSEW turns North on, then the search starts.
-    North stays on for the whole search.
-    Returns False when the lights could not be set, so the search does not start in the dark.
-    """
     mode = _selected_mode()
     ser = _serial()
     if ser is None:
@@ -103,7 +95,6 @@ def _stage_step_mm() -> float:
 
 
 def _stage_record() -> dict:
-    """Stage settings stored with every capture."""
     return {
         "fov_mm": float(st.session_state.get("stage_fov_mm", FOV_MM)),
         "overlap": float(st.session_state.get("stage_overlap", OVERLAP)),
@@ -138,7 +129,6 @@ def _focus_limits() -> str | None:
 
 
 def _render_focus(locked: bool) -> None:
-    """Hill-climb Z from the current height using the live image."""
     with st.container(border=True, key="block-focus"):
         st.header("Focus")
         st.checkbox(
@@ -226,7 +216,6 @@ def _format_focus_step(index: int, step: dict) -> str:
 
 
 def _focus_steps(info: dict) -> None:
-    """Expandable log of each height autofocus has scored."""
     steps = info["steps"]
     run_id = info["run_id"]
     if run_id and st.session_state.get("_focus_steps_seen") != run_id:
@@ -234,7 +223,6 @@ def _focus_steps(info: dict) -> None:
         st.session_state["_focus_steps_seen"] = run_id
     with st.expander("Focus steps", expanded=False, key="focus_steps_open", on_change="rerun"):
         if not steps:
-            st.caption("Each height that autofocus tries shows up here.")
             return
         st.code("\n".join(_format_focus_step(index, step) for index, step in enumerate(steps, start=1)))
 
@@ -307,7 +295,6 @@ def _autofocus_block_reason(printer: dict, snap: dict) -> str | None:
 
 
 def _scan_capture_block_note(info: dict, focusing: bool) -> str | None:
-    """Why Scan and capture cannot run."""
     if not info["connected"]:
         shared = "Printer is not connected."
     elif not info["online"]:
@@ -475,7 +462,6 @@ def _stage_cross(ready: bool, minor_xy: float, major_xy: float, minor_z: float, 
 
 
 def _render_stage_pad(locked: bool) -> None:
-    """Minor and major steps around a home that centers X and Y."""
     info = printer_status()
     ready = info["online"] and not locked
     minor_xy = _jog_distance("jog_minor_xy_mm")
@@ -506,7 +492,6 @@ def _home_stage() -> None:
 
 
 def _jog_step_inputs(locked: bool) -> None:
-    """Distances for the single-arrow and double-arrow buttons."""
     _jog_number("Minor XY (mm)", "jog_minor_xy_mm", locked)
     _jog_number("Major XY (mm)", "jog_major_xy_mm", locked)
     _jog_number("Minor Z (mm)", "jog_minor_z_mm", locked)
@@ -528,13 +513,11 @@ def _jog_number(label: str, key: str, locked: bool) -> None:
 
 @st.fragment(run_every=0.5)
 def _printer_reply() -> None:
-    """Same confirmation as the Arduino: the device answered, so it is well connected."""
     if printer_status()["online"]:
         st.caption("Last reply: OK ALL")
 
 
 def render_stage(cap) -> None:
-    """Move the 3D-printer stage with the same serpentine as scan_40x60.gcode."""
     with st.container(border=True, key="block-stage"):
         st.header("Stage")
 

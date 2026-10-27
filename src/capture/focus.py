@@ -1,11 +1,3 @@
-"""Autofocus by stepping printer Z until the live image is sharpest.
-
-The search is pure: it asks a ``measure`` function for a sharpness score and a
-``move`` function for a relative Z step. The Capture tab supplies the camera
-and the printer. Nothing here is homed. Offsets are millimetres from the
-height where the search started.
-"""
-
 from __future__ import annotations
 
 import threading
@@ -45,7 +37,7 @@ _JOB: dict = {
 
 @dataclass(frozen=True)
 class FocusResult:
-    """Where the search finished, relative to the height it started at."""
+    
 
     offset_mm: float
     sharpness: float
@@ -56,11 +48,7 @@ class FocusResult:
 
 
 def sharpness(image: np.ndarray) -> float:
-    """Variance of the Laplacian on the center of the frame.
-
-    A focused pattern has stronger edges, so the variance is higher. The center
-    half is used so the rim and vignetting do not dominate the score.
-    """
+    
     frame = np.asarray(image)
     if frame.ndim == 2:
         gray = frame
@@ -91,17 +79,7 @@ def focus_search(
     should_stop=None,
     on_sample=None,
 ) -> FocusResult:
-    """Hill-climb Z from the current height and finish on the sharpest sample.
-
-    ``measure()`` returns a sharpness score at the current height. ``move(delta_mm)``
-    steps Z and returns when that step has finished. Positive delta is printer +Z.
-    The first probe is upward. A step counts as sharper only when the score rises by
-    ``min_gain``. A miss is scored again on the next frame at the same height. If
-    that still misses, one more step in the same direction is taken before the
-    search turns around. The same climb then repeats with ``fine_mm``. No step is
-    commanded past ``max_travel_mm`` from the start. On the way out, including
-    when ``should_stop`` is set, the stage returns to the best height measured.
-    """
+    
     max_travel_mm = float(max_travel_mm)
     coarse_mm = float(coarse_mm)
     fine_mm = float(fine_mm)
@@ -164,7 +142,7 @@ def focus_search(
     report(score, best_offset, best_score, phase="start", decision="start")
 
     def sample(phase: str) -> bool | None:
-        """Score this height. A miss gets a second frame before it counts."""
+        
         nonlocal score, best_offset, best_score
         score = float(measure())
         if _better(score, best_score, min_gain):
@@ -245,7 +223,7 @@ def score_settled_frame(
     settle_s: float = DEFAULT_SETTLE_S,
     timeout_s: float = DEFAULT_FRAME_TIMEOUT_S,
 ) -> float:
-    """Wait out vibration, then score the next live frame after that."""
+    
     from src.capture.preview import preview_snapshot
 
     settle_s = float(settle_s)
@@ -269,7 +247,7 @@ def score_settled_frame(
 
 
 def autofocus_status() -> dict:
-    """Snapshot of the background search. Safe to call from the page rerun."""
+    
     with _JOB_LOCK:
         return {
             "running": bool(_JOB["running"]),
@@ -287,7 +265,7 @@ def autofocus_status() -> dict:
 
 
 def claim_focus_capture() -> bool:
-    """True once, after a finished autofocus, so the page can save one still."""
+    
     with _JOB_LOCK:
         if _JOB["running"] or _JOB["phase"] != "done" or _JOB["error"]:
             return False
@@ -298,7 +276,7 @@ def claim_focus_capture() -> bool:
 
 
 def stop_autofocus() -> None:
-    """Ask the search to finish the current move, then return to the best Z."""
+    
     with _JOB_LOCK:
         stop = _JOB.get("stop")
         if stop is not None:
@@ -332,7 +310,7 @@ def start_autofocus(
     min_gain: float = DEFAULT_MIN_GAIN,
     frame_timeout_s: float = DEFAULT_FRAME_TIMEOUT_S,
 ) -> None:
-    """Start the hill climb on a background thread. Returns once the thread is running."""
+    
     from src.capture.preview import preview_snapshot
     from src.capture.stage import printer_status
 

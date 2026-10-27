@@ -1,9 +1,3 @@
-"""Live Basler view for the Capture tab.
-
-The camera stays open in a background thread. A true capture has to close it
-first, because the Basler device allows one connection.
-"""
-
 from __future__ import annotations
 
 import builtins
@@ -16,12 +10,7 @@ PREVIEW_MAX_SIDE = 960
 
 
 def _load_state() -> dict:
-    """One camera record for this process, including across a script reload.
-
-    A reload otherwise forgets the open Basler and tries to open it again.
-    The camera allows one client, so that second open fails and the live
-    view is replaced by the exclusive-device error.
-    """
+    
     shared = getattr(builtins, "_asml_camera_preview", None)
     if isinstance(shared, dict) and "lock" in shared:
         return shared
@@ -46,7 +35,7 @@ _STATE = _load_state()
 
 
 def display_frame(image: np.ndarray, max_side: int = PREVIEW_MAX_SIDE) -> np.ndarray:
-    """RGB image sized for the page. Accepts a BGR or gray frame from the camera."""
+    
     frame = image
     if frame.ndim == 3 and frame.shape[2] == 3:
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -115,7 +104,7 @@ def _grab_loop(cap, camera, converter, stop: threading.Event) -> None:
 
 
 def start_preview(cap, exposure_us: float) -> None:
-    """Open the live view, or change the shutter if it is already open."""
+    
     exposure_us = float(exposure_us)
     with _STATE["lock"]:
         _STATE["exposure_us"] = exposure_us
@@ -149,7 +138,7 @@ def start_preview(cap, exposure_us: float) -> None:
 
 
 def stop_preview() -> None:
-    """Close the live view so a capture can open the camera."""
+    
     with _STATE["lock"]:
         stop = _STATE["stop"]
         camera = _STATE["camera"]

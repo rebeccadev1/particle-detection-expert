@@ -1,9 +1,3 @@
-"""Unmarked two-channel crops for the FP filter.
-
-Built from the corrected tile and the DoG residual. Never uses circled JPEGs
-under ``labels/crops/`` — the red marker would leak into any patch model.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,7 +15,7 @@ def extract_centered(
     y_local: float,
     size: int = PATCH_SIZE,
 ) -> np.ndarray:
-    """Square crop centred on ``(x_local, y_local)``, reflect-padded at edges."""
+    
     array = np.asarray(image)
     if array.ndim != 2:
         raise ValueError(f"Expected a 2-D tile, got shape {array.shape}")
@@ -51,7 +45,7 @@ def extract_centered(
 
 
 def stack_channels(raw: np.ndarray, residual: np.ndarray) -> np.ndarray:
-    """``(2, H, W)`` float32 pair. Independent 1–99 percentile stretch."""
+    
     return np.stack([_stretch(raw), _stretch(residual)], axis=0).astype(np.float32)
 
 
@@ -62,7 +56,7 @@ def extract_unmarked_channels(
     y_local: float,
     size: int = PATCH_SIZE,
 ) -> np.ndarray:
-    """Two-channel unmarked crop from in-memory tile maps."""
+    
     raw = extract_centered(corrected, x_local, y_local, size=size)
     res = extract_centered(residual, x_local, y_local, size=size)
     return stack_channels(raw, res)
@@ -72,7 +66,7 @@ def tile_row_col(
     tile_name: str,
     pattern: str = DEFAULT_FILENAME_PATTERN,
 ) -> tuple[float, float]:
-    """Grid indices from the filename, or (0, 0) when parsing fails."""
+    
     try:
         meta = parse_tile_filename(Path(str(tile_name)).name, pattern)
     except (ValueError, TypeError):

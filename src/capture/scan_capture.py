@@ -64,7 +64,6 @@ def refocus_due(
     *,
     enabled: bool = True,
 ) -> bool:
-    """True after the 5th, 10th, and later stage steps when focus during the scan is on."""
     if not enabled:
         return False
     steps_taken = int(steps_taken)
@@ -78,14 +77,12 @@ def needs_another_focus(
     starting: float = 0.0,
     ratio: float = FOCUS_MIN_RATIO,
 ) -> bool:
-    """Run autofocus again when the search is not above 80% of its start."""
     if stopped:
         return False
     return float(score) <= float(ratio) * float(starting)
 
 
 def score_saved_frame(path: Path) -> float:
-    """Sharpness of a frame already written by the scan."""
     import cv2
 
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
@@ -104,7 +101,6 @@ def sharpness_stop(
     files: list[dict],
     autofocus: dict | None = None,
 ) -> dict:
-    """One stop: the sharpness of each saved frame, and autofocus when it ran there."""
     scores = [float(item["sharpness"]) for item in files]
     record = {
         "row": int(row),
@@ -121,7 +117,6 @@ def sharpness_stop(
 
 
 def autofocus_log(searches: list[dict], *, after_step: int | None = None) -> dict:
-    """Net Z change from the height where this scan autofocus began, and each attempt."""
     net = sum(float(search["z_change_mm"]) for search in searches)
     first = searches[0]
     last = searches[-1]
@@ -143,7 +138,6 @@ def autofocus_log(searches: list[dict], *, after_step: int | None = None) -> dic
 
 
 def write_sharpness_log(folder: Path, stops: list[dict]) -> None:
-    """Rewrite ``sharpness.json`` so a stopped scan still keeps the stops already taken."""
     path = Path(folder) / "sharpness.json"
     path.write_text(json.dumps({"stops": stops}, indent=2) + "\n")
 
@@ -177,7 +171,6 @@ def scan_capture_status() -> dict:
 
 
 def stop_scan_capture() -> None:
-    """Finish the stop in progress, then go back to (1, 1)."""
     with _JOB_LOCK:
         stop = _JOB.get("stop")
         if stop is not None:
@@ -202,7 +195,6 @@ def start_scan_capture(
     focus_during_scan: bool = True,
     stage: dict | None = None,
 ) -> None:
-    """Start the combined scan on a background thread."""
     if mode not in ("Uniform", "NSEW"):
         raise ValueError("mode must be Uniform or NSEW")
     ring_open = ser is not None and getattr(ser, "is_open", False)
@@ -281,11 +273,6 @@ def _return_to_first_stop(
     feed: float,
     stop: threading.Event,
 ) -> None:
-    """Move from the stop just visited back to (1, 1).
-
-    The click that ended the scan is cleared first, so that stop still goes
-    home. A second click during this trip aborts it.
-    """
     moves = return_from_stop_moves(row, col, step_mm)
     if not moves:
         return
@@ -410,7 +397,6 @@ def _scan_thread(
 
 
 def _score_triggered_frame(camera, converter, timeout_ms: int, settle_s: float) -> float:
-    """Wait out the Z step, then score one new software-triggered frame."""
     import cv2
     from src.capture.camera_automation import pylon_module
 
@@ -438,7 +424,6 @@ def _focus_here(
     feed: float,
     after_step: int,
 ) -> dict | None:
-    """Hill-climb Z, and start again while sharpness is not above 80% of the opening score."""
 
     def measure() -> float:
         return _score_triggered_frame(camera, converter, timeout_ms, DEFAULT_SETTLE_S)

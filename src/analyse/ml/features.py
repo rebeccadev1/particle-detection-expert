@@ -1,9 +1,3 @@
-"""Tabular features for the particle vs not-particle classifier.
-
-Features come from the residual at detection time, never from the circled
-JPEG crops in ``labels/crops/`` (the red marker would leak into the model).
-"""
-
 from __future__ import annotations
 
 from typing import Sequence
@@ -25,7 +19,7 @@ def candidate_feature_vector(
     candidate: ParticleCandidate,
     pixel_size_nm: float,
 ) -> np.ndarray:
-    """One row in ``FEATURE_COLUMNS`` order. ``candidate.size`` is pixels."""
+    
     return np.array(
         [
             size_um_from_px(candidate.size, pixel_size_nm),

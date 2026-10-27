@@ -1,5 +1,3 @@
-"""NSEW standard-values overlay used by the sidebar NSEW toggle."""
-
 from __future__ import annotations
 
 from pathlib import Path

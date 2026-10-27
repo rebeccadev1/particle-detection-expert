@@ -1,5 +1,3 @@
-"""Tests for per-tile particle detection on structured synthetic surfaces."""
-
 from __future__ import annotations
 
 import numpy as np
@@ -52,7 +50,7 @@ def test_footprint_edge_encloses_the_disk() -> None:
 
 
 def test_equivalent_diameter_uses_photo_not_floor() -> None:
-    """A bright disk on a non-zero photo floor still measures ~disk width."""
+    
     from src.analyse.detection.detector import blob_equivalent_diameter
 
     image = np.full((81, 81), 0.4, dtype=np.float32)
@@ -66,11 +64,7 @@ def test_equivalent_diameter_uses_photo_not_floor() -> None:
 
 
 def test_size_gate_uses_original_photo() -> None:
-    """Peaks are found on the preprocessed tile. The diameter is the photograph.
-
-    A narrow core on a wide skirt is large after contrast stretch and small on
-    the starting image. Under the minimum, that peak is not a hit.
-    """
+    
     yy, xx = np.mgrid[0:160, 0:160]
     r2 = (yy - 80) ** 2 + (xx - 80) ** 2
     image = (1.0 + 30.0 * np.exp(-r2 / (2.0 * 10.0**2)) + 200.0 * np.exp(-r2 / (2.0 * 2.2**2))).astype(
@@ -267,7 +261,7 @@ def test_cluster_keeps_large_flake_among_small_neighbors() -> None:
 
 
 def test_cluster_keeps_modestly_larger_flake() -> None:
-    """~20 µm flake in a 13 µm lattice is ~1.3× median, not 1.6×."""
+    
     from src.analyse.detection.detector import ParticleCandidate, reject_clustered_candidates
 
     beads = [
@@ -322,7 +316,7 @@ def test_axis_chain_keeps_large_outlier_in_a_row() -> None:
 
 
 def test_axis_chain_ignores_sparse_same_row() -> None:
-    """Two distant flakes in the same 10 px band are not a box frame."""
+    
     from src.analyse.detection.detector import ParticleCandidate, reject_axis_aligned_chains
 
     sparse = [
@@ -360,7 +354,7 @@ def test_coarse_edge_distance_is_to_thin_ridge() -> None:
 
 
 def _large_debris_config(**detection: object) -> dict:
-    """Production-like 15–100 µm window (pixel_size_nm = 1 → sizes in px)."""
+    
     params = {
         "method": "tophat",
         "tophat_radius": 50,
@@ -421,7 +415,7 @@ def test_interior_blob_on_pad_is_kept() -> None:
 
 
 def test_image_frame_is_not_a_particle() -> None:
-    """A pad that runs off the top of the tile must not fire at y = 0."""
+    
     image = make_pad_tile(shape=(160, 240), pad=(0, 60, 100, 180))
     config = detector_test_config(
         detection={
@@ -447,7 +441,7 @@ def test_image_frame_is_not_a_particle() -> None:
 
 
 def test_pad_corner_is_not_a_particle() -> None:
-    """A bright pad corner looks like a blob after top-hat; drop it."""
+    
     pad = (40, 40, 180, 200)
     image = make_pad_tile(pad=pad)
     corners = [
@@ -485,7 +479,7 @@ def test_pad_corner_is_not_a_particle() -> None:
 
 
 def test_bright_blob_near_region_edge_is_kept() -> None:
-    """A compact blob *outside* the exclude band is kept; the step itself is not."""
+    
     particle = (64.0, 48.0, 2.2)
     image = make_two_region_tile(step_x=96, particle=particle)
     config = detector_test_config(
@@ -521,7 +515,7 @@ def test_radial_means_peak_is_highest_in_inner_ring() -> None:
 
 
 def _island_test_config(**detection: object) -> dict:
-    """pixel_size_nm = 1 so nm thresholds are pixels; island logic is on."""
+    
     params = {
         "method": "tophat",
         "tophat_radius": 50,
@@ -545,7 +539,7 @@ def _island_test_config(**detection: object) -> dict:
 
 
 def test_large_flake_on_region_edge_is_kept() -> None:
-    """≥40 px compact island on a single step survives edge softening."""
+    
     center = (110.0, 140.0)
     image = make_flake_on_step(center=center, axes=(28.0, 26.0), step_x=140)
     cfg = _island_test_config()
@@ -557,7 +551,7 @@ def test_large_flake_on_region_edge_is_kept() -> None:
 
 
 def test_compact_flake_on_single_edge_is_kept() -> None:
-    """20–40 px island on one edge is kept; not an L-junction."""
+    
     center = (110.0, 140.0)
     image = make_flake_on_step(center=center, axes=(18.0, 16.0), step_x=140)
     cfg = _island_test_config()
@@ -568,7 +562,7 @@ def test_compact_flake_on_single_edge_is_kept() -> None:
 
 
 def test_pad_corner_stays_dropped_with_island_protect() -> None:
-    """L-junction residual islands must not be protected."""
+    
     pad = (40, 40, 180, 200)
     image = make_pad_tile(pad=pad)
     corners = [

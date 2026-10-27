@@ -1,5 +1,3 @@
-"""Explain why labeled flakes are missing from the current detector run."""
-
 from __future__ import annotations
 
 import sys

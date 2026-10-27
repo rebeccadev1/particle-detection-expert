@@ -1,5 +1,3 @@
-"""Shadow measurement on a synthetic bright-field particle."""
-
 from __future__ import annotations
 
 import numpy as np
@@ -54,7 +52,7 @@ def test_shadow_on_light_side_is_ignored() -> None:
 
 
 def _dark_hair_scene() -> np.ndarray:
-    """Horizontal dark fiber with a shadow below (light from north)."""
+    
     rng = np.random.default_rng(1)
     image = 0.55 + rng.normal(0.0, 0.008, (200, 200))
     image[95:105, 20:180] = 0.22

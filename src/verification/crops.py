@@ -1,5 +1,3 @@
-"""Crop a source tile around one detection and draw a single unlabeled (orange) circle."""
-
 from __future__ import annotations
 
 import re
@@ -47,7 +45,7 @@ WINDOW_SCALE = 1.8
 
 @dataclass(frozen=True)
 class ParticleCrop:
-    """One labeled-review image: tile crop, local coords, and source path."""
+    
 
     rgb: np.ndarray
     x_local: float
@@ -59,7 +57,7 @@ class ParticleCrop:
 
 
 class TileImageCache:
-    """Keep the last decoded TIFF so neighbouring hits on the same tile are cheap."""
+    
 
     def __init__(self) -> None:
         self.path: Path | None = None
@@ -80,7 +78,7 @@ def global_nm_to_local_px(
     placement: TilePlacement,
     pixel_size_nm: float,
 ) -> tuple[float, float]:
-    """Map global nanometres back to tile-local pixels."""
+    
     scale = float(pixel_size_nm) if pixel_size_nm > 0 else 1.0
     x_local = float(x_global) / scale - float(placement.x0)
     y_local = float(y_global) / scale - float(placement.y0)
@@ -93,7 +91,7 @@ def local_px_to_global_nm(
     placement: TilePlacement,
     pixel_size_nm: float,
 ) -> tuple[float, float]:
-    """Map tile-local pixels to global nanometres."""
+    
     scale = float(pixel_size_nm) if pixel_size_nm > 0 else 1.0
     x_global = (float(x_local) + float(placement.x0)) * scale
     y_global = (float(y_local) + float(placement.y0)) * scale
@@ -109,11 +107,7 @@ def crop_window(
     min_half: int = MIN_HALF_PX,
     scale: float = WINDOW_SCALE,
 ) -> tuple[int, int, int, int]:
-    """Return ``(y0, x0, y1, x1)`` clamped to the tile.
-
-    A coordinate outside the tile stays a local window at the nearest edge.
-    It does not expand to the full tile width or height.
-    """
+    
     half = max(int(min_half), int(round(float(scale) * float(diameter_px))))
     cx = _clamp_index(int(round(float(x_local))), int(width))
     cy = _clamp_index(int(round(float(y_local))), int(height))
@@ -129,7 +123,7 @@ def _clamp_index(index: int, limit: int) -> int:
 
 
 def _local_span(center: int, half: int, limit: int) -> tuple[int, int]:
-    """Window of about ``2 * half`` pixels, shifted inside ``limit``."""
+    
     if limit <= 0:
         return 0, 0
     start = max(0, int(center) - int(half))
@@ -146,7 +140,7 @@ def _local_span(center: int, half: int, limit: int) -> tuple[int, int]:
 
 
 def grayscale_as_rgb(image: np.ndarray) -> np.ndarray:
-    """RGB copy of grayscale pixels. No per-window contrast stretch."""
+    
     array = np.asarray(image)
     if array.size == 0:
         return np.zeros((0, 0, 3), dtype=np.uint8)
@@ -179,7 +173,7 @@ def draw_particle_circle(
     crop_y0: int = 0,
     color: tuple[int, int, int] = CIRCLE_COLOR,
 ) -> np.ndarray:
-    """Draw a marker on the mosaic overlay, in crop coordinates."""
+    
     x_d = int(round(float(x_local) - crop_x0))
     y_d = int(round(float(y_local) - crop_y0))
     return draw_marker(
@@ -195,11 +189,7 @@ def config_for_hit_placement(
     config: dict[str, Any],
     rows: pd.DataFrame | list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Copy ``config`` with the tile overlap that puts hits on their source tiles.
-
-    A detection table measured at 10% overlap is mis-placed when the sidebar
-    overlap is 0, and the orange circle is then drawn off the crop.
-    """
+    
     records = _placement_records(rows)
     if not records:
         return config
@@ -243,7 +233,7 @@ def _tile_geometry(
     records: list[dict[str, Any]],
     config: dict[str, Any],
 ) -> dict[str, tuple[float, float, float, float]]:
-    """Tile name → ``(row, col, height, width)`` for grid-named files."""
+    
     pattern = str(cfg_get(config, "filename_pattern", DEFAULT_FILENAME_PATTERN))
     input_dir = cfg_get(config, "input_dir", None)
     folders: dict[str, tuple[int, int]] = {}
@@ -305,11 +295,7 @@ def find_tile_path(
     input_dir: str | Path | None = None,
     mosaic: LazyMosaic | None = None,
 ) -> Path:
-    """Locate ``tile_name``: mosaic placement, then ``input_dir``.
-
-    Submap shots are stored as ``v7/wafer_shot_0_quad0_….png`` so the same
-    filename in ``v8`` is a different picture.
-    """
+    
     raw = str(tile_name).replace("\\", "/")
     name = Path(raw).name
     relative = Path(raw)
@@ -333,7 +319,7 @@ def find_tile_path(
 
 
 def _existing_tile(path: Path) -> Path | None:
-    """Return ``path`` if it exists, or the same stem with another image suffix."""
+    
     if path.is_file():
         return path
     seen = {path.suffix.lower()}
@@ -352,7 +338,7 @@ def placement_for_tile(
     mosaic: LazyMosaic | None = None,
     origin_cache: dict[str, tuple[int, int]] | None = None,
 ) -> TilePlacement:
-    """Placement of ``tile_path`` from the mosaic, or reconstructed from the grid."""
+    
     name = tile_path.name
     if mosaic is not None:
         for placement in mosaic.placements:
@@ -392,7 +378,7 @@ _GROUNDUP_SERIES = re.compile(r"Groundup v(\d+)", re.IGNORECASE)
 
 
 def direction_images_for_combined(tile_path: str | Path) -> dict[str, Path]:
-    """N/S/E/W files for a particles-only, staged, or ``(row,col)`` combi tile."""
+    
     path = Path(tile_path)
     sides = positional_cell_sides(path)
     if len(sides) >= 2:
@@ -419,11 +405,7 @@ def direction_images_for_combined(tile_path: str | Path) -> dict[str, Path]:
 
 
 def _direction_set_folders(tile_path: Path, set_name: str) -> list[Path]:
-    """Set folders for this staged image, including ``v3 (10^5)`` exposure names.
-
-    A folder named ``Groundup v5 …`` stays on Groundup v5. Older staged files
-    with no series in the name still resolve to Groundup v4.
-    """
+    
     match = _GROUNDUP_SERIES.search(tile_path.parent.name)
     series_names = [f"Groundup v{match.group(1)}"] if match else ["Groundup v4"]
     folders: list[Path] = []
@@ -459,11 +441,7 @@ def _set_name_for_combined(tile_path: Path) -> str | None:
 
 
 def _spot_contrast(image: np.ndarray, x: float, y: float, diameter_px: float) -> float:
-    """Particle mean minus the local background mean.
-
-    The background is the ring just outside the particle disk. A bright tile
-    with a faint speck scores below a darker tile where the speck stands out.
-    """
+    
     gray = image if image.ndim == 2 else image.mean(axis=2)
     radius = max(2.0, float(diameter_px) / 2.0)
     outer = radius + max(4.0, 0.5 * radius)
@@ -485,7 +463,7 @@ def _spot_contrast(image: np.ndarray, x: float, y: float, diameter_px: float) ->
 
 
 def review_surface_name(source_tile: str) -> str:
-    """``Combi`` or ``Uniform`` for a Groundup review image. Empty for a quad."""
+    
     text = str(source_tile)
     if is_combi_tile(text) and submap_id(text):
         return "Combi"
@@ -495,7 +473,7 @@ def review_surface_name(source_tile: str) -> str:
 
 
 def _is_groundup_review_hit(source_tile: str) -> bool:
-    """Quad, uniform, or combi inside a ``vN`` folder."""
+    
     text = str(source_tile)
     if not submap_id(text):
         return False
@@ -503,7 +481,7 @@ def _is_groundup_review_hit(source_tile: str) -> bool:
 
 
 def list_combi_uniform_images(folder: str | Path) -> dict[str, Path]:
-    """Combi and uniform files beside the quads. Partial sets are allowed."""
+    
     directory = Path(folder)
     found: dict[str, Path] = {}
     if not directory.is_dir():
@@ -524,11 +502,7 @@ def brightest_combi_or_uniform_row(
     merge_radius_nm: float,
     size_match_fraction: float,
 ) -> dict[str, Any] | None:
-    """Combi or uniform detection of this hit with the highest prominence.
-
-    Prominence is the detection confidence. Quads and letter N/S/E/W tiles
-    are left out, even when their confidence is higher.
-    """
+    
     if not _is_groundup_review_hit(str(record.get("source_tile") or "")):
         return None
     frames: list[pd.DataFrame] = []
@@ -586,12 +560,7 @@ def combi_or_uniform_crop(
     cache: TileImageCache | None = None,
     origin_cache: dict[str, tuple[int, int]] | None = None,
 ) -> tuple[ParticleCrop, float] | None:
-    """Crop this hit on the combi or the uniform image with the higher prominence.
-
-    A nearby detection on those images wins by confidence. A quad hit with no
-    such detection is drawn on whichever of the two images the speck stands
-    out on. Letter N/S/E/W folders are left alone.
-    """
+    
     record = dict(row) if not isinstance(row, dict) else dict(row)
     tile_name = str(record.get("source_tile", "") or "")
     if not _is_groundup_review_hit(tile_name):
@@ -695,7 +664,7 @@ def crop_particle(
     origin_cache: dict[str, tuple[int, int]] | None = None,
     tile_path: Path | None = None,
 ) -> ParticleCrop:
-    """Load ``source_tile``, crop around the blob, and draw one red circle."""
+    
     record = dict(row) if not isinstance(row, dict) else dict(row)
     tile_name = str(record["source_tile"])
     input_dir = cfg_get(config, "input_dir", None)
@@ -740,7 +709,7 @@ def crop_particle(
 
 
 def list_folder_direction_images(folder: str | Path) -> dict[str, Path]:
-    """N/S/E/W image files in ``folder`` (partial sets are allowed)."""
+    
     directory = Path(folder)
     found: dict[str, Path] = {}
     if not directory.is_dir():
@@ -758,7 +727,7 @@ def list_folder_direction_images(folder: str | Path) -> dict[str, Path]:
 
 
 def _combi_file_in_folder(folder: Path) -> Path | None:
-    """``combi_2of4`` written beside N, S, E, and W. Other combi names are a fallback."""
+    
     if not folder.is_dir():
         return None
     found = [
@@ -775,12 +744,7 @@ def _combi_file_in_folder(folder: Path) -> Path | None:
 
 
 def nsew_combi_path(tile_path: str | Path) -> Path | None:
-    """Combi file for an NSEW hit. Groundup quads and the uniform shot stay out.
-
-    A letter image, or ``(row,col)_N``, points at the combi beside it. A hit
-    already stored on the combi, a staged ``vN_2of4``, or particles-only stays
-    on that combined file.
-    """
+    
     path = Path(tile_path)
     if _is_groundup_review_hit(str(path)):
         return None
@@ -812,7 +776,7 @@ def nsew_combi_crop(
     cache: TileImageCache | None = None,
     origin_cache: dict[str, tuple[int, int]] | None = None,
 ) -> ParticleCrop | None:
-    """Crop the NSEW combi. The N, S, E, and W pictures are not shown."""
+    
     record = dict(row) if not isinstance(row, dict) else dict(row)
     tile_name = str(record.get("source_tile", "") or "")
     if not tile_name or _is_groundup_review_hit(tile_name):

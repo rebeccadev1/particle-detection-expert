@@ -1,5 +1,3 @@
-"""Tests for N/S/E/W folder discovery and combined output size."""
-
 from __future__ import annotations
 
 from pathlib import Path

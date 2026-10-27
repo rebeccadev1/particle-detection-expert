@@ -1,5 +1,3 @@
-"""Geometry and Snell's law for the plexiglass ring-light redirector."""
-
 from __future__ import annotations
 
 import math

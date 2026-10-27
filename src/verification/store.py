@@ -1,5 +1,3 @@
-"""On-disk label table and crop JPEGs."""
-
 from __future__ import annotations
 
 import re
@@ -31,7 +29,7 @@ SPLIT_FILES = {
 }
 
 def default_labels_path() -> Path:
-    """Canonical label table. Falls back to ``labels.csv`` before the first split."""
+    
     root = PACKAGE_ROOT / "labels"
     current = root / ALL_LABELS_NAME
     legacy = root / LEGACY_LABELS_NAME
@@ -58,7 +56,7 @@ COLUMNS = (
 
 
 class LabelStore:
-    """CSV + JPEG collections under ``root`` (default ``labels/``)."""
+    
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
@@ -124,14 +122,14 @@ class LabelStore:
         label: str,
         crop: np.ndarray,
     ) -> Path:
-        """Write the crop JPEG and append/replace the CSV row immediately."""
+        
         return self.apply_labels([(record, label, crop)])[0]
 
     def apply_labels(
         self,
         items: list[tuple[Mapping[str, Any], str, np.ndarray]],
     ) -> list[Path]:
-        """Write many crops and replace their CSV rows in one save."""
+        
         if not items:
             return []
         prepared: dict[str, tuple[Mapping[str, Any], str, np.ndarray]] = {}
@@ -174,7 +172,7 @@ class LabelStore:
         return dests
 
     def update_sizes(self, sizes_nm: Mapping[str, float]) -> int:
-        """Write photo diameters onto existing rows. Leaves the label and crop."""
+        
         if not sizes_nm:
             return 0
         df = self.load()
@@ -194,7 +192,7 @@ class LabelStore:
         return updated
 
     def unlabel(self, key: str) -> dict[str, Any] | None:
-        """Remove a labeled record and its crop. Returns the dropped row if any."""
+        
         df = self.load()
         if df.empty:
             return None
@@ -212,7 +210,7 @@ class LabelStore:
         return {str(k): v for k, v in dropped.items()}
 
     def undo_last(self) -> dict[str, Any] | None:
-        """Remove the most recently labeled row and return it to the queue."""
+        
         df = self.load()
         if df.empty:
             return None
@@ -222,7 +220,7 @@ class LabelStore:
         return self.unlabel(key)
 
     def _migrate_legacy(self) -> None:
-        """Copy ``labels.csv`` to ``all_labels.csv`` and the split files once."""
+        
         legacy = self.root / LEGACY_LABELS_NAME
         if self.csv_path.exists() or not legacy.is_file():
             return
@@ -233,12 +231,7 @@ class LabelStore:
         self._write(df.loc[:, list(COLUMNS)])
 
     def _write(self, df: pd.DataFrame) -> None:
-        """Write every row to all_labels and to that row's uniform, NSEW, or glovebox file.
-
-        A photo with no database (the 3-of-6 angle set) stays in all_labels only.
-        An NSEW label that shares the uniform shot's key is also written to the
-        uniform file. all_labels still holds that hit once.
-        """
+        
         self.root.mkdir(parents=True, exist_ok=True)
         table = _empty_table() if df.empty else df.loc[:, list(COLUMNS)]
         table.to_csv(self.csv_path, index=False)
@@ -293,11 +286,7 @@ def _label_row(
 
 
 def label_database(source_tile: object) -> str | None:
-    """``uniform``, ``nsew``, or ``glovebox`` from the photo file name.
-
-    ``None`` stays in all_labels only. That is the 3-of-6 angle set, which is
-    not uniform light and not an NSEW combi.
-    """
+    
     name = Path(str(source_tile or "")).name
     if _GLOVEBOX_TILE.match(name):
         return "glovebox"
@@ -310,11 +299,7 @@ def label_database(source_tile: object) -> str | None:
 
 
 def _in_database(df: pd.DataFrame, database: str) -> pd.Series:
-    """Rows that belong in one split file.
-
-    NSEW photos stay in NSEW. When their key is the shared quad/uniform
-    identity, the same row is also listed under uniform.
-    """
+    
     primary = df["source_tile"].map(label_database)
     mask = primary == database
     if database == "uniform" and "key" in df.columns:
@@ -324,7 +309,7 @@ def _in_database(df: pd.DataFrame, database: str) -> pd.Series:
 
 
 def rows_for_campaign(df: pd.DataFrame, campaign: str) -> pd.DataFrame:
-    """Keep rows that belong on one database tab."""
+    
     if campaign not in CAMPAIGNS:
         raise ValueError(f"Unknown campaign {campaign!r}")
     if df is None or df.empty or "source_tile" not in df.columns:
@@ -333,7 +318,7 @@ def rows_for_campaign(df: pd.DataFrame, campaign: str) -> pd.DataFrame:
 
 
 def newest_first(df: pd.DataFrame) -> pd.DataFrame:
-    """Rows with the latest ``labeled_at`` first."""
+    
     if df is None or df.empty:
         return df
     if "labeled_at" not in df.columns:
@@ -346,12 +331,7 @@ def newest_first(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def crop_source_folder(source_csv: object, source_tile: object = "") -> str:
-    """Run folder for a labeled crop.
-
-    Detector rows use the output folder that wrote ``particles.csv``.
-    Pointer marks (``tile_inspect``) use the image set in ``source_tile``,
-    such as ``v3/N.png`` → ``v3``.
-    """
+    
     text = str(source_csv or "").replace("\\", "/").strip()
     if text.lower() in ("", "nan", "none", "tile_inspect"):
         tile = str(source_tile or "").replace("\\", "/")

@@ -1,5 +1,3 @@
-"""The background pipeline job can be asked to stop between tiles."""
-
 from __future__ import annotations
 
 import threading

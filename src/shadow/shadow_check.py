@@ -1,16 +1,3 @@
-"""Measure the shadow of already-marked particles, picked by ID.
-
-Example::
-
-    python src/shadow/shadow_check.py --key R3_1_17_5X_42943680_1240320 --light-from N
-
-``--csv`` is ``labels/all_labels.csv`` (ID = ``particle_id``) or a run's
-``particles.csv`` (ID = ``id``). Label IDs repeat across runs: narrow them
-with ``--run`` (substring of ``source_csv``) or pass ``--key``.
-
-Writes ``Outputs/Shadow check/shadow_check.csv`` and one PNG per particle.
-Same measurement as the **Shadow** tab (``src/shadow/shadow.py``).
-"""
 
 from __future__ import annotations
 

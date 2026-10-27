@@ -1,5 +1,3 @@
-"""Load and apply the optional post-filter on detector proposals."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -84,7 +82,7 @@ def _positive_proba(model: Any, matrix: np.ndarray) -> np.ndarray:
 
 
 def calibrate_scores(artifact: dict[str, Any], scores: np.ndarray) -> np.ndarray:
-    """Map raw ExtraTrees P to isotonic probabilities when a calibrator exists."""
+    
     raw = np.asarray(scores, dtype=np.float64)
     calibrator = artifact.get("calibrator")
     if calibrator is None or raw.size == 0:
@@ -127,7 +125,7 @@ def predict_patch_scores(
     image: np.ndarray,
     source_tile: str = "",
 ) -> np.ndarray:
-    """HOG ExtraTrees scores on unmarked crops of the corrected tile."""
+    
     if not candidates:
         return np.empty((0,), dtype=np.float64)
     patch_size = int(artifact.get("patch_size") or PATCH_SIZE)
@@ -148,12 +146,7 @@ def apply_ml_filter(
     image: np.ndarray | None = None,
     source_tile: str = "",
 ) -> list[ParticleCandidate]:
-    """Drop proposals whose P(particle) is below the configured threshold.
-
-    No-op when ``ml.enabled`` is false. Raises if enabled but the model file
-    is missing so a silent classical run cannot be mistaken for a filter.
-    Patch artifacts need the corrected tile ``image``.
-    """
+    
     if not bool(cfg_get(config, "ml.enabled", False)):
         return candidates
     path = resolve_model_path(cfg_get(config, "ml.model_path", DEFAULT_MODEL_PATH))

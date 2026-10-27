@@ -1,5 +1,3 @@
-"""Combine N/S/E/W directional images in a folder."""
-
 from __future__ import annotations
 
 import argparse

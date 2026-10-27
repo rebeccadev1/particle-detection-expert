@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import math
@@ -16,7 +15,7 @@ _PROFILE_STEPS = 64
 
 @dataclass(frozen=True)
 class RedirectorShape:
-    """Right-hand cross-section, revolved into a ring. z = 0 at the inner top edge."""
+    
 
     outer_diameter_mm: float
     inner_diameter_mm: float
@@ -41,7 +40,7 @@ class RedirectorShape:
         return self.inner_diameter_mm / 2.0
 
     def slope_deg(self, radius_mm: float) -> float:
-        """Angle of the top surface above horizontal at this radius."""
+        
         span = self.outer_radius_mm - self.inner_radius_mm
         if span <= 0:
             return self.inner_angle_deg
@@ -55,7 +54,7 @@ def spherical_end_angles(
     inner_diameter_mm: float,
     drop_mm: float,
 ) -> tuple[float, float]:
-    """Surface angles of the circular arc fixed by the height drop alone."""
+    
     outer_r = float(outer_diameter_mm) / 2.0
     inner_r = float(inner_diameter_mm) / 2.0
     drop = float(drop_mm)
@@ -77,7 +76,7 @@ def spherical_end_angles(
 
 
 def _profile_slope(shape: RedirectorShape, u: float) -> float:
-    """dz/dr of the top surface. ``u`` runs from 0 at the inner rim to 1 at the outer."""
+    
     span = shape.outer_radius_mm - shape.inner_radius_mm
     slope_in = math.tan(math.radians(shape.inner_angle_deg))
     slope_out = math.tan(math.radians(shape.outer_angle_deg))
@@ -195,7 +194,7 @@ def _unit(vx: float, vy: float) -> tuple[float, float]:
 
 
 def reflect(direction: tuple[float, float], normal: tuple[float, float]) -> tuple[float, float]:
-    """Reflect ``direction``. ``normal`` points toward the incoming side."""
+    
     dot = direction[0] * normal[0] + direction[1] * normal[1]
     return _unit(
         direction[0] - 2.0 * dot * normal[0],
@@ -209,10 +208,7 @@ def refract(
     n_from: float,
     n_to: float,
 ) -> tuple[float, float] | None:
-    """Snell refraction. ``normal`` points toward the incoming side.
-
-    Returns ``None`` on total internal reflection.
-    """
+    
     nx, ny = normal
     cos_i = -(direction[0] * nx + direction[1] * ny)
     if cos_i < 0:
@@ -231,12 +227,12 @@ def refract(
 
 
 def angle_down_deg(direction: tuple[float, float]) -> float:
-    """Degrees below horizontal. Positive is downward, in (-90, 90)."""
+    
     return math.degrees(math.atan2(-direction[1], abs(direction[0])))
 
 
 def _incidence_cosine(direction: tuple[float, float], normal: tuple[float, float]) -> float:
-    """Cosine of the angle between ``direction`` and the surface normal."""
+    
     cos_i = -(direction[0] * normal[0] + direction[1] * normal[1])
     if cos_i < 0.0:
         cos_i = -cos_i
@@ -244,12 +240,7 @@ def _incidence_cosine(direction: tuple[float, float], normal: tuple[float, float
 
 
 def fresnel_unpolarized(n_from: float, n_to: float, cos_i: float) -> tuple[float, float]:
-    """Power reflectance and transmittance for unpolarized light.
-
-    ``cos_i`` is the cosine of the incidence angle. The s and p Fresnel
-    coefficients are averaged, which is the split for an unpolarized source.
-    Total internal reflection returns ``(1, 0)``.
-    """
+    
     if n_from <= 0.0 or n_to <= 0.0:
         raise ValueError("Refractive index must be positive.")
     cos_i = min(1.0, max(0.0, float(cos_i)))
@@ -279,7 +270,7 @@ def _interface_factor(
     *,
     transmitted: bool,
 ) -> float:
-    """Share of intensity that stays with the branch this ray follows."""
+    
     reflectance, transmission = fresnel_unpolarized(
         n_from, n_to, _incidence_cosine(direction, normal)
     )
@@ -391,12 +382,7 @@ def trace_ray(
     refractive_index: float = PMMA_N,
     reflect_far_side: bool = False,
 ) -> RayTrace:
-    """Trace one horizontal ray at ``height_mm`` traveling toward the centre.
-
-    With ``reflect_far_side``, the outer face reflects every ray that hits it from
-    inside the plexiglass. Rays still pass through the inner opening and through
-    the opposite side of the ring before that bounce.
-    """
+    
     if refractive_index <= 1.0:
         raise ValueError("Refractive index must be greater than 1.")
     origin = _start_point(shape, height_mm)
@@ -500,14 +486,14 @@ def _start_point(shape: RedirectorShape, height_mm: float) -> tuple[float, float
 
 
 def enters_through_thickness(shape: RedirectorShape, height_mm: float) -> bool:
-    """True when a horizontal ray at this height hits the outer thickness face first."""
+    
     origin = _start_point(shape, height_mm)
     hits = _candidates(shape, origin, (-1.0, 0.0))
     return bool(hits) and hits[0][1] == "outer edge right"
 
 
 def thickness_span(shape: RedirectorShape) -> tuple[float, float]:
-    """Height range on the outer face that horizontal rays actually reach."""
+    
     top, bottom = _rim(shape, "outer", 1.0)
     low, high = sorted((top[1], bottom[1]))
     if high - low < 1e-9:
@@ -520,11 +506,7 @@ def thickness_span(shape: RedirectorShape) -> tuple[float, float]:
 
 
 def ray_heights(shape: RedirectorShape, count: int) -> list[float]:
-    """Heights across the outer thickness face, inset off the corners.
-
-    Rays that would strike the underside before the rim are left out. Light
-    enters only through the thickness.
-    """
+    
     if count < 1:
         raise ValueError("Ray count must be at least 1.")
     low, high = thickness_span(shape)
@@ -550,17 +532,17 @@ def trace_fan(
 
 
 def sample_z_mm(shape: RedirectorShape) -> float:
-    """Height of the inner bottom edge."""
+    
     return shape.bottom[0][1]
 
 
 def fov_plane_z_mm(shape: RedirectorShape) -> float:
-    """Plane of the field of view, ``fov_depth_mm`` below the inner bottom edge."""
+    
     return sample_z_mm(shape) - shape.fov_depth_mm
 
 
 def fov_crossing_mm(shape: RedirectorShape, trace: RayTrace) -> float | None:
-    """Signed radial position where the exited ray crosses the field-of-view plane."""
+    
     if trace.status != "exited" or len(trace.points) < 2:
         return None
     exit_point = trace.points[-2]
@@ -582,7 +564,7 @@ def fov_crossing_mm(shape: RedirectorShape, trace: RayTrace) -> float | None:
 
 
 def hits_fov(shape: RedirectorShape, trace: RayTrace) -> bool:
-    """True when the ray crosses the centred 6.86 mm square at the field plane."""
+    
     crossing = fov_crossing_mm(shape, trace)
     return crossing is not None and abs(crossing) <= FOV_SIZE_MM / 2.0
 
@@ -593,12 +575,7 @@ def fov_beam(
     reflect_far_side: bool = False,
     samples: int = 401,
 ) -> tuple[float, float | None, float | None]:
-    """Fraction of the thickness beam in the field of view, and that beam's angles.
-
-    Angles are degrees below horizontal, and only rays that cross the 6.86 mm
-    square are included. The beam is uniform across the face, so neither number
-    depends on how many rays are drawn.
-    """
+    
     low, high = thickness_span(shape)
     if high - low < 1e-9:
         trace = trace_ray(shape, 0.5 * (low + high), refractive_index, reflect_far_side)
@@ -628,7 +605,7 @@ def section_image(
     traces: list[RayTrace],
     selected: int | None = None,
 ) -> tuple[object, list[list[tuple[float, float]]]]:
-    """Draw the cross-section. The frame ignores how far the rays travel."""
+    
     from PIL import Image, ImageDraw
 
     top_right = _surface_points(shape, "top", 1.0)
@@ -748,7 +725,7 @@ def _apply_redirector(
 
 
 def render_redirector_tab() -> None:
-    """Streamlit tab: ring-light exit angles for this plexiglass ring."""
+    
     import pandas as pd
     import streamlit as st
     from streamlit_image_coordinates import streamlit_image_coordinates

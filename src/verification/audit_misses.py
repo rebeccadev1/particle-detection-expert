@@ -1,12 +1,4 @@
-"""Explain why labeled flakes are missing from the current detector run.
 
-``python tests/audit_misses.py`` maps particle / tile_inspect labels
-onto the input tiles, keeps those with no nearby detection, and runs
-``trace_locations`` so each miss shows the first dropping gate.
-
-Use ``--write-inspect`` to copy unmatched labels into ``tile_inspect`` rows
-with the current folder's global coordinates (Tiles-tab marks).
-"""
 
 from __future__ import annotations
 
@@ -43,7 +35,6 @@ POSITIVE_LABEL = "particle"
 
 
 def format_trace_caption(row: Mapping[str, Any]) -> str:
-    """One-line Tiles-tab caption for a ``trace_locations`` row."""
     reason = str(row.get("reason", "unknown"))
     residual = float(row.get("residual", float("nan")))
     edge = float(row.get("edge_distance_px", float("nan")))
@@ -56,7 +47,6 @@ def trace_click(
     y_local: float,
     x_local: float,
 ) -> dict[str, Any]:
-    """Preprocess ``image`` and return the gate that drops ``(y, x)``."""
     corrected = apply_corrections(image, config)
     rows = trace_locations(
         corrected,
@@ -80,7 +70,6 @@ def particle_label_rows(
     tile_names: Iterable[str] | None = None,
     inspect_only: bool = False,
 ) -> pd.DataFrame:
-    """Labeled true particles, optionally restricted to tiles / tile_inspect."""
     if labels.empty:
         return labels.copy()
     keep = labels.loc[labels["label"].astype(str) == POSITIVE_LABEL].copy()
@@ -104,7 +93,6 @@ def localize_label_row(
     width: int,
     height: int,
 ) -> tuple[float, float]:
-    """Map a label's global nm onto the tile using folder / wafer placements."""
     pixel_size = float(cfg_get(dict(config), "pixel_size_nm", 960.0))
     return local_xy_on_tile(
         float(row["x_global"]),
@@ -124,7 +112,6 @@ def unmatched_particle_marks(
     inspect_only: bool = False,
     keys: Sequence[str] | None = None,
 ) -> pd.DataFrame:
-    """Particle labels on the input tiles with no detection within ``near_px``."""
     tiles = input_tile_names(config)
     marked = particle_label_rows(labels, tiles, inspect_only=inspect_only)
     if keys is not None:
@@ -186,7 +173,6 @@ def audit_marks(
     config: dict[str, Any],
     cache: TileImageCache | None = None,
 ) -> pd.DataFrame:
-    """Run ``trace_locations`` on each unmatched mark (one TIFF decode per tile)."""
     if marks.empty:
         return marks.copy()
     cache = cache or TileImageCache()
@@ -216,7 +202,6 @@ def promote_unmatched_to_inspect(
     store: LabelStore,
     cache: TileImageCache | None = None,
 ) -> list[dict[str, Any]]:
-    """Write Tiles-tab ``tile_inspect`` rows for unmatched flakes."""
     if marks.empty:
         return []
     cache = cache or TileImageCache()

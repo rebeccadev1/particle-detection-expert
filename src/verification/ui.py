@@ -1,5 +1,3 @@
-"""Streamlit tabs for labeling crops and browsing collections."""
-
 from __future__ import annotations
 
 import math
@@ -209,12 +207,7 @@ def _collapse_review_hits(
     labels: pd.DataFrame | None,
     config: dict[str, Any],
 ) -> pd.DataFrame | None:
-    """One id for a particle found on both pictures, still wearing its label.
-
-    Snapping first puts the saved label key on whichever picture was marked.
-    The collapse keeps that key, then a second snap catches a label that sits
-    a little off the kept coordinate.
-    """
+    
     if detections is None:
         return None
     radius = _nsew_merge_radius_nm(config)
@@ -230,7 +223,7 @@ def _collapse_review_hits(
 
 
 def _share_exposure_hits(frame: pd.DataFrame | None, config: dict[str, Any]) -> pd.DataFrame | None:
-    """Nearby v3 and v4 hits in an exposure pair share one label key."""
+    
     if frame is None:
         return None
     return share_exposure_keys(
@@ -242,11 +235,7 @@ def _share_exposure_hits(frame: pd.DataFrame | None, config: dict[str, Any]) -> 
 
 
 def _queue_skip_keys(store, scene_labels: pd.DataFrame, config: dict[str, Any]):
-    """Keys already labeled in this scene.
-
-    A resolved scene with no saved labels yet skips nothing. That keeps a new
-    ``v3_2of4.png`` run separate from older ``v3_2of4.bmp`` marks.
-    """
+    
     if scene_labels is not None and not scene_labels.empty and "key" in scene_labels.columns:
         return scene_labels["key"]
     scene = related_scene_tile_names(cfg_get(config, "input_dir", None))
@@ -261,11 +250,7 @@ def render_label_tab(
     table: pd.DataFrame | None,
     mosaic: LazyMosaic | None,
 ) -> None:
-    """One unlabeled crop at a time, labeled with arrow-key buttons.
-
-    The queue is the last pipeline run, and only after Load last run.
-    ``table`` is the live Analyse result and is not queued here.
-    """
+    
     del table
     store = labels_store(project_root)
     cache = st.session_state.setdefault("label_tile_cache", TileImageCache())
@@ -521,7 +506,7 @@ def _queue_with_marked_particles(
     size_frac: float,
     labels: pd.DataFrame | None,
 ) -> pd.DataFrame:
-    """Unlabeled hits, plus ones already pressed in the All hits grid."""
+    
     skip = expand_labeled_keys(str(key) for key in labeled_keys)
     for key in marked_particles:
         skip.difference_update(nsew_key_aliases(key))
@@ -535,7 +520,7 @@ def _queue_with_marked_particles(
 
 
 def _all_hits_mark_as() -> str:
-    """Which label the pressed hits get. The other hits get the opposite."""
+    
     mark_as = str(st.session_state.get("all_hits_mark_polarity") or "not_particle")
     if mark_as not in ("not_particle", "particle"):
         return "not_particle"
@@ -547,7 +532,7 @@ def _all_hits_rest_label(mark_as: str) -> str:
 
 
 def _widget_key_class(widget_key: str) -> str:
-    """Match Streamlit's st-key class, which turns other characters into hyphens."""
+    
     safe = "".join(ch if ch.isalnum() or ch in "_-" else "-" for ch in widget_key)
     return f"st-key-{safe}"
 
@@ -586,7 +571,7 @@ def _all_hits_crop(
     cache: TileImageCache,
     origin_cache: dict,
 ) -> tuple[ParticleCrop, float]:
-    """Combi or uniform for a Groundup hit. The combi for an NSEW hit."""
+    
     review = combi_or_uniform_crop(
         record,
         crop_config,
@@ -619,7 +604,7 @@ def _all_hits_crop(
 
 
 def _detection_frame(detections: pd.DataFrame | list[pd.DataFrame] | None) -> pd.DataFrame:
-    """One table, whether the caller has the run frame or the label queues."""
+    
     if isinstance(detections, pd.DataFrame):
         return detections
     frames = [
@@ -637,7 +622,7 @@ def _save_marked_mosaic(
     detections: pd.DataFrame | list[pd.DataFrame] | None,
     labels: pd.DataFrame | None,
 ) -> tuple[str, str]:
-    """Write the review mosaic for this run. The note is ``ok``, ``missing``, or ``error``."""
+    
     try:
         with st.spinner("Writing the mosaic with markings…"):
             path = write_marked_mosaic(
@@ -654,7 +639,7 @@ def _save_marked_mosaic(
 
 
 def _show_marked_mosaic_note(note: tuple[str, str] | None = None) -> None:
-    """Tell the user where All done put the marked mosaic."""
+    
     if note is None:
         stored = st.session_state.pop("marked_mosaic_note", None)
         note = stored if isinstance(stored, tuple) else None
@@ -681,7 +666,7 @@ def _render_all_hits(
     cache: TileImageCache,
     origin_cache: dict,
 ) -> None:
-    """Show unlabeled hits in a grid. A press marks one; All done saves both sides."""
+    
     mark_as = st.radio(
         "Marked hits",
         ["not_particle", "particle"],
@@ -833,12 +818,12 @@ def _render_all_hits(
 
 
 def _on_all_hits_polarity_changed() -> None:
-    """A new save direction starts from a clear grid."""
+    
     st.session_state["all_hits_marked_keys"] = []
 
 
 def _on_toggle_all_hit(key: str) -> None:
-    """Remember or forget a mark until All done. Runs before the card redraws."""
+    
     marked_now = [str(item) for item in (st.session_state.get("all_hits_marked_keys") or [])]
     if key in marked_now:
         marked_now = [item for item in marked_now if item != key]
@@ -849,7 +834,7 @@ def _on_toggle_all_hit(key: str) -> None:
 
 @st.fragment
 def _render_hit_card(key: str) -> None:
-    """One grid cell. A click redraws this card only, and does not save yet."""
+    
     ctx = st.session_state.get("_all_hits_ctx") or {}
     record = (ctx.get("records") or {}).get(key)
     if record is None:
@@ -900,7 +885,7 @@ def _render_hit_card(key: str) -> None:
 
 
 def _square_rgb(rgb: np.ndarray) -> np.ndarray:
-    """Pad a crop to a square so every All hits cell is the same shape."""
+    
     image = np.asarray(rgb)
     if image.ndim == 2:
         image = np.repeat(image[:, :, None], 3, axis=2)
@@ -926,7 +911,7 @@ def _queued_label_items(
     cache: TileImageCache,
     origin_cache: dict,
 ) -> tuple[list[tuple[dict[str, Any], str, Any]], list[str]]:
-    """Crops for one label. Nothing is written until the caller saves them together."""
+    
     items: list[tuple[dict[str, Any], str, Any]] = []
     failed: list[str] = []
     if queue is None or queue.empty:
@@ -952,7 +937,7 @@ def _queued_label_items(
 
 
 def request_last_run() -> None:
-    """Load the saved pipeline run. Pages stay empty until this runs."""
+    
     restore_label_queue()
     st.session_state["load_last_run"] = True
     st.session_state["load_labeled_tiles"] = False
@@ -962,28 +947,24 @@ def request_last_run() -> None:
 
 
 def _on_load_last_pipeline() -> None:
-    """Switch Label to Detection's last output folder (runs before widgets)."""
+    
     request_last_run()
 
 
 def _on_empty_label_queue(csv_path: str) -> None:
-    """Drop the remaining unlabeled hits for this results file."""
+    
     clear_label_queue(csv_path)
     st.session_state.pop("label_front_key", None)
     st.session_state["all_hits_marked_keys"] = []
 
 
 def _drop_inspect_mark() -> None:
-    """Remove the unsaved dark-green mark.
-
-    The click time stays. The image widget keeps returning that press, and
-    forgetting the time would draw it again on the crop that just opened.
-    """
+    
     st.session_state.pop("inspect_pending", None)
 
 
 def _advance_inspect_tile(delta: int) -> None:
-    """Move to the previous/next tile. Must run in a button callback (before widgets)."""
+    
     names = list(st.session_state.get("_inspect_tile_names") or [])
     if not names:
         return
@@ -1014,7 +995,7 @@ def _last_pipeline_view(
     config: dict[str, Any],
     table: pd.DataFrame | None,
 ) -> tuple[dict[str, Any], Path | None, pd.DataFrame | None]:
-    """Folder, CSV, and detections from last_pipeline.json (not the sidebar)."""
+    
     last_csv, run_config = load_last_pipeline(dict(config))
     detections: pd.DataFrame | None = None
     if last_csv is not None and last_csv.is_file():
@@ -1026,14 +1007,14 @@ def _last_pipeline_view(
 
 
 def _pointer_tile_name(path: Path) -> str:
-    """Select-box name. A combi in ``vN`` keeps that folder so it is not a quad."""
+    
     if is_combi_tile(path.name) and submap_id(str(path)):
         return lighting_tile_id(str(path))
     return lighting_source_name(path)
 
 
 def _review_tile_label(name: str) -> str:
-    """Short tile name. Combi and uniform stay distinct from the quads."""
+    
     set_id = submap_id(name)
     prefix = f"{set_id} " if set_id else ""
     if is_combi_tile(name):
@@ -1065,7 +1046,7 @@ def render_tile_inspect_tab(
     table: pd.DataFrame | None,
     mosaic: LazyMosaic | None,
 ) -> None:
-    """Walk the last-pipeline tile folder, with detection and label circles."""
+    
     st.header("Inspect tiles")
     if not st.session_state.get("load_last_run"):
         pipeline_csv, _pipeline_config = load_last_pipeline(config)
@@ -1560,7 +1541,7 @@ def _tile_crop_std(
     folder_tiles: list[str],
     beta: float,
 ) -> dict[str, float | None]:
-    """Spread of P, R, and Fβ across the 3×3 crops of one tile."""
+    
     return std_of_crop_cells(
         _tile_crop_cells(
             tile_name,
@@ -1588,7 +1569,7 @@ def _tile_crop_cells(
     folder_tiles: list[str],
     beta: float,
 ) -> list[dict[str, Any]]:
-    """P, R, and Fβ for each cell of one tile's 3×3 zoom grid."""
+    
     try:
         tile_path = find_tile_path(
             tile_name, input_dir=cfg_get(run_config, "input_dir", None), mosaic=mosaic
@@ -1618,7 +1599,7 @@ def _tile_crop_cells(
 
 
 def _sum_tile_counts(table: pd.DataFrame | None) -> dict[str, float]:
-    """Add each tile's own totals. The same speck on two tiles counts twice."""
+    
     keys = (
         "n_detected",
         "n_true",
@@ -1772,7 +1753,7 @@ def _metric_row(
     f_beta_std: float | None = None,
     show_std: bool = False,
 ) -> dict[str, str]:
-    """One score row. Std columns are filled only for a whole-tile row."""
+    
     both = precision is not None and recall is not None
     f_beta = f_beta_score(float(precision), float(recall), beta) if both else None
     blank = "—"
@@ -1798,7 +1779,7 @@ def _render_score_table(
     folder_name: str = "",
     std_tiles: pd.DataFrame | None = None,
 ) -> None:
-    """One row per subfolder, with every tile in that folder scored together."""
+    
     grouped = subfolder_score_rows(
         per_tile_table,
         folder_name=folder_name,
@@ -1841,7 +1822,7 @@ def render_labeled_tiles_tab(
     mosaic: LazyMosaic | None,
     table: pd.DataFrame | None = None,
 ) -> None:
-    """Latest pipeline run: tiles with detector circles and zoomed crops."""
+    
     st.header("Labeled tiles")
     run_config = dict(config)
     session_config = st.session_state.get("config")
@@ -2184,7 +2165,7 @@ def render_labeled_tiles_tab(
 def _review_side_images(
     tile_path: Path, cache: TileImageCache
 ) -> list[tuple[str, np.ndarray]]:
-    """N, S, E, W frames beside a combined ``(row,col)`` picture."""
+    
     sides = direction_images_for_combined(tile_path)
     if len(sides) < 2:
         return []
@@ -2211,7 +2192,7 @@ def render_collection_tab(
     config: dict[str, Any] | None = None,
     show_area_line: bool = False,
 ) -> None:
-    """Thumbnail gallery for one label bucket, optionally one campaign."""
+    
     store = labels_store(project_root)
     df = store.by_label(label)
     if campaign is not None:
@@ -2286,7 +2267,7 @@ def _collection_image(
     config: dict[str, Any] | None,
     show_area_line: bool = False,
 ) -> np.ndarray | None:
-    """Particle crops gain a thin #0F238C outline of the measured area."""
+    
     if not show_area_line or label != "particle" or config is None:
         return None
     try:

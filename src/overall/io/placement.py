@@ -1,5 +1,3 @@
-"""Grid placement of tiles from filenames, without decoding pixels."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,7 +11,7 @@ from src.overall.io.tile_loader import Tile, peek_tile_hw, try_parse_tile_filena
 
 @dataclass(frozen=True)
 class TilePlacement:
-    """Where a tile sits in the mosaic, in pixel coordinates."""
+    
 
     path: Path
     name: str
@@ -29,13 +27,7 @@ def tile_origin_px(
     row_origin: int = 0,
     col_origin: int = 0,
 ) -> tuple[float, float]:
-    """Return the top-left mosaic origin ``(x, y)`` of ``tile`` in pixels.
-
-    If the filename provided ``x`` / ``y``, those values are used as the origin.
-    Otherwise a regular grid is built from ``row`` / ``col`` and overlap.
-    ``row_origin`` / ``col_origin`` are the smallest indices in the run, so the
-    mosaic does not reserve empty space for unused column 0 (or row 0).
-    """
+    
     if tile.x_origin is not None and tile.y_origin is not None:
         return float(tile.x_origin), float(tile.y_origin)
     if tile.row is None or tile.col is None:
@@ -56,7 +48,7 @@ def placement_from_tile(
     row_origin: int = 0,
     col_origin: int = 0,
 ) -> TilePlacement:
-    """Build a placement record from a loaded tile (uses shape, not a second read)."""
+    
     x0, y0 = tile_origin_px(tile, overlap_fraction, row_origin, col_origin)
     return TilePlacement(
         path=tile.path,
@@ -69,7 +61,7 @@ def placement_from_tile(
 
 
 def grid_index_origin(paths: list[Path], pattern: str) -> tuple[int, int]:
-    """Smallest row/col among tiles so the mosaic starts at the first true column."""
+    
     rows: list[int] = []
     cols: list[int] = []
     for path in paths:
@@ -92,11 +84,7 @@ def placement_from_path(
     extra_meta: Mapping[str, object] | None = None,
     origin_fallback: bool = False,
 ) -> TilePlacement | None:
-    """Grid placement from filename + image size.
-
-    ``extra_meta`` fills missing row/col (used for ``(row,col)_N`` names).
-    ``origin_fallback`` places unparseable files at (0, 0) instead of returning None.
-    """
+    
     meta = dict(try_parse_tile_filename(path.name, pattern) or {})
     if extra_meta:
         for key, value in extra_meta.items():

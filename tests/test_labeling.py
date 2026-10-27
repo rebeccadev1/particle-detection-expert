@@ -1,5 +1,3 @@
-"""Tests for labeling crops, queue filtering, and the on-disk store."""
-
 from __future__ import annotations
 
 import json
@@ -52,7 +50,7 @@ def _config(folder: Path, pixel_size_nm: float = 1.0) -> dict:
 
 
 def _red_mask(rgb: np.ndarray) -> np.ndarray:
-    """Pixels close to the unlabeled orange marker (legacy name)."""
+    
     return (
         (rgb[:, :, 0] > 200)
         & (rgb[:, :, 1] > 80)

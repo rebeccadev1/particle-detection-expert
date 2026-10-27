@@ -1,5 +1,3 @@
-"""Capture folders are named by grid location, inside a daily run folder."""
-
 from datetime import date
 
 import json

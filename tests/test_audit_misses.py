@@ -1,5 +1,3 @@
-"""Tests for miss autopsy: unmatched labels, trace captions, tile_inspect writes."""
-
 from __future__ import annotations
 
 from pathlib import Path

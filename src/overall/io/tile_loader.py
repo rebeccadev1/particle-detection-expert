@@ -1,5 +1,3 @@
-"""Generator-based tile loading and filename metadata parsing."""
-
 from __future__ import annotations
 
 import os
@@ -34,7 +32,7 @@ _CV_HEADER_KINDS = {"jpeg", "bmp", "png"}
 
 @dataclass(frozen=True)
 class Tile:
-    """One wafer tile and the metadata parsed from its filename."""
+    
 
     path: Path
     name: str
@@ -50,11 +48,7 @@ class Tile:
 
 
 def resolve_input_dir(folder: str | Path) -> Path:
-    """Resolve a tile folder under ``ASML SE/Inputs`` (or an absolute path).
-
-    Bare names such as ``R3 04-08`` are looked up in ``Inputs``. Relative
-    ``../…`` paths still work if they already point at that folder.
-    """
+    
     text = str(folder).strip().strip('"').strip("'")
     if not text:
         raise FileNotFoundError("Input folder is empty.")
@@ -92,13 +86,7 @@ def resolve_input_dir(folder: str | Path) -> Path:
 
 
 def input_folder_labels(root: str | Path | None = None) -> list[str]:
-    """Folder names under Inputs that the main pipeline can run.
-
-    Paths are relative to ``root`` (default ``ASML SE/Inputs``), so a typed
-    suggestion such as ``Groundup/Groundup v7 (06-10)`` resolves as a tile folder.
-    A folder counts when it holds images, or when its ``vN`` submaps hold the
-    quad and all-lights shots.
-    """
+    
     base = DEFAULT_INPUT_DIR if root is None else Path(root)
     if not base.is_dir():
         return []
@@ -133,7 +121,7 @@ def _is_pipeline_input(folder: Path) -> bool:
 
 
 def list_tile_paths(folder: str | Path) -> list[Path]:
-    """Return sorted image paths in ``folder`` without reading pixel data."""
+    
     directory = resolve_input_dir(folder)
     if not directory.is_dir():
         raise FileNotFoundError(f"Input folder does not exist: {directory}")
@@ -152,7 +140,7 @@ def list_tile_paths(folder: str | Path) -> list[Path]:
 
 
 def input_tile_names(config: Mapping[str, Any]) -> set[str]:
-    """Basenames of images in ``config.input_dir``, with submap ids when needed."""
+    
     folder = cfg_get(dict(config), "input_dir", "")
     if not folder:
         return set()
@@ -170,12 +158,7 @@ def input_tile_names(config: Mapping[str, Any]) -> set[str]:
 
 
 def _append_submap_lighting(directory: Path, unique: list[Path], seen: set[Path]) -> None:
-    """Add quad, uniform, and combi images under each Groundup ``vN`` folder.
-
-    Each ``vN`` folder is one field: four quadrant shots, one uniform ``all``
-    shot, and ``combi_2of4`` when that file is beside them. Other nested
-    folders stay put.
-    """
+    
     try:
         children = list(directory.iterdir())
     except OSError:
@@ -199,11 +182,7 @@ def _append_submap_lighting(directory: Path, unique: list[Path], seen: set[Path]
 
 
 def try_parse_tile_filename(filename: str, pattern: str) -> dict[str, float | int] | None:
-    """Like :func:`parse_tile_filename`, or ``None`` when the name does not match.
-
-    A blank pattern matches every name and then fails the row/col check. Treat
-    that as no match so quad and all-lights shots still run.
-    """
+    
     if not str(pattern or "").strip():
         return None
     if re.search(pattern, filename, flags=re.IGNORECASE) is None:
@@ -215,12 +194,7 @@ def try_parse_tile_filename(filename: str, pattern: str) -> dict[str, float | in
 
 
 def parse_tile_filename(filename: str, pattern: str) -> dict[str, float | int]:
-    """Extract named groups from ``filename`` using ``pattern``.
-
-    Recognised groups: ``run``, ``row``, ``col`` (ints), ``mag`` (float),
-    and ``x`` / ``y`` (floats, stage origin). Matching is case-insensitive
-    so ``R3_5_32_5X.tif`` and ``r3_5_32_5x.bmp`` both work.
-    """
+    
     match = re.search(pattern, filename, flags=re.IGNORECASE)
     if match is None:
         raise ValueError(
@@ -249,11 +223,7 @@ def parse_tile_filename(filename: str, pattern: str) -> dict[str, float | int]:
 
 
 def _to_grayscale(image: np.ndarray) -> np.ndarray:
-    """Reduce extra channels/pages to a 2D array immediately after load.
-
-    Microscope tiles are RGB uint8 (H, W, 3). Detection is intensity-based, so
-    extra channels are dropped here before any preprocessing.
-    """
+    
     array = np.asarray(image)
     if array.ndim == 2:
         return array
@@ -292,7 +262,7 @@ def _header_kind(header: bytes) -> str:
 
 
 def _use_cv_decode(path: str | Path) -> bool:
-    """True for BMP/PNG/JPEG, including those bytes stored with a ``.tif`` name."""
+    
     suffix = Path(path).suffix.lower()
     if suffix in CV_DECODE_EXTS:
         return True
@@ -300,7 +270,7 @@ def _use_cv_decode(path: str | Path) -> bool:
 
 
 def _load_cv_image(path: str | Path) -> np.ndarray:
-    """Decode BMP/PNG/JPEG with OpenCV. Handles ``.tiff`` files that are actually JPEG."""
+    
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is None:
         raise ValueError(f"Could not decode image tile {path}")
@@ -319,7 +289,7 @@ def _shape_hw(image: np.ndarray, path: str | Path) -> tuple[int, int]:
 
 
 def peek_tile_hw(path: str | Path) -> tuple[int, int]:
-    """Return ``(height, width)`` from the file header when possible."""
+    
     raw = Path(path)
     try:
         stat = raw.stat()
@@ -426,12 +396,7 @@ def _jpeg_hw(path: Path, head: bytes, handle) -> tuple[int, int] | None:
 
 
 def load_tile_image(path: str | Path) -> np.ndarray:
-    """Read a tile as 2D grayscale. Callers should not retain many at once.
-
-    true microscope tiles are TIFF. BMP/PNG/JPEG are decoded with OpenCV.
-    Exports that keep a ``.tif`` name but contain JPEG or BMP bytes are decoded
-    with OpenCV instead of failing in ``tifffile``.
-    """
+    
     if _use_cv_decode(path):
         return _to_grayscale(_load_cv_image(path))
     try:
@@ -459,12 +424,7 @@ def matching_tile_paths(
     magnification: object = None,
     include_unmatched: bool = False,
 ) -> list[Path]:
-    """Image paths whose names match ``filename_pattern`` and optional run/mag filters.
-
-    Tiles with ``col`` 0 are omitted (they sit outside this wafer grid).
-    When ``include_unmatched`` is true, files that do not match the pattern are
-    still returned (detection can run; they cannot be placed on the mosaic).
-    """
+    
     run_filter = _optional_int(run)
     mag_filter = _optional_float(magnification)
     matched: list[Path] = []

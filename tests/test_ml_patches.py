@@ -1,5 +1,3 @@
-"""Unmarked crop extraction and patch FP filter."""
-
 from __future__ import annotations
 
 from pathlib import Path

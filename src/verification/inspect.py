@@ -1,5 +1,3 @@
-"""Full-tile inspection overlays for the recall-audit tab."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -85,7 +83,7 @@ _PARTICLES_ONLY_DIR_NAMES = {"particles only", "particles only output"}
 
 @dataclass(frozen=True)
 class OverlayView:
-    """Displayed RGB plus the transform back to tile-local pixels."""
+    
 
     rgb: np.ndarray
     crop_x0: int
@@ -100,7 +98,7 @@ def cell_bounds(
     col: int,
     grid: int = GRID_N,
 ) -> tuple[int, int, int, int]:
-    """Return ``(y0, x0, y1, x1)`` for one cell of a ``grid`` × ``grid`` split."""
+    
     if grid < 1:
         raise ValueError("grid must be >= 1")
     y0 = int(height * row / grid)
@@ -117,7 +115,7 @@ def cell_of_local_px(
     width: int,
     grid: int = GRID_N,
 ) -> tuple[int, int]:
-    """Cell whose ``cell_bounds`` contain ``(x, y)``. Points outside clamp to the edge."""
+    
     if grid < 1:
         raise ValueError("grid must be >= 1")
     if width < 1 or height < 1:
@@ -133,7 +131,7 @@ def cell_of_local_px(
 
 
 def f_beta_score(precision: float, recall: float, beta: float) -> float:
-    """Weighted harmonic mean of precision and recall. β = 1 is F1."""
+    
     weight = float(beta) ** 2
     denominator = weight * float(precision) + float(recall)
     if denominator <= 0.0:
@@ -142,27 +140,20 @@ def f_beta_score(precision: float, recall: float, beta: float) -> float:
 
 
 def _sample_std(values: list[float]) -> float | None:
-    """Sample standard deviation. Undefined when fewer than two scores exist."""
+    
     if len(values) < 2:
         return None
     return float(np.std(np.asarray(values, dtype=float), ddof=1))
 
 
 def rows_detected_on_file(table: pd.DataFrame, tile_name: str) -> pd.Series:
-    """True when this file is the row's source tile.
-
-    A merged detection keeps one ``source_tile``. It is counted and drawn on
-    that file only, not on every quad named in ``nsew_dirs``.
-    """
+    
     sources = table["source_tile"].astype(str)
     return sources.map(lighting_tile_id) == lighting_tile_id(tile_name)
 
 
 def detections_on_this_file(table: pd.DataFrame | None, tile_name: str) -> pd.DataFrame:
-    """Hits whose source file is ``tile_name``.
-
-    A hit stored on quad 1 stays off quad 0, the uniform shot, and the combi.
-    """
+    
     if table is None or table.empty or "source_tile" not in table.columns:
         return pd.DataFrame()
     return table.loc[rows_detected_on_file(table, tile_name)].reset_index(drop=True)
@@ -179,13 +170,7 @@ def _nsew_dir_set(text: object) -> set[str]:
 def detections_on_review_picture(
     table: pd.DataFrame | None, tile_name: str
 ) -> pd.DataFrame:
-    """Hits to draw on a Pointer combi or uniform image.
-
-    A uniform detection is marked on the uniform image even when the saved
-    source file is a quad that was merged with it. A combi detection stays on
-    the combi. A particle found on both is therefore marked on both pictures.
-    Quads keep only the hits stored on that file.
-    """
+    
     own = detections_on_this_file(table, tile_name)
     if table is None or table.empty or "source_tile" not in table.columns:
         return own
@@ -214,11 +199,7 @@ def detections_on_review_picture(
 def detections_on_review_tiles(
     table: pd.DataFrame | None, tile_names: Sequence[str]
 ) -> pd.DataFrame:
-    """Hits drawn on any of ``tile_names``, one row per particle.
-
-    A particle found on both the combi and the uniform shot is included once
-    when both pictures are listed, and on each picture when listed alone.
-    """
+    
     if table is None or table.empty or not tile_names:
         return pd.DataFrame()
     frames = []
@@ -235,7 +216,7 @@ def detections_on_review_tiles(
 
 
 def _particle_label_rows(scoped: pd.DataFrame | None) -> pd.DataFrame:
-    """Particle labels, one row per key."""
+    
     if scoped is None or scoped.empty or "label" not in scoped.columns:
         return pd.DataFrame()
     particles = scoped.loc[scoped["label"].astype(str) == "particle"].copy()
@@ -251,13 +232,7 @@ def pointer_miss_rows(
     folder_tiles: Sequence[str] | None = None,
     run_dir: str | None = None,
 ) -> pd.DataFrame:
-    """Particle-pointer marks the detector missed on this tile.
-
-    A click stays on the picture it was marked on. A hit on another tile in
-    the same subfolder does not erase it, and does not draw it there.
-    A ``(row,col)`` click also stays in its scan folder. A mark with no
-    folder does not attach once ``run_dir`` is set.
-    """
+    
     if labels is None or labels.empty or "source_tile" not in labels.columns:
         return pd.DataFrame()
     if "label" not in labels.columns or "source_csv" not in labels.columns:
@@ -330,7 +305,7 @@ _STAGED_2OF4 = re.compile(r"^(v\d+)_2of4$", re.IGNORECASE)
 
 @dataclass(frozen=True)
 class PointerTile:
-    """One N/S/E/W photo to show instead of a particles-only detection image."""
+    
 
     label: str
     path: Path
@@ -339,10 +314,7 @@ class PointerTile:
 
 
 def pointer_direction_tiles(folder: str | Path | None) -> list[PointerTile]:
-    """Directional photos for a staged ``vN_2of4`` detection folder.
-
-    Empty when the folder is a normal tile set. Order is v1 N, S, E, W, then v2.
-    """
+    
     resolved = _resolve_scene_folder(folder) if folder not in (None, "") else None
     if resolved is None or not resolved.is_dir():
         return []
@@ -389,7 +361,7 @@ def pointer_set_hits(
     labels: pd.DataFrame | None,
     set_id: str,
 ) -> pd.DataFrame:
-    """Detections and missed marks for one field, shared by its N/S/E/W photos."""
+    
     hits = pd.DataFrame()
     if detections is not None and not detections.empty and "source_tile" in detections.columns:
         mask = _pointer_set_mask(detections["source_tile"], set_id)
@@ -440,11 +412,7 @@ _SET_DIR = re.compile(r"^v\d+$", re.IGNORECASE)
 
 
 def staged_set_id(source_tile: str) -> str:
-    """Field id for ``v5/N.png`` and ``v5_2of4.png``. Empty for other tiles.
-
-    A Groundup submap folder is also named ``v5``, but its combi and uniform
-    shot are not the letter field ``v5_2of4.png``.
-    """
+    
     text = str(source_tile).replace("\\", "/")
     if is_combi_tile(text) or is_submap_lighting_tile(text):
         return ""
@@ -459,7 +427,7 @@ def staged_set_id(source_tile: str) -> str:
 
 @lru_cache(maxsize=256)
 def _directory_key(folder: str) -> str:
-    """One id for a scan folder, whether it is stored relative or absolute."""
+    
     text = str(folder).replace("\\", "/").strip().strip("/")
     if not text or text == ".":
         return ""
@@ -483,7 +451,7 @@ def _grid_parent(source_tile: str) -> str:
 
 
 def _grid_id(source_tile: str, assume_dir: str | None = None) -> str:
-    """Folder plus filename. A bare filename stays bare unless ``assume_dir`` is set."""
+    
     name = _basename(source_tile)
     parent = _grid_parent(source_tile)
     if not parent and assume_dir:
@@ -494,11 +462,7 @@ def _grid_id(source_tile: str, assume_dir: str | None = None) -> str:
 
 
 def with_grid_folder(record: Mapping[str, Any], run_dir: str | None) -> dict[str, Any]:
-    """Copy a detection so a ``(row,col)`` label keeps this scan folder.
-
-    The results file stores only ``(1,1).png``. Without the folder, the saved
-    mark matches every scan that uses that filename and is then dropped.
-    """
+    
     row = record.to_dict() if hasattr(record, "to_dict") else dict(record)
     tile = str(row.get("source_tile") or "")
     if not run_dir or not is_grid_tile(tile) or _grid_parent(tile):
@@ -515,13 +479,7 @@ def label_on_run_tiles(
     tile_names: set[str] | None,
     run_dir: str | None = None,
 ) -> bool:
-    """True when this label belongs to one of the last-run tiles.
-
-    A grid file matches the folder and the filename. ``(1,1).png`` in another
-    scan does not. A Pointer click stored as ``v5/N.png`` belongs to
-    ``v5_2of4.png``. ``v6/N.png`` does not. A grid mark with no folder does
-    not attach to a run that has one.
-    """
+    
     if tile_names is None:
         return True
     if is_grid_tile(source_tile):
@@ -559,11 +517,7 @@ def label_colors_for_hits(
     labels: pd.DataFrame | None,
     run_dir: str | None = None,
 ) -> dict[str, tuple[int, int, int]]:
-    """Review colour for each detection key on this run.
-
-    A label from another scan folder is left out. Hits with no mark are absent,
-    so the mosaic keeps them orange.
-    """
+    
     tagged = tagged_if_needed(detections) if detections is not None else pd.DataFrame()
     if tagged is None or tagged.empty or "key" not in tagged.columns:
         return {}
@@ -595,13 +549,7 @@ def write_marked_mosaic(
     *,
     mosaic: LazyMosaic | None = None,
 ) -> Path | None:
-    """Write ``mosaic_marked.png`` in this run's output folder.
-
-    The plain mosaic is copied and the review circles are drawn on it.
-    Green, red, and blue are Label marks. Orange is still unlabeled.
-    Dark green is a particle clicked in Inspect. Returns None when this
-    run has no stitched mosaic. ``mosaic_overlay.png`` is left as it was.
-    """
+    
     settings = dict(config)
     output_dir = str(cfg_get(settings, "output_dir", "") or "").strip()
     if not output_dir:
@@ -648,7 +596,7 @@ def _mosaic_review_marks(
     mosaic: LazyMosaic,
     run_dir: str | None,
 ) -> tuple[pd.DataFrame, dict[str, tuple[int, int, int]]]:
-    """Detection rows plus Inspect clicks, with a colour for each key."""
+    
     tagged = tagged_if_needed(detections) if detections is not None else pd.DataFrame()
     if tagged is None:
         tagged = pd.DataFrame()
@@ -687,7 +635,7 @@ def _misses_for_mosaic(
     tile_names: set[str],
     run_dir: str | None,
 ) -> pd.DataFrame:
-    """Inspect clicks on this run that are not already detector hits."""
+    
     if (
         labels is None
         or labels.empty
@@ -720,12 +668,7 @@ def _tiles_for_folder_labels(
     tile_names: Sequence[str] | None,
     folder_tiles: Sequence[str] | None = None,
 ) -> set[str] | None:
-    """Exact tile basenames whose labels count for this folder.
-
-    N/S/E/W and particles-only versions share labels only among files that
-    are actually in ``folder_tiles`` (or ``tile_names``). ``N.bmp`` from
-    another folder is not mixed with ``N.png``.
-    """
+    
     if tile_names is None and folder_tiles is None:
         return None
     wanted = {
@@ -754,22 +697,7 @@ def last_run_class_counts(
     folder_tiles: Sequence[str] | None = None,
     run_dir: str | None = None,
 ) -> dict[str, float]:
-    """Last-run detection totals split by label, plus missed inspect marks.
-
-    * ``n_detected`` — every last-run hit on these tiles
-    * ``n_true`` — detected and labeled particle (green)
-    * ``n_false`` — detected and not labeled as particle (red, orange, blue)
-    * ``n_unlabeled`` — hits with no label (orange); also counted in ``n_false``
-    * ``n_undetected`` — labeled particles on these tiles whose keys are not
-      in the last run (inspect marks and other misses), at least
-      ``min_size_nm`` when that floor is > 0 (Last Run shows this as
-      undetected true ≥ that size, typically 20 µm). A hit on another tile
-      in the same subfolder does not count. A grid label from another folder
-      does not count. ``run_dir`` is that folder.
-    * ``n_true_total`` — ``n_true`` + ``n_undetected``
-    * ``precision`` — ``n_true / n_detected`` (unlabeled hits count as false)
-    * ``recall`` — ``n_true / n_true_total``
-    """
+    
     tagged = tagged_if_needed(detections) if detections is not None else pd.DataFrame()
     if tile_names is not None and not tagged.empty and "source_tile" in tagged.columns:
         tagged = detections_on_review_tiles(tagged, tile_names)
@@ -835,13 +763,7 @@ def last_run_class_counts_by_tile(
     folder_tiles: Sequence[str] | None = None,
     run_dir: str | None = None,
 ) -> pd.DataFrame:
-    """``last_run_class_counts`` for each tile, one row per tile.
-
-    Hits are those drawn on that picture. A shared combi and uniform detection
-    counts on both pictures. Submap shots keep ``v4/filename`` so a quad in v4
-    is not mixed with v5.
-    ``folder_tiles`` is the label scene (e.g. N.png plus particles-only).
-    """
+    
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     label_tiles = list(folder_tiles) if folder_tiles is not None else list(tile_names)
@@ -863,12 +785,7 @@ def last_run_class_counts_by_tile(
 
 
 def std_of_crop_cells(cells: Sequence[Mapping[str, Any]]) -> dict[str, float | None]:
-    """Sample standard deviation of precision, recall, and Fβ across crops.
-
-    A crop with no detections is left out of precision. A crop with no labeled
-    true particles is left out of recall. Fβ uses only crops where both are
-    defined. The result is undefined when fewer than two crops qualify.
-    """
+    
     precisions = [float(cell["precision"]) for cell in cells if cell.get("precision") is not None]
     recalls = [float(cell["recall"]) for cell in cells if cell.get("recall") is not None]
     f_betas = [float(cell["f_beta"]) for cell in cells if cell.get("f_beta") is not None]
@@ -896,12 +813,7 @@ def std_of_tile_scores(
     *,
     beta: float = 1.0,
 ) -> dict[str, float | None]:
-    """Sample standard deviation of precision, recall, and Fβ across tiles.
-
-    Each tile is one observation, including a tile with no detections or no
-    labeled true particles (those scores are 0). The result is undefined when
-    fewer than two tiles are present.
-    """
+    
     precisions: list[float] = []
     recalls: list[float] = []
     f_betas: list[float] = []
@@ -923,7 +835,7 @@ def std_of_tile_scores(
 
 
 def subfolder_of_tile(tile: str) -> str:
-    """``v7`` for a shot inside a ``vN`` folder. Empty when the tile sits in the run folder."""
+    
     return submap_id(tile)
 
 
@@ -934,15 +846,7 @@ def subfolder_score_rows(
     beta: float = 1.0,
     std_tiles: pd.DataFrame | None = None,
 ) -> list[dict[str, Any]]:
-    """One score per subfolder, adding every tile that lives there.
-
-    Tiles in the run folder, such as ``(1,1).png`` and ``(3,3).png``, share
-    one row named for that folder. ``v5/…`` and ``v7/…`` stay on separate rows.
-    Counts are summed. P and R are scored from those totals. The standard
-    deviations are the spread of each tile's own P, R, and Fβ. ``std_tiles``
-    is that sample when it should include every tile in the input folder,
-    including tiles that contributed no counts.
-    """
+    
     if per_tile is None or per_tile.empty or "tile" not in per_tile.columns:
         return []
     plain_name = Path(str(folder_name).replace("\\", "/")).name or "Folder"
@@ -1012,12 +916,7 @@ def crop_metric_cells(
     grid: int = GRID_N,
     run_dir: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Precision, recall, and Fβ for each cell of the ``grid`` × ``grid`` zoom split.
-
-    Cells are row-major, matching ``CELL_NAMES``. ``precision`` is missing when
-    the crop has no detections. ``recall`` is missing when it has no labeled
-    true particles. ``f_beta`` is missing unless both are defined.
-    """
+    
     if height < 1 or width < 1 or not placements or grid < 1:
         return []
     tagged = tagged_if_needed(detections) if detections is not None else pd.DataFrame()
@@ -1108,7 +1007,7 @@ def undetected_size_floor_nm(
     detections: pd.DataFrame | None,
     config: Mapping[str, Any] | None = None,
 ) -> float:
-    """Size gate for Last Run misses: this run's min size, else config."""
+    
     floor = 0.0
     if config is not None:
         floor = float(cfg_get(dict(config), "detection.min_size_nm", 0.0) or 0.0)
@@ -1121,7 +1020,7 @@ def undetected_size_floor_nm(
 
 
 def tile_names_for_hits(hits: pd.DataFrame | None) -> list[str]:
-    """Unique ``source_tile`` basenames, first-seen order."""
+    
     if hits is None or hits.empty or "source_tile" not in hits.columns:
         return []
     names: list[str] = []
@@ -1137,7 +1036,7 @@ def expand_direction_tile_names(
     names: Sequence[str],
     available: Sequence[str] | None,
 ) -> list[str]:
-    """If hits include N/S/E/W or particles-only, list every family file in the folder."""
+    
     ordered = list(names)
     if available is None:
         return ordered
@@ -1166,10 +1065,7 @@ def expand_submap_lighting_names(
     names: Sequence[str],
     available: Sequence[str] | None,
 ) -> list[str]:
-    """If a submap shot is listed, include its quads and uniform ``all`` shot.
-
-    Other submaps stay out, even when the filenames match.
-    """
+    
     ordered = list(names)
     if available is None:
         return ordered
@@ -1219,7 +1115,7 @@ def _resolve_scene_folder(folder: str | Path) -> Path | None:
 
 
 def scene_folders(folder: str | Path) -> list[Path]:
-    """This folder plus sibling N/S/E/W and Particles-only dirs for the same scene."""
+    
     resolved = _resolve_scene_folder(folder)
     if resolved is None:
         return []
@@ -1256,10 +1152,7 @@ def related_scene_tile_names(
     folder: str | Path | None,
     current_names: Sequence[str] | None = None,
 ) -> set[str]:
-    """N/S/E/W and particles-only basenames for this scene, matching this folder's suffix.
-
-    Groundup v3 (``.png``) is not mixed with Groundup v2 (``.bmp``).
-    """
+    
     current = {_basename(name) for name in (current_names or ())}
     if folder in (None, ""):
         return _with_family_suffix_names(current)
@@ -1279,7 +1172,7 @@ def related_scene_tile_names(
 
 
 def _with_family_suffix_names(names: set[str]) -> set[str]:
-    """If this scene is particles-only, also keep N/S/E/W with the same suffix."""
+    
     related = set(names)
     suffixes = {Path(name).suffix.lower() for name in related if Path(name).suffix}
     if not suffixes:
@@ -1313,7 +1206,7 @@ def overlay_view(
     crop: tuple[int, int, int, int] | None = None,
     max_side: int | None = OVERVIEW_MAX_SIDE,
 ) -> OverlayView:
-    """Show ``image`` as stored grayscale, optional crop, downsample, draw circles."""
+    
     gray = np.asarray(image)
     if crop is not None:
         y0, x0, y1, x1 = crop
@@ -1370,10 +1263,7 @@ def _draw_footprint_edge(
     color: tuple[int, int, int] = FOOTPRINT_EDGE_COLOR,
     thickness: int = cv2.FILLED,
 ) -> None:
-    """Draw the footprint. Contours are full-image ``(x, y)`` pixels.
-
-    The default fills the area. A positive ``thickness`` strokes the outline.
-    """
+    
     if rgb.size == 0 or not edge:
         return
     drawn: list[np.ndarray] = []
@@ -1403,7 +1293,7 @@ AREA_LINE_THICKNESS = 2
 
 
 def _saved_marker_mask(rgb: np.ndarray) -> np.ndarray:
-    """Pixels of the saved marker circle, orange or green, allowing JPEG rounding."""
+    
     red = rgb[:, :, 0].astype(np.int16)
     green = rgb[:, :, 1].astype(np.int16)
     blue = rgb[:, :, 2].astype(np.int16)
@@ -1423,12 +1313,7 @@ def outline_particle_area(
     pixel_size_nm: float,
     config: Mapping[str, Any] | None = None,
 ) -> np.ndarray:
-    """Copy of a saved crop with a thin #0F238C line around the measured area.
-
-    The saved marker circle is left in place and is not part of the area. The line
-    follows the same contrast footprint as the equivalent diameter: pixels
-    that stand out by ``size_mass_fraction`` of the peak contrast.
-    """
+    
     image = np.asarray(rgb)
     if image.ndim != 3 or image.shape[2] < 3 or image.size == 0:
         return image
@@ -1488,7 +1373,7 @@ def outline_particle_crop_file(
     pixel_size_nm: float,
     config: Mapping[str, Any] | None = None,
 ) -> np.ndarray | None:
-    """Load a database JPEG and draw the measured-area outline."""
+    
     file_path = Path(path)
     if not file_path.is_file():
         return None
@@ -1512,11 +1397,7 @@ def local_xy_on_tile(
     width: int,
     height: int,
 ) -> tuple[float, float]:
-    """Map globals to tile pixels using the first placement that lands in-frame.
-
-    Detector CSVs use the full R3 mosaic origin. Click-marks from a 6-tile
-    folder use that folder's origin. Trying both keeps circles on the image.
-    """
+    
     if not placements:
         raise ValueError("placements must not be empty")
     fallback = global_nm_to_local_px(
@@ -1532,7 +1413,7 @@ def local_xy_on_tile(
 
 
 def extra_grid_placements(base: TilePlacement, config: Mapping[str, Any]) -> list[TilePlacement]:
-    """Placements for last-run CSVs that used the full R3 grid, not the sidebar folder."""
+    
     pattern = str(cfg_get(dict(config), "filename_pattern", DEFAULT_FILENAME_PATTERN))
     try:
         meta = parse_tile_filename(base.name, pattern)
@@ -1578,7 +1459,7 @@ def candidate_placements(
     mosaic: Any | None = None,
     origin_cache: dict[str, tuple[int, int]] | None = None,
 ) -> list[TilePlacement]:
-    """Current-folder placement, full-wafer grid, then origin (0, 0)."""
+    
     path = Path(tile_path)
     primary = placement_for_tile(
         path, dict(config), mosaic=mosaic, origin_cache=origin_cache
@@ -1605,11 +1486,7 @@ def candidate_placements(
 
 
 def fresh_inspect_click(click: Mapping[str, Any] | None, seen: Any) -> int | None:
-    """Click time when this press has not already been turned into a mark.
-
-    The click widget keeps returning its last press after the picture changes.
-    Opening a crop must not paint that stored press as a new dark-green circle.
-    """
+    
     if not isinstance(click, Mapping):
         return None
     try:
@@ -1630,7 +1507,7 @@ def display_xy_to_local(
     y_display: float,
     view: OverlayView,
 ) -> tuple[float, float]:
-    """Map a click on the displayed overlay back to tile-local pixels."""
+    
     scale = float(view.scale) if float(view.scale) > 0 else 1.0
     x_local = float(view.crop_x0) + float(x_display) / scale
     y_local = float(view.crop_y0) + float(y_display) / scale
@@ -1643,7 +1520,7 @@ def missed_particle_record(
     y_global: float,
     size_nm: float,
 ) -> dict[str, Any]:
-    """CSV row for a click that was not a detector hit."""
+    
     record: dict[str, Any] = {
         "id": "",
         "source_tile": str(tile_name),
@@ -1661,7 +1538,7 @@ def folder_missed_marks(
     labels: pd.DataFrame | None,
     tile_names: Sequence[str],
 ) -> pd.DataFrame:
-    """Latest particle click-marks whose tile is shown in this Pointer folder."""
+    
     if labels is None or labels.empty or not tile_names:
         return pd.DataFrame()
     names = {str(name).replace("\\", "/") for name in tile_names}
@@ -1690,11 +1567,7 @@ def photo_equivalent_diameter_nm(
     pixel_size_nm: float,
     config: Mapping[str, Any],
 ) -> float:
-    """Equivalent circular diameter (nm) of the speck on the photograph.
-
-    The window is the run's max size, so an assumed 15 µm click does not
-    clip a larger flake. The center snaps to the brightest nearby pixel.
-    """
+    
     diameter_nm, _edge = photo_particle_edge(
         image,
         y_local,
@@ -1706,10 +1579,7 @@ def photo_equivalent_diameter_nm(
 
 
 def footprint_grow_mass(config: Mapping[str, Any], grow: float) -> float:
-    """Brightness cut for a Pointer click.
-
-    ``grow`` 1 keeps the automatic cut. 300 reaches the local background.
-    """
+    
     base = float(cfg_get(dict(config), "detection.size_mass_fraction", 0.4) or 0.4)
     span = max(0.0, min(299.0, float(grow) - 1.0))
     return float(max(0.0, base * (1.0 - span / 299.0)))
@@ -1724,12 +1594,7 @@ def photo_particle_edge(
     config: Mapping[str, Any],
     mass_fraction: float | None = None,
 ) -> tuple[float, list[np.ndarray]]:
-    """Photo diameter (nm) and the footprint outline in full-image pixels.
-
-    Diameter is ``2 √(A / π)`` for the yellow area. The center snaps to the
-    brightest nearby pixel, same as size verification. ``mass_fraction``
-    overrides the automatic brightness cut when the click area is grown.
-    """
+    
     gray = np.asarray(image)
     if gray.ndim == 3:
         gray = gray.mean(axis=2)
@@ -1765,11 +1630,7 @@ def verify_missed_photo_sizes(
     *,
     pixel_size_nm: float,
 ) -> list[dict[str, Any]]:
-    """Measure each missed click in this folder on its photo.
-
-    ``photo_nm`` is 0 when the click has no footprint. Those rows keep the
-    stored size. A measured diameter under 20 µm is marked ``removed``.
-    """
+    
     marks = folder_missed_marks(labels, list(paths_by_name))
     if marks.empty:
         return []
@@ -1862,11 +1723,7 @@ def preview_click_crop(
     edge: Sequence[np.ndarray] | None = None,
     zoom: float = 1.0,
 ) -> np.ndarray:
-    """Full-res crop around a hit, padded so the circle is not clipped.
-
-    ``zoom`` above 1 tightens the window onto the speck and magnifies it.
-    Pointer uses that so a few-pixel flake is visible.
-    """
+    
     scale = float(pixel_size_nm) if pixel_size_nm > 0 else 1.0
     diameter_px = float(size_nm) / scale
     radius = max(int(round(diameter_px / 2.0)) + 10, MIN_CIRCLE_RADIUS)
@@ -1937,7 +1794,7 @@ def circles_from_rows(
     y_locals: Sequence[float],
     labels: Mapping[str, str],
 ) -> list[dict[str, Any]]:
-    """Build overlay circle dicts, tagging each row with its label colour."""
+    
     circles: list[dict[str, Any]] = []
     for (x_local, y_local), (_, row) in zip(
         zip(x_locals, y_locals, strict=True), rows.iterrows(), strict=True

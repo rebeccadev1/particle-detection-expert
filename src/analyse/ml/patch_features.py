@@ -1,9 +1,3 @@
-"""HOG / LBP / layout descriptors on unmarked two-channel crops.
-
-These numbers are meant to see letter strokes and pad corners — the residual
-float ExtraTrees never had them. Circled JPEGs are not an input.
-"""
-
 from __future__ import annotations
 
 from typing import Sequence
@@ -170,7 +164,7 @@ def _geometry(raw: np.ndarray, residual: np.ndarray) -> np.ndarray:
 
 
 def patch_descriptor(channels: np.ndarray) -> np.ndarray:
-    """Image-only features for one ``(2, H, W)`` unmarked crop."""
+    
     raw = np.asarray(channels[0], dtype=np.float32)
     residual = np.asarray(channels[1], dtype=np.float32)
     parts = (
@@ -266,7 +260,7 @@ def patches_to_matrix(
     channels: np.ndarray,
     layouts: Sequence[np.ndarray] | np.ndarray | None = None,
 ) -> np.ndarray:
-    """``channels`` is ``(N, 2, H, W)``."""
+    
     n = int(channels.shape[0])
     if n == 0:
         return np.empty((0, len(PATCH_FEATURE_NAMES)), dtype=np.float64)

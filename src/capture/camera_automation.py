@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import argparse
@@ -32,14 +30,14 @@ ARDUINO_VIDS = {0x2341, 0x2A03, 0x1A86}
 
 
 def pylon_module():
-    """Load Basler's pypylon SDK. Callers import through here so the load is in one place."""
+    
     from pypylon import pylon
 
     return pylon
 
 
 def image_filename(row: int, col: int, label: str | None = None) -> str:
-    """Picture name inside a run folder. A side label is N, E, S, or W."""
+    
     stem = f"({int(row)},{int(col)})"
     if label:
         return f"{stem}_{label}.png"
@@ -47,10 +45,7 @@ def image_filename(row: int, col: int, label: str | None = None) -> str:
 
 
 def latest_run_folder(base: Path | None = None) -> Path | None:
-    """Newest captures/vN YYYY-MM-DD directory, or None when none exist.
-
-    Newest is the latest date, then the highest N on that date.
-    """
+    
     root = CAPTURES_DIR if base is None else Path(base)
     if not root.is_dir():
         return None
@@ -66,10 +61,7 @@ def latest_run_folder(base: Path | None = None) -> Path | None:
 
 
 def next_run_folder(base: Path, on: date | None = None) -> Path:
-    """Path of the next captures/vN YYYY-MM-DD directory. Does not create it.
-
-    N restarts at 1 each day.
-    """
+    
     day = (date.today() if on is None else on).isoformat()
     taken: list[int] = []
     if base.is_dir():
@@ -81,7 +73,7 @@ def next_run_folder(base: Path, on: date | None = None) -> Path:
 
 
 def allocate_run_folder(base: Path, on: date | None = None) -> Path:
-    """Create the next captures/vN YYYY-MM-DD directory. N restarts at 1 each day."""
+    
     folder = next_run_folder(base, on=on)
     folder.parent.mkdir(parents=True, exist_ok=True)
     folder.mkdir()
@@ -89,7 +81,7 @@ def allocate_run_folder(base: Path, on: date | None = None) -> Path:
 
 
 def _dedupe_cu_tty(ports):
-    """macOS lists each Uno twice. Keep /dev/cu.*, which does not wait for a carrier."""
+    
     devices = {port.device for port in ports}
     return [
         port
@@ -102,7 +94,7 @@ def _dedupe_cu_tty(ports):
 
 
 def list_serial_ports() -> list[tuple[str, str]]:
-    """(device, label) for every serial port, with the macOS tty/cu duplicate removed."""
+    
     from serial.tools import list_ports
 
     ports = _dedupe_cu_tty(list(list_ports.comports()))
@@ -152,7 +144,7 @@ def _read_line(ser, timeout_s: float) -> str:
 
 
 def request_line(ser, command: str, timeout_s: float = ACK_TIMEOUT_S) -> str:
-    """Send one line and return the reply. A timeout or an ERR line raises."""
+    
     ser.reset_input_buffer()
     ser.write(f"{command}\n".encode())
     ser.flush()
@@ -163,11 +155,7 @@ def request_line(ser, command: str, timeout_s: float = ACK_TIMEOUT_S) -> str:
 
 
 def _port_busy(exc: BaseException) -> bool:
-    """True when another program already holds the serial port.
-
-    macOS reports that as ``multiple access`` or ``returned no data``.
-    Windows reports it as ``Access is denied``.
-    """
+    
     if isinstance(exc, PermissionError):
         return True
     text = str(exc).lower()
@@ -183,12 +171,7 @@ def _port_busy(exc: BaseException) -> bool:
 
 
 def _handshake(ser) -> str:
-    """Return ``READY`` or ``OK OFF``.
-
-    ``READY`` comes from ``setup()`` on the transistor-ring sketch. A CH340
-    that is already running does not reset when the port opens, so that line
-    is gone. ``x`` is answered from ``loop()`` and switches every quadrant off.
-    """
+    
     deadline = time.monotonic() + BOOT_LISTEN_S
     while time.monotonic() < deadline:
         remaining = deadline - time.monotonic()
@@ -215,7 +198,7 @@ def _handshake(ser) -> str:
 
 
 def open_arduino(port: str):
-    """Open the transistor-ring sketch. It always has four sides, N E S W."""
+    
     import serial
 
     try:
@@ -242,14 +225,14 @@ def lights_off(ser) -> None:
 
 
 def standard_total_exposure_ms(mode: str) -> float:
-    """Standard shutter. NSEW is eight times the uniform standard."""
+    
     if str(mode).lower() == "nsew":
         return float(NSEW_TOTAL_EXPOSURE_MS)
     return float(TOTAL_EXPOSURE_MS)
 
 
 def shutter_ms(total_exposure_ms: float) -> float:
-    """Camera shutter. Total exposure is that shutter time, in milliseconds."""
+    
     total = float(total_exposure_ms)
     if total <= 0:
         raise ValueError("total exposure must be positive")
@@ -306,7 +289,7 @@ def _open_device():
 
 
 def _disable_test_image(camera) -> None:
-    """Use the sensor. A saved camera setting can otherwise show a test pattern."""
+    
     for name in ("TestImageSelector", "TestPattern"):
         try:
             node = getattr(camera, name)
@@ -339,7 +322,7 @@ def _disable_exposure_auto(camera) -> None:
 
 
 def set_exposure(camera, exposure_us: float) -> None:
-    """Set the shutter. Raises if the camera keeps a different value."""
+    
     exposure = camera.ExposureTime
     if not exposure.IsWritable():
         raise RuntimeError("ExposureTime is not writable")
@@ -362,7 +345,7 @@ def _make_converter():
 
 
 def open_camera(exposure_us: float):
-    """Camera armed for one software-triggered frame."""
+    
     camera = _open_device()
     try:
         _disable_exposure_auto(camera)
@@ -378,7 +361,7 @@ def open_camera(exposure_us: float):
 
 
 def open_live_camera(exposure_us: float):
-    """Free-running camera for the on-screen feed. Caller must close it."""
+    
     pylon = pylon_module()
 
     camera = _open_device()
@@ -395,14 +378,14 @@ def open_live_camera(exposure_us: float):
 
 
 def orient_frame(image):
-    """Turn the sensor image 90 degrees left so saved frames match the live view."""
+    
     import numpy as np
 
     return np.ascontiguousarray(np.rot90(image, k=1))
 
 
 def read_live_frame(camera, converter, timeout_ms: int):
-    """Latest free-running frame, BGR or gray. The camera must already be grabbing."""
+    
     pylon = pylon_module()
 
     grab = camera.RetrieveResult(timeout_ms, pylon.TimeoutHandling_ThrowException)
@@ -439,7 +422,7 @@ def save_frame(image, path: Path) -> None:
 def capture_uniform(
     camera, converter, ser, folder: Path, timeout_ms: int, row: int = 1, col: int = 1
 ) -> str:
-    """Save ``(row,col).png``. With an open Arduino, light all four sides first."""
+    
     pylon = pylon_module()
 
     if ser is not None:
@@ -467,7 +450,7 @@ def capture_side(
     row: int = 1,
     col: int = 1,
 ) -> str:
-    """Light one side and save ``(row,col)_N.png`` and the other sides the same way."""
+    
     pylon = pylon_module()
 
     if index < 0 or index >= len(DIRECTIONS):
@@ -490,7 +473,7 @@ def capture_side(
 def capture_nsew(
     camera, converter, ser, folder: Path, timeout_ms: int, row: int = 1, col: int = 1
 ) -> list[str]:
-    """Light one side at a time and save ``(row,col)_N.png`` through ``_W.png``."""
+    
     pylon = pylon_module()
 
     if ser is None:
@@ -513,7 +496,7 @@ def capture_nsew(
 
 
 def write_manifest(folder: Path, payload: dict) -> None:
-    """Write or extend ``capture.json`` in the run folder, one entry per stop."""
+    
     path = folder / "capture.json"
     stop = {
         "row": payload["row"],

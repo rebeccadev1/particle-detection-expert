@@ -1,5 +1,3 @@
-"""Beta presets that pick an ML model and threshold."""
-
 from __future__ import annotations
 
 import pytest

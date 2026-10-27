@@ -1,5 +1,3 @@
-"""Tile-to-global transforms and a lazy/out-of-core mosaic for visualization."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -16,7 +14,7 @@ from src.overall.io.tile_loader import load_tile_image
 
 
 def mosaic_shape(placements: Sequence[TilePlacement]) -> tuple[int, int]:
-    """Full mosaic height, width in pixels."""
+    
     if not placements:
         return 0, 0
     height = max(p.y0 + p.height for p in placements)
@@ -31,11 +29,7 @@ def downsample_for_target(
     channels: int = 3,
     bytes_per_channel: int = 1,
 ) -> int:
-    """Integer factor so a ``height×width`` image fits in about ``target_mb``.
-
-    Tiles should be downsampled by this factor *before* they are placed, so
-    the stitched canvas never materializes at full resolution.
-    """
+    
     safe_h = max(int(height), 1)
     safe_w = max(int(width), 1)
     target_bytes = max(float(target_mb), 1e-6) * 1024 * 1024
@@ -46,7 +40,7 @@ def downsample_for_target(
 
 
 def _load_downsampled(path: Path, factor: int) -> np.ndarray:
-    """Read one tile and shrink it. The full-resolution array is discarded."""
+    
     image = np.asarray(load_tile_image(path), dtype=np.float32)
     return _downsample(image, factor)
 
@@ -66,7 +60,7 @@ def _paste(canvas: np.ndarray, small: np.ndarray, y: int, x: int) -> None:
 
 
 class LazyMosaic:
-    """Downsample every tile first, then paste the small images onto one canvas."""
+    
 
     def __init__(
         self,
@@ -86,11 +80,7 @@ class LazyMosaic:
         progress_cb: Callable[[int, int, str], None] | None = None,
         workers: int = 8,
     ) -> np.ndarray:
-        """Return a small preview array. ``crop`` is ``(y, x, h, w)`` in full-res pixels.
-
-        The full mosaic path shrinks each TIFF first (in parallel), then stitches
-        those thumbnails. Crops still read only the overlapping full-res patch.
-        """
+        
         factor = max(int(downsample), 1)
         if crop is None:
             return self._preview_full(factor, progress_cb, workers)
@@ -188,7 +178,7 @@ class LazyMosaic:
 
 
 def downsample_image(image: np.ndarray, factor: int) -> np.ndarray:
-    """Box-filter downsample. ``factor`` 1 returns ``image`` unchanged."""
+    
     if factor <= 1:
         return np.asarray(image)
     array = np.ascontiguousarray(image)

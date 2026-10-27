@@ -1,5 +1,3 @@
-"""Global coordinates, size conversion, and overlap de-duplication."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, replace
@@ -19,7 +17,7 @@ DEFAULT_NSEW_SIZE_MATCH_FRACTION = 0.4
 
 @dataclass
 class Particle:
-    """One measured particle in the global frame."""
+    
 
     id: int
     x_global: float
@@ -58,7 +56,7 @@ def local_to_global(
     origin_x: float,
     origin_y: float,
 ) -> tuple[float, float]:
-    """Map tile-local pixels to mosaic pixels (top-left origin)."""
+    
     return origin_x + x_local, origin_y + y_local
 
 
@@ -73,10 +71,7 @@ def measure_candidates(
     pixel_size_nm: float,
     source_tile: str,
 ) -> list[Particle]:
-    """Convert local candidates to global coordinates and size in nm.
-
-    ``size`` is equivalent diameter in nm. ``id`` is 0 until pipeline numbering.
-    """
+    
     particles: list[Particle] = []
     scale = pixel_size_nm if pixel_size_nm > 0 else 1.0
     for candidate in candidates:
@@ -135,17 +130,7 @@ def deduplicate(
     size_aggregation: str = "max",
     size_match_fraction: float = 0.0,
 ) -> list[Particle]:
-    """Merge candidates whose global distance is below ``merge_radius``.
-
-    Distance is in the same units as ``x_global`` / ``y_global`` (nm if a
-    pixel size was applied). The kept record is the highest-confidence member;
-    ``size`` is the max or mean of the cluster (see ``size_aggregation``).
-    Features come from the seed. Size is not a match criterion.
-
-    When ``size_match_fraction`` is positive, two hits also merge if they
-    are closer than that fraction of the larger diameter (N/S/E/W views of
-    the same flake can sit farther apart than the overlap radius).
-    """
+    
     if not particles:
         return []
     remaining = sorted(particles, key=lambda p: p.confidence, reverse=True)
@@ -199,7 +184,7 @@ def deduplicate_nsew(
     size_aggregation: str = "max",
     size_match_fraction: float = DEFAULT_NSEW_SIZE_MATCH_FRACTION,
 ) -> list[Particle]:
-    """Merge N/W/E/S views of the same place. At most one hit per direction."""
+    
     if not particles:
         return []
     remaining = sorted(particles, key=lambda p: p.confidence, reverse=True)
@@ -262,7 +247,7 @@ def _renumber(particles: list[Particle]) -> list[Particle]:
 
 
 def particles_to_dataframe(particles: Sequence[Particle]) -> pd.DataFrame:
-    """Build the standard results table, including per-blob features."""
+    
     names = [field.name for field in fields(Particle)]
     rows = [{name: getattr(p, name) for name in names} for p in particles]
     if not rows:
@@ -277,7 +262,7 @@ def measure_and_dedupe(
     merge_radius_nm: float | None = None,
     directional: bool = False,
 ) -> pd.DataFrame:
-    """Apply configured clustering and return a results table."""
+    
     pixel_size = float(cfg_get(config, "pixel_size_nm", 1.0))
     if merge_radius_nm is None:
         merge_px = float(cfg_get(config, "measurement.merge_radius_px", 8.0))

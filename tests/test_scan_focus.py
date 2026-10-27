@@ -1,5 +1,3 @@
-"""When scan and capture refocuses, and the sharpness floor."""
-
 import json
 
 import cv2

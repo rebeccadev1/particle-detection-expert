@@ -17,7 +17,6 @@ next_run_folder = _camera.next_run_folder
 
 
 def _load_arduino_link() -> dict:
-    """Keep the open Arduino across a script reload so the port is not opened twice."""
     shared = getattr(builtins, "_asml_arduino_link", None)
     if isinstance(shared, dict) and "ser" in shared:
         return shared
@@ -36,7 +35,6 @@ CAPTURE_WIDGET_DEFAULTS: dict = {
 
 
 def keep_capture_inputs() -> None:
-    """Call on every run. Streamlit drops widget values while this tab is hidden."""
     for key in CAPTURE_WIDGET_DEFAULTS:
         held = f"_held_{key}"
         if key in st.session_state:
@@ -73,7 +71,6 @@ def _forget_port() -> None:
 
 
 def _run_serial(action):
-    """Run a command on the open port. A dead port is dropped so Connect works again."""
     ser = _serial()
     if ser is None:
         st.error("Connect the Arduino first.")
@@ -98,7 +95,6 @@ def _total_exposure_key(mode: str) -> str:
 
 
 def total_exposure_ms(mode: str | None = None) -> float:
-    """Shutter for this lighting mode. NSEW's standard is eight times Uniform."""
     mode = _selected_mode() if mode is None else mode
     key = _total_exposure_key(mode)
     default = CAPTURE_WIDGET_DEFAULTS[key]
@@ -106,14 +102,12 @@ def total_exposure_ms(mode: str | None = None) -> float:
 
 
 def _apply_mode_light(cap, mode: str):
-    """Uniform lights every side. NSEW lights North only."""
     if mode == "Uniform":
         return _run_serial(cap.light_all)
     return _run_serial(lambda port: cap.set_segment(port, 0))
 
 
 def _failure(action: str, next_step: str, exc: BaseException) -> None:
-    """Operator-facing failure. The exception text stays behind a disclosure."""
     detail = str(exc).strip() or type(exc).__name__
     first = detail.splitlines()[0]
     if len(first) > 160 or "Traceback" in detail:
@@ -143,7 +137,6 @@ def _marked_port(device: str, labels: dict[str, str], roles: dict[str, str]) -> 
 
 
 def _render_port_select(cap, *, label: str, state_key: str, disabled: bool) -> bool:
-    """Port list with taken ports marked. False when pyserial is missing."""
     try:
         ports = cap.list_serial_ports()
     except ImportError:
@@ -170,7 +163,6 @@ def _render_port_select(cap, *, label: str, state_key: str, disabled: bool) -> b
 
 
 def _hardware_strip() -> None:
-    """One line for Arduino, printer, and camera. Not a banner per device."""
     printer = printer_status()
     snap = preview_snapshot()
     capture = scan_capture_status()
@@ -200,7 +192,6 @@ def _hardware_strip() -> None:
 
 
 def render_capture_tab() -> None:
-    """Uniform lighting, or one side at a time. One total-exposure control."""
     cap = _capture_module()
     _hardware_strip()
     _capture_after_autofocus(cap)
@@ -322,12 +313,8 @@ def _render_lighting_controls(cap, mode: str, ser) -> None:
         _caption_when_blocked("Capture", blocked)
     else:
         _render_side_lights(cap, ser)
-        st.caption(
-            "Capture lights N, then E, then S, then W, and saves each frame. "
-            f"It waits {cap.NSEW_GAP_S * 1000:.0f} ms between sides."
-        )
         blocked = _still_capture_block_reason(needs_arduino=True)
-        if st.button("Capture N, E, S, W", type="primary", disabled=blocked is not None):
+        if st.button("Capture", type="primary", disabled=blocked is not None):
             _capture_run(cap, mode, shutter)
         _caption_when_blocked("Capture", blocked)
 
@@ -335,9 +322,6 @@ def _render_lighting_controls(cap, mode: str, ser) -> None:
 
 def _capture_run(cap, mode: str, shutter_ms: float, *, label: str | None = None) -> None:
     ser = _serial()
-    if mode != "Uniform" and ser is None:
-        st.error("NSEW capture needs the Arduino to switch sides.")
-        return
     exposure_us = shutter_ms * 1000.0
     timeout_ms = cap.grab_timeout_ms(exposure_us)
     camera = None
@@ -398,8 +382,6 @@ def _still_capture_block_reason(*, needs_arduino: bool) -> str | None:
     busy = _camera_busy_reason()
     if busy:
         return busy
-    if needs_arduino and _serial() is None:
-        return "NSEW capture needs the Arduino."
     return None
 
 
@@ -409,10 +391,8 @@ def _caption_when_blocked(action: str, reason: str | None) -> None:
 
 
 def _render_side_lights(cap, ser) -> None:
-    """Turn on one side of the ring. The other sides stay off. No picture is saved."""
     busy = _camera_busy_reason()
     disabled = ser is None or busy is not None
-    st.caption("Each button turns that side on and leaves the other sides off.")
     side_cols = st.columns(len(cap.DIRECTIONS))
     for index, direction in enumerate(cap.DIRECTIONS):
         if side_cols[index].button(
@@ -431,7 +411,6 @@ def _shutter_ms(cap) -> float:
 
 
 def _capture_after_autofocus(cap) -> None:
-    """Save a still once a standalone autofocus has finished on the best height."""
     if scan_capture_status()["running"]:
         return
     if not claim_focus_capture():
@@ -463,7 +442,6 @@ def _show_last_run(*, key: str = "block-last-capture") -> None:
 
 
 def suspend_live_view() -> None:
-    """Close the camera when the Capture tab is not on screen."""
     stop_preview()
 
 

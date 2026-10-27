@@ -1,5 +1,3 @@
-"""Serpentine stage program used by the Capture tab."""
-
 from pathlib import Path
 
 import pytest

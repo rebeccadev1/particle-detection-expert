@@ -277,7 +277,6 @@ def _excel_bytes_cached(table: pd.DataFrame, config: dict) -> bytes:
     return data
 
 def _widget_defaults(base: dict) -> dict:
-    """Map config.yaml fields onto sidebar widget session-state keys."""
     pipe = base.get("pipeline") or {}
     pre = base.get("preprocessing") or {}
     det = base.get("detection") or {}
@@ -341,7 +340,6 @@ def _epoch() -> int:
     return int(st.session_state.get("ui_settings_epoch") or 0)
 
 def _live_key(key: str) -> str:
-    """Widget key. A new epoch remounts the control so the browser shows the new value."""
     epoch = _epoch()
     if epoch <= 0:
         return key
@@ -438,7 +436,6 @@ def _assign_widget(key: str, value, *, previous_epoch: int | None = None) -> Non
         st.session_state[key] = value
 
 def _apply_beta_preset(base: dict, *, previous_epoch: int | None = None) -> None:
-    """Point the ML model and threshold slider at this mode's beta preset."""
     beta = float(
         st.session_state.get(_live_key("ui_f_beta"), st.session_state.get("ui_f_beta", 1.0))
     )
@@ -447,7 +444,6 @@ def _apply_beta_preset(base: dict, *, previous_epoch: int | None = None) -> None
     st.session_state["ui_beta_model_path"] = str(preset["model_path"])
 
 def _on_beta_change(base: dict) -> None:
-    """Keep every other sidebar edit, then load this beta's model and threshold."""
     previous_epoch = _epoch()
     captured: dict[str, object] = {}
     for keys in _SIDEBAR_SECTIONS.values():
@@ -465,11 +461,6 @@ def _on_beta_change(base: dict) -> None:
     _apply_beta_preset(base, previous_epoch=previous_epoch)
 
 def _apply_standard_settings(base: dict, folder: str | None = None) -> None:
-    """Load Uniform or NSEW standard values. Keep the tile folder just chosen.
-
-    The output folder is ``{tile folder} vN``. An empty tile folder leaves the
-    output folder empty so the control shows its placeholder.
-    """
     previous = _live_key("ui_input_dir")
     profile = _selected_profile(base)
     if folder is None:
@@ -503,7 +494,6 @@ def _on_input_folder(base: dict) -> None:
     _apply_standard_settings(base, chosen)
 
 def _keep_filename_pattern(base: dict) -> None:
-    """A cleared pattern matches every file and then crashes. Restore the selected profile."""
     live = _live_key("ui_filename_pattern")
     current = str(st.session_state.get(live) or st.session_state.get("ui_filename_pattern") or "")
     held = str(st.session_state.get(_hold_key("ui_filename_pattern")) or "")
@@ -569,11 +559,6 @@ def _capture_folder_label(folder: Path) -> str:
 
 
 def _apply_capture_suggestion() -> None:
-    """Remember the newest capture folder so Tile folder can offer it first.
-
-    The control itself stays empty until a folder is chosen, so the placeholder
-    stays visible.
-    """
     latest_path = latest_run_folder()
     if latest_path is None:
         return
@@ -1123,7 +1108,6 @@ def _apply_finished_pipeline() -> None:
 
 
 def _advance_output_folder(config: dict) -> None:
-    """Point Output folder at the next ``{tile folder} vN`` after this run."""
     nxt = advance_versioned_output_name(
         config.get("input_dir"),
         config.get("output_dir"),
@@ -1168,11 +1152,6 @@ def _pipeline_buttons(config: dict, *, running: bool) -> None:
 
 @st.fragment(run_every=0.5)
 def _pipeline_controls(config: dict) -> None:
-    """Progress and the run/stop buttons stay in this fragment.
-
-    Moving the buttons out while the pipeline is idle, then back in on the
-    next run, leaves the previous row on screen for a moment.
-    """
     status = pipeline_status()
     if status["running"]:
         total = max(status["total"], 1)
@@ -1200,7 +1179,6 @@ def _write_mosaic_png(rgb: np.ndarray, path: Path) -> None:
 
 
 def _saved_plain_mosaic(saved: Path, config: dict) -> np.ndarray:
-    """Unlabeled mosaic for a saved run. Stitches once, then reuses the file."""
     plain_path = saved.parent / "mosaic_plain.png"
     cached = st.session_state.get("saved_plain_rgb")
     key = str(plain_path.resolve())
@@ -1227,7 +1205,6 @@ def _saved_plain_mosaic(saved: Path, config: dict) -> np.ndarray:
 
 
 def _labels_stamp() -> int:
-    """Change when Tinder writes a mark, so the mosaic is drawn again."""
     path = ROOT / "labels" / "all_labels.csv"
     try:
         return path.stat().st_mtime_ns
@@ -1236,7 +1213,6 @@ def _labels_stamp() -> int:
 
 
 def _mosaic_labels_on() -> bool:
-    """Checkbox for detection circles on the stitched mosaic. On by default."""
     return st.checkbox(
         "Labels",
         value=True,
@@ -1251,11 +1227,7 @@ def _mosaic_with_review_labels(
     table: pd.DataFrame,
     config: dict,
 ) -> np.ndarray | None:
-    """Draw this run's Tinder colours on the plain mosaic.
 
-    The file saved at the end of the pipeline is always orange, because the
-    marks did not exist yet. This redraws those circles from the label table.
-    """
     plain_path = saved.parent / "mosaic_plain.png"
     if not plain_path.is_file():
         return None
@@ -1293,11 +1265,6 @@ def _mosaic_with_review_labels(
 
 
 def _saved_mosaic_path(active_config: dict) -> Path | None:
-    """Mosaic written for this output folder, only if it belongs to the current CSV.
-
-    A run with no row/column names does not stitch. An older mosaic left in the
-    same folder is from a previous run and must not be shown.
-    """
     output_dir = active_config.get("output_dir")
     if not output_dir:
         return None
@@ -1319,7 +1286,6 @@ def _saved_mosaic_path(active_config: dict) -> Path | None:
 
 
 def _finished_run_state(config: dict) -> tuple[pd.DataFrame | None, object, dict]:
-    """Session results from the run that just finished, else the saved last run."""
     table = st.session_state.get("table")
     mosaic = st.session_state.get("mosaic")
     active_config = deepcopy(st.session_state.get("config", config))
@@ -1340,7 +1306,6 @@ def _finished_run_state(config: dict) -> tuple[pd.DataFrame | None, object, dict
 
 
 def _render_size_threshold_table(table: pd.DataFrame) -> None:
-    """Detected particles with equivalent diameter at least 10, 20, 25, 50, 75 µm."""
     st.caption("Detected particles at least this large (equivalent circular diameter).")
     st.dataframe(
         particles_at_least(table),
@@ -1379,7 +1344,6 @@ def _render_size_bins(table: pd.DataFrame, min_size_um: float) -> None:
 
 
 def _render_summary_stats(stats: dict) -> None:
-    """Label above value, same arrangement as the Settings profile control."""
     items = (
         ("Particles", f"{int(stats['particle_count'])}"),
         ("Mean size (µm)", f"{_nm_to_um(stats['size_mean']):.2f}"),
@@ -1397,7 +1361,6 @@ def _render_summary_stats(stats: dict) -> None:
 
 
 def _summary_heading(config: dict) -> str:
-    """``Summary of {input folder name}``, or ``Last run`` when no folder is known."""
     raw = str(config.get("input_dir") or "").strip().strip('"').strip("'").rstrip("/\\")
     name = Path(raw).name if raw else ""
     if not name:
@@ -1415,7 +1378,6 @@ def _render_unstitched_images(
     config: dict,
     show_labels: bool,
 ) -> None:
-    """Show each image that has no row/column pattern, without stitching."""
     if not paths:
         return
     stamps: list[str] = []
@@ -1456,7 +1418,6 @@ def _render_unstitched_images(
 
 
 def _render_finished_run(config: dict) -> bool:
-    """Table, size bins, and mosaic from the latest finished pipeline run."""
     table, mosaic, active_config = _finished_run_state(config)
     if table is None:
         with st.container(border=True, key="block-last-run"):
@@ -1468,7 +1429,6 @@ def _render_finished_run(config: dict) -> bool:
                 on_click=request_last_run,
                 disabled=saved_csv is None or not Path(saved_csv).is_file(),
             )
-            st.caption("Last run stays unloaded until you click Load last run.")
         return False
 
     with st.container(border=True, key="block-last-run"):
@@ -1755,7 +1715,6 @@ if page == "Analyse":
                     key="run_load_labeled_tiles",
                     on_click=_request_labeled_tiles,
                 )
-                st.caption("Labeled tiles stay unloaded until you click Load labeled tiles.")
             else:
                 render_labeled_tiles_tab(
                     config,

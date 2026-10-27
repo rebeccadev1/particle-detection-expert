@@ -1,5 +1,3 @@
-"""Background run of the detection pipeline, with a stop flag between tiles."""
-
 from __future__ import annotations
 
 import threading

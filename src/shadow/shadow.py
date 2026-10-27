@@ -1,12 +1,3 @@
-"""Shadow area / length / height of already-marked particles, picked by key.
-
-The shadow is the dark region (below background − k·σ) connected to the
-particle on the side away from the light. Height = length × light height /
-horizontal distance to the light, which depends on where the particle sits
-in the field (see ``light_distance_mm``). Used by the **Shadow** tab and
-``src/shadow/shadow_check.py``.
-"""
-
 from __future__ import annotations
 
 import math
@@ -67,13 +58,13 @@ class ShadowRun:
 
 
 def shadow_direction(light_from_deg: float) -> tuple[float, float]:
-    """Unit ``(dx, dy)`` in image pixels (y down) along which the shadow falls."""
+    
     a = math.radians(float(light_from_deg))
     return -math.sin(a), math.cos(a)
 
 
 def parse_light_from(value: str | float | None, tile_name: str = "") -> float | None:
-    """``N``/``S``/``E``/``W`` or degrees; falls back to an N/S/E/W tile stem."""
+    
     if value not in (None, ""):
         text = str(value).strip().upper()
         if text in LIGHT_FROM_DEG:
@@ -102,12 +93,7 @@ def _segment_particle(
     k_mad: float,
     mass_fraction: float,
 ) -> tuple[str, np.ndarray]:
-    """Particle mask at the click: disc seed, then grow elongated bodies (e.g. hair).
-
-    ``r`` is the assumed half-width. Bright/dark fibers may extend far across the
-    patch; growth into the shadow direction (positive ``along``) is limited so a
-    dark fiber is not merged with its attached shadow.
-    """
+    
     seed_r = max(float(r), 2.0)
     seed = dist <= seed_r
     peak = float(patch[seed].max()) if np.any(seed) else float(patch[py, px])
@@ -144,7 +130,7 @@ def _segment_particle(
 
 
 def _mask_thickness_px(mask: np.ndarray) -> float:
-    """Approx. particle / fiber width from a boolean mask (2 × max inscribed radius)."""
+    
     if not np.any(mask):
         return 1.0
     dist = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
@@ -160,7 +146,7 @@ def _crop_for_shadow(
     max_length_factor: float,
     particle_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, int, int, float, float]:
-    """Return ``(patch, x0, y0, cx, cy)`` around the particle for measurement."""
+    
     height, width = image.shape
     r = max(0.5 * float(diameter_px), 1.0)
     shadow_reach = int(math.ceil(max_length_factor * 2.0 * r)) + 8
@@ -202,12 +188,7 @@ def measure_shadow(
     min_area_px: int = 4,
     particle_mask: np.ndarray | None = None,
 ) -> tuple[ShadowResult, dict[str, Any]]:
-    """Shadow of the particle at ``(x, y)`` on ``image`` (tile pixels).
-
-    ``diameter_px`` is the assumed particle / fiber **width** when the mask is
-    auto-segmented. Pass ``particle_mask`` (full-image bool) to use a drawn
-    outline instead; those pixels are excluded from the shadow.
-    """
+    
     height, width = image.shape
     r = max(0.5 * float(diameter_px), 1.0)
     dx, dy = shadow_direction(light_from_deg)
@@ -334,7 +315,7 @@ def measure_shadow(
 
 
 def _wrap_cv2_text(text: str, max_w: int, font: int, scale: float, thickness: int) -> list[str]:
-    """Split ``text`` (at ``/`` or spaces when possible) into lines at most ``max_w`` px."""
+    
     lines: list[str] = []
     line = ""
     for ch in text:
@@ -353,7 +334,7 @@ def _wrap_cv2_text(text: str, max_w: int, font: int, scale: float, thickness: in
 
 
 def _footer_band(source: list[str], width: int) -> np.ndarray:
-    """White band with ``source`` lines (folder path, file name) in dark text."""
+    
     font, scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
     lines = [w for text in source for w in _wrap_cv2_text(text, width - 16, font, scale, thickness)]
     line_h = cv2.getTextSize("Ag", font, scale, thickness)[0][1] + 12
@@ -365,7 +346,7 @@ def _footer_band(source: list[str], width: int) -> np.ndarray:
 
 
 def _source_lines(path: Path) -> list[str]:
-    """``[folder from the input root, file name]`` for an image under the inputs."""
+    
     if path.is_relative_to(DEFAULT_INPUT_DIR):
         folder = Path(DEFAULT_INPUT_DIR.name) / path.parent.relative_to(DEFAULT_INPUT_DIR)
     else:
@@ -374,7 +355,7 @@ def _source_lines(path: Path) -> list[str]:
 
 
 def image_choice_labels() -> tuple[str, ...]:
-    """Paths under Inputs, as shown in the image box (``Inputs/…``)."""
+    
     labels: list[str] = []
     for paths in _input_images().values():
         for path in paths:
@@ -388,11 +369,7 @@ def image_choice_labels() -> tuple[str, ...]:
 
 
 def resolve_named_image(text: str) -> tuple[Path | None, tuple[Path, ...]]:
-    """The image named by ``text``: an existing path, or one file name under Inputs.
-
-    A path that exists is used as given. A bare name is used only when exactly
-    one image under Inputs has it. Several matches are returned unresolved.
-    """
+    
     raw = text.strip().strip('"').strip("'")
     if not raw:
         return None, ()
@@ -422,7 +399,7 @@ def resolve_named_image(text: str) -> tuple[Path | None, tuple[Path, ...]]:
 
 
 def direction_image(path: Path, light_from: str | float | None) -> Path:
-    """Sibling N/S/E/W image in the same folder, or ``path`` when there is none."""
+    
     letter = str(light_from).strip().upper() if isinstance(light_from, str) else ""
     if letter not in LIGHT_FROM_DEG or not path.parent.is_dir():
         return path
@@ -439,10 +416,7 @@ def direction_image(path: Path, light_from: str | float | None) -> Path:
 def debug_image(
     debug: dict[str, Any], title: str, source: list[str] | None = None
 ) -> np.ndarray:
-    """RGB crop: particle green, shadow tint red; yellow = light dir, red = length.
-
-    ``source`` lines (input folder path, file name) are printed under the picture.
-    """
+    
     patch = debug["patch"]
     particle = np.asarray(debug["particle"], dtype=bool)
     shadow = np.asarray(debug["shadow"], dtype=bool)
@@ -501,11 +475,7 @@ def light_distance_mm(
     edge_mm: float = RING_EDGE_MM,
     centre_mm: float = RING_CENTRE_MM,
 ) -> float:
-    """Horizontal distance from ``(x, y)`` to the light, linear across the field.
-
-    ``edge_mm`` at the image edge on the light side, ``centre_mm`` at the
-    centre, and ``2·centre − edge`` at the far edge.
-    """
+    
     dx, dy = shadow_direction(light_from_deg)
     ux, uy = -dx, -dy
     toward = (x - 0.5 * (width - 1)) * ux + (y - 0.5 * (height - 1)) * uy
@@ -537,12 +507,7 @@ def _shared_leading_words(a: str, b: str) -> int:
 
 
 def find_label_image(source_tile: str, source_csv: object = "") -> tuple[Path | None, int]:
-    """Image under ``Inputs`` for a label row, and how many folders were equally good.
-
-    ``source_tile`` may carry a set folder (``v5/N.png`` → ``…/v5 (10^5)/N.png``).
-    Several copies: prefer the input folder that shares the most leading words
-    with the run folder that wrote the label, then the fullest folder.
-    """
+    
     parts = [p for p in str(source_tile).replace("\\", "/").split("/") if p]
     if not parts:
         return None, 0
@@ -577,7 +542,7 @@ def select_rows(
     keys: list[str],
     run: str | None,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Rows for ``ids`` / ``keys``; an ID with several matches is reported and skipped."""
+    
     id_col = id_column(table)
     messages: list[str] = []
     if run and "source_csv" in table.columns:
@@ -622,7 +587,7 @@ def _edge_scales(
     origin_x: float,
     origin_y: float,
 ) -> list[float]:
-    """Pixel sizes that put this hit ``border`` px from one image edge."""
+    
     scales: list[float] = []
     for numerator, denominator in (
         (x_nm, border + origin_x),
@@ -645,11 +610,7 @@ def scale_from_borders(
     x0: float = 0.0,
     y0: float = 0.0,
 ) -> float | None:
-    """Pixel size (nm) that reproduces each hit's saved distance to the image edge.
-
-    One hit can fit more than one size. Every detection on the same photo has
-    to land inside and match its own border, which leaves the size the run used.
-    """
+    
     usable = [
         (float(x_nm), float(y_nm), float(border))
         for x_nm, y_nm, border in hits
@@ -687,7 +648,7 @@ def detection_borders(
     source_tile: object,
     cache: dict[str, pd.DataFrame | None],
 ) -> list[tuple[float, float, float]]:
-    """``(x_global, y_global, tile_border_dist_px)`` from the CSV that labeled this tile."""
+    
     path = Path(str(source_csv or ""))
     key = str(path)
     if key not in cache:
@@ -741,11 +702,7 @@ def run_shadow_check(
     preprocess: str = "light",
     out: str | Path | None = DEFAULT_OUT,
 ) -> ShadowRun:
-    """Measure every selected row; write CSV + PNGs under ``Outputs/<out>`` if given.
-
-    Without ``input_dir`` each row's image is looked up under ``Inputs`` from
-    its label (``source_tile`` / ``source_csv``).
-    """
+    
     config = deepcopy(config)
     pixel_nm = float(cfg_get(config, "pixel_size_nm", 1000.0))
     rows, messages = select_rows(table, list(ids or []), list(keys or []), run)
@@ -878,7 +835,7 @@ def display_preview(
     image: np.ndarray,
     max_side: int = PICK_MAX_SIDE,
 ) -> tuple[np.ndarray, float]:
-    """RGB overview for the draw canvas; returns ``(rgb, display_scale)``."""
+    
     rgb = to_display_rgb(image)
     height, width = rgb.shape[:2]
     scale = min(1.0, float(max_side) / float(max(height, width, 1)))
@@ -898,11 +855,7 @@ def zoom_preview(
     zoom: float,
     max_side: int = PICK_MAX_SIDE,
 ) -> tuple[np.ndarray, tuple[int, int, int, int]]:
-    """RGB view around ``(cx, cy)`` at ``zoom``; returns ``(rgb, (y0, x0, y1, x1))``.
-
-    ``zoom`` 1 shows the whole tile. Higher values crop a smaller window and
-    enlarge it to about ``max_side`` for drawing.
-    """
+    
     rgb = to_display_rgb(image)
     height, width = rgb.shape[:2]
     zoom = max(float(zoom), 1.0)
@@ -929,7 +882,7 @@ def paint_kept_mask(
     mask: np.ndarray,
     crop: tuple[int, int, int, int],
 ) -> np.ndarray:
-    """Green tint of a saved full-image mask on a zoomed preview."""
+    
     y0, x0, y1, x1 = crop
     sub = np.asarray(mask, dtype=bool)[y0:y1, x0:x1]
     if sub.shape != preview.shape[:2]:
@@ -946,11 +899,7 @@ def paint_kept_mask(
 
 
 def _canvas_drawing_mask(arr: np.ndarray) -> np.ndarray:
-    """Boolean drawing mask from canvas RGBA/RGB (uint8 or float 0–1).
-
-    Prefers the green pen colour so a baked-in background is ignored. Falls back
-    to a sparse alpha layer; rejects a nearly full-frame alpha dump.
-    """
+    
     array = np.asarray(arr)
     if array.ndim == 2:
         plane = array.astype(np.float32)
@@ -990,12 +939,7 @@ def mask_from_canvas(
     crop: tuple[int, int, int, int] | None = None,
     close_px: int = 7,
 ) -> np.ndarray:
-    """Full-image bool mask from ``st_canvas`` ``image_data`` (display-sized RGBA).
-
-    Drawn strokes are scaled into ``crop`` (full-image ``y0,x0,y1,x1``; whole
-    tile when omitted), closed morphologically, and filled so a traced outline
-    becomes a solid particle body.
-    """
+    
     height, width = int(image_shape[0]), int(image_shape[1])
     empty = np.zeros((height, width), dtype=bool)
     if image_data is None:
@@ -1045,7 +989,7 @@ def run_shadow_on_mask(
     preprocess: str = "light",
     out: str | Path | None = DEFAULT_OUT,
 ) -> ShadowRun:
-    """Measure the shadow of a drawn particle mask on an uploaded image."""
+    
     pixel_nm = float(cfg_get(config, "pixel_size_nm", 1000.0))
     um = pixel_nm / 1000.0
     messages: list[str] = []
@@ -1166,7 +1110,7 @@ SHADOW_WIDGET_DEFAULTS: dict[str, Any] = {
 
 
 def keep_shadow_inputs() -> None:
-    """Call on every run: Streamlit drops widget values while their tab is not drawn."""
+    
     import streamlit as st
 
     for key, default in SHADOW_WIDGET_DEFAULTS.items():
@@ -1295,7 +1239,7 @@ def _image_to_url_shim(
     output_format: str,
     image_id: str,
 ) -> str:
-    """Stand-in for ``streamlit.elements.image.image_to_url`` removed in Streamlit 1.62+."""
+    
     import base64
     import io
 
@@ -1314,7 +1258,7 @@ def _image_to_url_shim(
 
 
 def _load_st_canvas() -> Any | None:
-    """Import ``st_canvas`` after patching Streamlit's removed ``image_to_url``."""
+    
     import streamlit.elements.image as st_image
 
     if not hasattr(st_image, "image_to_url"):
@@ -1542,7 +1486,7 @@ def _render_upload_shadow(
 
 
 def render_shadow_tab(config: dict[str, Any]) -> None:
-    """Main-screen tab: measure shadows from labels or an uploaded tile."""
+    
     import streamlit as st
 
     keep_shadow_inputs()

@@ -1,5 +1,3 @@
-"""Tests for the per-tile inspect overlay (no Streamlit)."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -292,7 +290,7 @@ def test_submap_combi_does_not_inherit_letter_field_misses() -> None:
 
 
 def test_submap_tiles_are_counted_separately() -> None:
-    """A quad false is not a false of the combi, and a quad hit is not a combi miss."""
+    
     combi = "v6/combi_2of4.png"
     quad = "v6/wafer_shot_3_quad3_exp200000.png"
     uniform = "v6/wafer_shot_4_all_exp200000.png"
@@ -800,7 +798,7 @@ def test_undetected_size_floor_uses_this_run_minimum() -> None:
 
 
 def _area_line_mask(rgb: np.ndarray) -> np.ndarray:
-    """Pixels of the #0F238C area outline, allowing antialiasing."""
+    
     red = rgb[:, :, 0].astype(np.int16)
     green = rgb[:, :, 1].astype(np.int16)
     blue = rgb[:, :, 2].astype(np.int16)
@@ -989,7 +987,7 @@ def test_missed_particle_record_uses_tile_inspect_source() -> None:
 
 
 def test_n2_pattern_keeps_detector_and_inspect_circles_on_tile() -> None:
-    """R4 n2_row_col names need that pattern or mosaic globals fall off the tile."""
+    
     base = TilePlacement(
         path=Path("n2_1_17.tif"),
         name="n2_1_17.tif",

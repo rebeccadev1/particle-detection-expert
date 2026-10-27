@@ -1,5 +1,3 @@
-"""Tests for global mapping and boundary de-duplication."""
-
 from __future__ import annotations
 
 import json
@@ -224,7 +222,7 @@ def test_deduplicate_merges_nearby_candidates() -> None:
 
 
 def test_nsew_hits_at_same_place_are_one_particle() -> None:
-    """Same location in N/S/E/W is one particle even when sizes differ."""
+    
     north = Particle(
         id=0,
         x_global=100.0,
@@ -352,7 +350,7 @@ def test_combine_tables_merges_particles_only_versions() -> None:
 
 
 def test_seam_particle_is_not_double_counted() -> None:
-    """Particle centered on the shared edge of two overlapping tiles → one row."""
+    
     overlap = 0.25
     width = 64
     step = width * (1.0 - overlap)
@@ -576,7 +574,7 @@ def test_photo_mosaic_keeps_saved_brightness() -> None:
 
 
 def test_grid_tile_mosaic_keeps_the_photo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A ``(row,col)`` hit stores a folder path. The stitch still uses the filename."""
+    
     monkeypatch.setattr(
         "src.overall.io.naming.DEFAULT_INPUT_DIR",
         tmp_path,
