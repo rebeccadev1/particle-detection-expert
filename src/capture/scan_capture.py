@@ -16,6 +16,7 @@ from src.capture.camera_automation import (
     grab_frame,
     grab_timeout_ms,
     open_camera,
+    set_segment,
     shutter_ms,
     write_manifest,
 )
@@ -348,6 +349,8 @@ def _scan_thread(
                 with _JOB_LOCK:
                     _JOB["steps"] = steps_taken
                 if refocus_due(steps_taken, enabled=focus_during_scan):
+                    if mode == "NSEW":
+                        set_segment(ser, 0)
                     focus_record = _focus_here(
                         camera,
                         converter,

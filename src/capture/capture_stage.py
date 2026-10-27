@@ -74,7 +74,8 @@ def keep_stage_inputs() -> None:
 def _light_for_manual_autofocus(cap) -> bool:
     """Set the ring before a standalone autofocus. Scan autofocus does not call this.
 
-    Uniform turns every side on. NSEW, automatic or manual, turns North on.
+    Uniform turns every side on. NSEW turns North on, then the search starts.
+    North stays on for the whole search.
     Returns False when the lights could not be set, so the search does not start in the dark.
     """
     mode = _selected_mode()
