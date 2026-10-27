@@ -181,10 +181,7 @@ def build_relative_move_gcode(axis: str, delta_mm: float, feed: float) -> str:
     )
 
 
-def move_axis(axis: str, delta_mm: float, feed: float) -> None:
-    
-    text = build_relative_move_gcode(axis, delta_mm, feed)
-    axis = str(axis).upper()
+def _require_printer_ready() -> None:
     status = printer_status()
     if not status["connected"]:
         raise RuntimeError("Connect the printer first.")
@@ -192,8 +189,9 @@ def move_axis(axis: str, delta_mm: float, feed: float) -> None:
         raise RuntimeError("The printer has not answered yet. Wait a moment and try again.")
     if status["printing"]:
         raise RuntimeError("A scan is already running.")
-    start_gcode(text)
-    timeout_s = abs(float(delta_mm)) / float(feed) * 60.0 + 5.0
+
+
+def _wait_until_idle(timeout_s: float, failure: str) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         info = printer_status()
@@ -203,7 +201,16 @@ def move_axis(axis: str, delta_mm: float, feed: float) -> None:
             return
         time.sleep(0.05)
     stop_scan()
-    raise TimeoutError(f"The {axis} move did not finish.")
+    raise TimeoutError(failure)
+
+
+def move_axis(axis: str, delta_mm: float, feed: float) -> None:
+    text = build_relative_move_gcode(axis, delta_mm, feed)
+    axis = str(axis).upper()
+    _require_printer_ready()
+    start_gcode(text)
+    timeout_s = abs(float(delta_mm)) / float(feed) * 60.0 + 5.0
+    _wait_until_idle(timeout_s, f"The {axis} move did not finish.")
 
 
 def move_z(delta_mm: float, feed: float) -> None:
@@ -254,26 +261,10 @@ def build_home_gcode() -> str:
 
 
 def home_xy() -> None:
-    
     text = build_home_gcode()
-    status = printer_status()
-    if not status["connected"]:
-        raise RuntimeError("Connect the printer first.")
-    if not status["online"]:
-        raise RuntimeError("The printer has not answered yet. Wait a moment and try again.")
-    if status["printing"]:
-        raise RuntimeError("A scan is already running.")
+    _require_printer_ready()
     start_gcode(text)
-    deadline = time.monotonic() + 90.0
-    while time.monotonic() < deadline:
-        info = printer_status()
-        if not info["printing"]:
-            if not info["connected"]:
-                raise RuntimeError(info["error"] or "The printer disconnected.")
-            return
-        time.sleep(0.05)
-    stop_scan()
-    raise TimeoutError("Homing did not finish.")
+    _wait_until_idle(90.0, "Homing did not finish.")
 
 
 def scan_stops(columns: int, rows: int, step_mm: float) -> list[tuple[int, int, str | None, float]]:

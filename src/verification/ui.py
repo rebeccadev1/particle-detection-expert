@@ -247,11 +247,8 @@ def _queue_skip_keys(store, scene_labels: pd.DataFrame, config: dict[str, Any]):
 def render_label_tab(
     config: dict[str, Any],
     project_root: str | Path,
-    table: pd.DataFrame | None,
     mosaic: LazyMosaic | None,
 ) -> None:
-    
-    del table
     store = labels_store(project_root)
     cache = st.session_state.setdefault("label_tile_cache", TileImageCache())
     origin_cache = st.session_state.setdefault("label_origin_cache", {})
@@ -319,7 +316,7 @@ def render_label_tab(
             "Load last run",
             key="label_load_last_run",
             disabled=pipeline_csv is None or not Path(pipeline_csv).is_file(),
-            on_click=_on_load_last_pipeline,
+            on_click=request_last_run,
             help=(
                 f"Queue {pipeline_csv.parent.name}/particles.csv"
                 if pipeline_csv is not None and Path(pipeline_csv).is_file()
@@ -334,7 +331,7 @@ def render_label_tab(
             args=(str(last_csv),) if last_csv is not None else (),
             help="Drop the remaining unlabeled hits. Saved labels stay. Load last run puts this queue back.",
         )
-    source_label = _source_caption(last_csv, last_pipeline=use_last_pipeline)
+    source_label = _source_caption(last_csv)
     st.caption(
         f"{remaining} remaining · labeled {labeled_n} "
         f"(particles {counts['particle']} · not sure {counts['not_sure']} · "
@@ -393,71 +390,41 @@ def render_label_tab(
     current = queue.iloc[0]
     candidates = _detection_candidates(tables)
     try:
-        review = combi_or_uniform_crop(
+        crop, prominence, on_review = _all_hits_crop(
             current,
-            crop_config,
             candidates,
+            crop_config,
             merge_radius_nm=radius_nm,
             size_match_fraction=size_frac,
             mosaic=mosaic,
             cache=cache,
             origin_cache=origin_cache,
         )
-        nsew_combi = None
-        if review is not None:
-            crop, _review_prominence = review
-        else:
-            nsew_combi = nsew_combi_crop(
-                current,
-                crop_config,
-                mosaic=mosaic,
-                cache=cache,
-                origin_cache=origin_cache,
-            )
-            if nsew_combi is not None:
-                crop = nsew_combi
-                _review_prominence = float(current.get("confidence") or 0.0)
-            else:
-                crop = crop_particle(
-                    current,
-                    crop_config,
-                    mosaic=mosaic,
-                    cache=cache,
-                    origin_cache=origin_cache,
-                )
     except (FileNotFoundError, ValueError, OSError) as exc:
         _failure("This crop could not be opened.", "Load the last run again, or pick another tile.", exc)
         _undo_row(store, counts)
         return
 
     size_um = float(current["size"]) / NM_PER_UM
-    if review is not None or nsew_combi is not None:
-        image_col, _ = st.columns([LABEL_IMAGE_WIDTH, 800])
-        image_col.image(
-            crop.rgb,
-            caption=(
-                f"{crop.direction} · id {current.get('id', '')} · "
-                f"{size_um:.2f} µm · prominence {_review_prominence:.3f}"
-            ),
-            width=LABEL_IMAGE_WIDTH,
+    if on_review:
+        caption = (
+            f"{crop.direction} · id {current.get('id', '')} · "
+            f"{size_um:.2f} µm · prominence {prominence:.3f}"
         )
     else:
-        image_col, _ = st.columns([LABEL_IMAGE_WIDTH, 800])
         where = f"{crop.direction} · " if crop.direction else ""
         shared_with = str(current.get("exposure_with") or "")
         shared_note = ""
         if shared_with and shared_with.lower() != "nan":
             this_set = Path(str(current["source_tile"])).stem.removesuffix("_2of4")
             shared_note = f" · same particle on {this_set} and {shared_with}"
-        image_col.image(
-            crop.rgb,
-            caption=(
-                f"{where}id {current.get('id', '')} · {current['source_tile']} · "
-                f"{size_um:.2f} µm · confidence {float(current.get('confidence', 0.0)):.3f}"
-                f"{shared_note}"
-            ),
-            width=LABEL_IMAGE_WIDTH,
+        caption = (
+            f"{where}id {current.get('id', '')} · {current['source_tile']} · "
+            f"{size_um:.2f} µm · confidence {float(current.get('confidence', 0.0)):.3f}"
+            f"{shared_note}"
         )
+    image_col, _ = st.columns([LABEL_IMAGE_WIDTH, 800])
+    image_col.image(crop.rgb, caption=caption, width=LABEL_IMAGE_WIDTH)
     st.caption(f"This queue: 1 of {remaining} still unlabeled.")
 
     cols = st.columns(3)
@@ -570,8 +537,7 @@ def _all_hits_crop(
     mosaic: LazyMosaic | None,
     cache: TileImageCache,
     origin_cache: dict,
-) -> tuple[ParticleCrop, float]:
-    
+) -> tuple[ParticleCrop, float, bool]:
     review = combi_or_uniform_crop(
         record,
         crop_config,
@@ -583,7 +549,8 @@ def _all_hits_crop(
         origin_cache=origin_cache,
     )
     if review is not None:
-        return review
+        crop, prominence = review
+        return crop, prominence, True
     combi = nsew_combi_crop(
         record,
         crop_config,
@@ -592,7 +559,7 @@ def _all_hits_crop(
         origin_cache=origin_cache,
     )
     if combi is not None:
-        return combi, float(record.get("confidence") or 0.0)
+        return combi, float(record.get("confidence") or 0.0), True
     crop = crop_particle(
         record,
         crop_config,
@@ -600,7 +567,7 @@ def _all_hits_crop(
         cache=cache,
         origin_cache=origin_cache,
     )
-    return crop, float(record.get("confidence") or 0.0)
+    return crop, float(record.get("confidence") or 0.0), False
 
 
 def _detection_frame(detections: pd.DataFrame | list[pd.DataFrame] | None) -> pd.DataFrame:
@@ -843,7 +810,7 @@ def _render_hit_card(key: str) -> None:
     cache = st.session_state.setdefault("label_tile_cache", TileImageCache())
     origin_cache = st.session_state.setdefault("label_origin_cache", {})
     try:
-        crop, prominence = _all_hits_crop(
+        crop, prominence, _on_review = _all_hits_crop(
             record,
             ctx.get("candidates"),
             ctx.get("crop_config") or {},
@@ -918,7 +885,7 @@ def _queued_label_items(
         return items, failed
     for record in queue.to_dict(orient="records"):
         try:
-            crop, _prominence = _all_hits_crop(
+            crop, _prominence, _on_review = _all_hits_crop(
                 record,
                 candidates,
                 crop_config,
@@ -946,11 +913,6 @@ def request_last_run() -> None:
     st.session_state.pop("label_front_key", None)
 
 
-def _on_load_last_pipeline() -> None:
-    
-    request_last_run()
-
-
 def _on_empty_label_queue(csv_path: str) -> None:
     
     clear_label_queue(csv_path)
@@ -963,14 +925,17 @@ def _drop_inspect_mark() -> None:
     st.session_state.pop("inspect_pending", None)
 
 
-def _advance_inspect_tile(delta: int) -> None:
-    
-    names = list(st.session_state.get("_inspect_tile_names") or [])
+def _advance_review_tile(names_key: str, tile_key: str, delta: int) -> None:
+    names = list(st.session_state.get(names_key) or [])
     if not names:
         return
-    current = st.session_state.get("inspect_tile")
+    current = st.session_state.get(tile_key)
     index = names.index(current) if current in names else 0
-    st.session_state["inspect_tile"] = names[(index + delta) % len(names)]
+    st.session_state[tile_key] = names[(index + delta) % len(names)]
+
+
+def _advance_inspect_tile(delta: int) -> None:
+    _advance_review_tile("_inspect_tile_names", "inspect_tile", delta)
     st.session_state["inspect_cell"] = None
     _drop_inspect_mark()
 
@@ -1025,6 +990,83 @@ def _review_tile_label(name: str) -> str:
     if role and role.startswith("quad"):
         return f"{prefix}Quad {role[-1]}"
     return str(name)
+
+
+def _review_tile_picker(
+    names: list[str],
+    *,
+    names_key: str,
+    tile_key: str,
+    prev_key: str,
+    next_key: str,
+    on_advance,
+    on_change=None,
+    on_reset=None,
+    shortcuts: bool = False,
+) -> None:
+    st.session_state[names_key] = names
+    if st.session_state.get(tile_key) not in names:
+        st.session_state[tile_key] = names[0]
+        if on_reset is not None:
+            on_reset()
+    nav = st.columns([1, 4, 1])
+    previous: dict[str, Any] = {}
+    following: dict[str, Any] = {}
+    if shortcuts:
+        previous["shortcut"] = "Left"
+        following["shortcut"] = "Right"
+    nav[0].button(
+        "Previous",
+        width="stretch",
+        key=prev_key,
+        on_click=on_advance,
+        args=(-1,),
+        **previous,
+    )
+    chosen: dict[str, Any] = {}
+    if on_change is not None:
+        chosen["on_change"] = on_change
+    nav[1].selectbox(
+        "Tile",
+        names,
+        format_func=_review_tile_label,
+        key=tile_key,
+        **chosen,
+    )
+    nav[2].button(
+        "Next",
+        width="stretch",
+        key=next_key,
+        on_click=on_advance,
+        args=(1,),
+        **following,
+    )
+
+
+def _circles_on_tile(
+    image: np.ndarray,
+    tile_hits: pd.DataFrame,
+    placements,
+    pixel_size: float,
+    label_map,
+) -> tuple[list[float], list[float], list]:
+    height, width = int(image.shape[0]), int(image.shape[1])
+    x_locals: list[float] = []
+    y_locals: list[float] = []
+    if tile_hits is not None and not tile_hits.empty:
+        for _, row in tile_hits.iterrows():
+            x_local, y_local = local_xy_on_tile(
+                float(row["x_global"]),
+                float(row["y_global"]),
+                placements,
+                pixel_size,
+                width,
+                height,
+            )
+            x_locals.append(x_local)
+            y_locals.append(y_local)
+    circles = circles_from_rows(tile_hits, x_locals, y_locals, label_map)
+    return x_locals, y_locals, circles
 
 
 def _review_tile_rank(name: str) -> tuple[str, int, str]:
@@ -1094,34 +1136,16 @@ def render_tile_inspect_tab(
             st.warning(f"No matching tiles in {folder}.")
             return
         names = [_pointer_tile_name(path) for path in paths]
-    st.session_state["_inspect_tile_names"] = names
-    if st.session_state.get("inspect_tile") not in names:
-        st.session_state["inspect_tile"] = names[0]
-        st.session_state["inspect_cell"] = None
-        _drop_inspect_mark()
-    nav = st.columns([1, 4, 1])
-    nav[0].button(
-        "Previous",
-        shortcut="Left",
-        width="stretch",
-        key="inspect_prev",
-        on_click=_advance_inspect_tile,
-        args=(-1,),
-    )
-    nav[1].selectbox(
-        "Tile",
+    _review_tile_picker(
         names,
-        format_func=_review_tile_label,
-        key="inspect_tile",
+        names_key="_inspect_tile_names",
+        tile_key="inspect_tile",
+        prev_key="inspect_prev",
+        next_key="inspect_next",
+        on_advance=_advance_inspect_tile,
         on_change=_on_inspect_tile_selected,
-    )
-    nav[2].button(
-        "Next",
-        shortcut="Right",
-        width="stretch",
-        key="inspect_next",
-        on_click=_advance_inspect_tile,
-        args=(1,),
+        on_reset=_on_inspect_tile_selected,
+        shortcuts=True,
     )
 
     tile_name = str(st.session_state["inspect_tile"])
@@ -1247,22 +1271,9 @@ def render_tile_inspect_tab(
         return
 
     pixel_size = float(cfg_get(run_config, "pixel_size_nm", 960.0))
-    height, width = int(image.shape[0]), int(image.shape[1])
-    x_locals: list[float] = []
-    y_locals: list[float] = []
-    if not tile_hits.empty:
-        for _, row in tile_hits.iterrows():
-            x_local, y_local = local_xy_on_tile(
-                float(row["x_global"]),
-                float(row["y_global"]),
-                placements,
-                pixel_size,
-                width,
-                height,
-            )
-            x_locals.append(x_local)
-            y_locals.append(y_local)
-    circles = circles_from_rows(tile_hits, x_locals, y_locals, label_map)
+    _x_locals, _y_locals, circles = _circles_on_tile(
+        image, tile_hits, placements, pixel_size, label_map
+    )
     for circle, (_, row) in zip(circles, tile_hits.iterrows(), strict=False):
         missed = row["missed"] if "missed" in row else False
         if missed is not True and str(missed).lower() != "true":
@@ -1483,12 +1494,7 @@ def render_tile_inspect_tab(
 
 
 def _advance_labeled_review_tile(delta: int) -> None:
-    names = list(st.session_state.get("_labeled_review_tile_names") or [])
-    if not names:
-        return
-    current = st.session_state.get("labeled_review_tile")
-    index = names.index(current) if current in names else 0
-    st.session_state["labeled_review_tile"] = names[(index + delta) % len(names)]
+    _advance_review_tile("_labeled_review_tile_names", "labeled_review_tile", delta)
 
 
 def _last_run_stat_card(label: str, value: int | str, color: str, wash: str) -> str:
@@ -1504,28 +1510,24 @@ def _last_run_stat_card(label: str, value: int | str, color: str, wash: str) -> 
     )
 
 
-def _last_run_rate_text(value: float, *, defined: bool) -> str:
+def _percent_text(value: object, *, defined: bool = True) -> str:
     if not defined:
         return "—"
-    return f"{100.0 * float(value):.1f}%"
-
-
-def _last_run_std_text(value: float | None) -> str:
-    if value is None or not math.isfinite(value):
+    number = pd.to_numeric(value, errors="coerce")
+    if pd.isna(number) or not math.isfinite(float(number)):
         return "—"
-    return f"{100.0 * float(value):.1f}%"
+    return f"{100.0 * float(number):.1f}%"
 
 
 def _last_run_f_beta_text(counts: dict[str, float], *, beta: float, defined: bool) -> str:
     if not defined:
         return "—"
-    return _last_run_rate_text(
+    return _percent_text(
         f_beta_score(
             float(counts.get("precision", 0.0)),
             float(counts.get("recall", 0.0)),
             beta,
-        ),
-        defined=True,
+        )
     )
 
 
@@ -1597,7 +1599,6 @@ def _tile_crop_cells(
         run_dir=str(cfg_get(run_config, "input_dir", "") or "") or None,
     )
 
-
 def _sum_tile_counts(table: pd.DataFrame | None) -> dict[str, float]:
     
     keys = (
@@ -1605,6 +1606,7 @@ def _sum_tile_counts(table: pd.DataFrame | None) -> dict[str, float]:
         "n_true",
         "n_false",
         "n_unlabeled",
+        "n_inspect",
         "n_undetected",
         "n_undetected_below",
         "n_not_sure",
@@ -1617,32 +1619,52 @@ def _sum_tile_counts(table: pd.DataFrame | None) -> dict[str, float]:
     totals["n_true_total"] = totals["n_true"] + totals["n_undetected"]
     detected = totals["n_detected"]
     true_total = totals["n_true_total"]
+    false_total = totals["n_false"]
     totals["precision"] = (totals["n_true"] / detected) if detected else 0.0
     totals["recall"] = (totals["n_true"] / true_total) if true_total else 0.0
     return totals
 
 
+def _metrics_withheld(counts: dict) -> bool:
+    judged = (
+        int(counts.get("n_true") or 0)
+        + int(counts.get("n_false") or 0)
+        - int(counts.get("n_unlabeled") or 0)
+        + int(counts.get("n_undetected") or 0)
+        + int(counts.get("n_undetected_below") or 0)
+    )
+    return judged <= 0 or int(counts.get("n_inspect") or 0) <= 0
+
+
 def _render_last_run_summary(
     counts: dict[str, float],
     *,
-    min_size_nm: float = 0.0,
     beta: float = 1.0,
     score_std: dict[str, float | None] | None = None,
 ) -> None:
-    floor_um = float(min_size_nm) / NM_PER_UM if min_size_nm else 20.0
-    miss_title = f"Undetected true ≥ {floor_um:.0f} µm"
+    withheld = _metrics_withheld(counts)
+    dash = "—"
+
+    def count(key: str) -> int | str:
+        return dash if withheld else int(counts[key])
+
+    if withheld:
+        score_std = None
     counts_row = [
-        _last_run_stat_card("Detected", int(counts["n_detected"]), "#5b6472", "#5b647214"),
-        _last_run_stat_card("true of detected", int(counts["n_true"]), "#1f9d3a", "#28b44622"),
-        _last_run_stat_card("false of detected", int(counts["n_false"]), "#d61f1f", "#e3262622"),
-        _last_run_stat_card("Total true", int(counts["n_true_total"]), "#187a2e", "#28b44618"),
-        _last_run_stat_card(miss_title, int(counts["n_undetected"]), "#c56a00", "#d9770618"),
+        _last_run_stat_card("Detected", count("n_detected"), "#5b6472", "#5b647214"),
+        _last_run_stat_card("True", count("n_true"), "#1f9d3a", "#28b44622"),
+        _last_run_stat_card("False", count("n_false"), "#d61f1f", "#e3262622"),
+        _last_run_stat_card("Undetected", count("n_undetected"), "#c56a00", "#d9770618"),
     ]
-    rates_defined = int(counts["n_detected"]) > 0 and int(counts["n_true_total"]) > 0
+    rates_defined = (
+        not withheld
+        and int(counts["n_detected"]) > 0
+        and int(counts["n_true_total"]) > 0
+    )
     rates_row = [
         _last_run_stat_card(
             "P",
-            _last_run_rate_text(
+            _percent_text(
                 float(counts.get("precision", 0.0)),
                 defined=int(counts["n_detected"]) > 0,
             ),
@@ -1651,7 +1673,7 @@ def _render_last_run_summary(
         ),
         _last_run_stat_card(
             "R",
-            _last_run_rate_text(
+            _percent_text(
                 float(counts.get("recall", 0.0)),
                 defined=int(counts["n_true_total"]) > 0,
             ),
@@ -1670,19 +1692,19 @@ def _render_last_run_summary(
             [
                 _last_run_stat_card(
                     "P std",
-                    _last_run_std_text(score_std.get("precision")),
+                    _percent_text(score_std.get("precision")),
                     "#4b5d8a",
                     "#4b5d8a18",
                 ),
                 _last_run_stat_card(
                     "R std",
-                    _last_run_std_text(score_std.get("recall")),
+                    _percent_text(score_std.get("recall")),
                     "#6b3fa0",
                     "#6b3fa018",
                 ),
                 _last_run_stat_card(
                     "Fβ std",
-                    _last_run_std_text(score_std.get("f_beta")),
+                    _percent_text(score_std.get("f_beta")),
                     "#8a3b2b",
                     "#8a3b2b18",
                 ),
@@ -1700,43 +1722,12 @@ def _render_last_run_summary(
         f"<div style='{row_style}'>{''.join(counts_row)}{divider}{''.join(rates_row)}</div>",
         unsafe_allow_html=True,
     )
-    extra = []
-    if counts["n_unlabeled"]:
-        extra.append(f"{int(counts['n_unlabeled']):,} unlabeled (orange)")
-    if counts["n_not_sure"]:
-        extra.append(f"{int(counts['n_not_sure']):,} not sure (blue)")
-    if counts.get("n_undetected_below"):
-        extra.append(
-            f"{int(counts['n_undetected_below']):,} inspect marks below "
-            f"{float(min_size_nm) / NM_PER_UM:.0f} µm not counted"
-        )
-    if extra:
-        st.caption(" · ".join(extra) + ".")
-
-
-def _render_size_threshold_table(table: pd.DataFrame | None) -> None:
-    st.caption("Detected particles at least this large (equivalent circular diameter).")
-    st.dataframe(
-        particles_at_least(table),
-        width=280,
-        height=300,
-        hide_index=True,
-    )
-
-
-def _percent_cell(value: object) -> str:
-    number = pd.to_numeric(value, errors="coerce")
-    if pd.isna(number):
-        return "—"
-    return f"{100.0 * float(number):.1f}%"
-
 
 def _count_cell(value: object) -> str:
     number = pd.to_numeric(value, errors="coerce")
     if pd.isna(number):
         return "—"
     return f"{int(number):,}"
-
 
 def _metric_row(
     tile: str,
@@ -1747,6 +1738,7 @@ def _metric_row(
     beta: float,
     n_detected: int | None = None,
     n_true: int | None = None,
+    n_false: int | None = None,
     n_undetected: int | None = None,
     precision_std: float | None = None,
     recall_std: float | None = None,
@@ -1756,21 +1748,20 @@ def _metric_row(
     
     both = precision is not None and recall is not None
     f_beta = f_beta_score(float(precision), float(recall), beta) if both else None
-    blank = "—"
     return {
         "Tile": tile,
         "Crop": crop,
         "Detected": _count_cell(n_detected),
-        "true": _count_cell(n_true),
+        "True": _count_cell(n_true),
+        "False": _count_cell(n_false),
         "Undetected": _count_cell(n_undetected),
-        "P": _percent_cell(precision),
-        "R": _percent_cell(recall),
-        "Fβ": _percent_cell(f_beta),
-        "P std": _last_run_std_text(precision_std) if show_std else blank,
-        "R std": _last_run_std_text(recall_std) if show_std else blank,
-        "Fβ std": _last_run_std_text(f_beta_std) if show_std else blank,
+        "P": _percent_text(precision),
+        "R": _percent_text(recall),
+        "Fβ": _percent_text(f_beta),
+        "P std": _percent_text(precision_std) if show_std else "—",
+        "R std": _percent_text(recall_std) if show_std else "—",
+        "Fβ std": _percent_text(f_beta_std) if show_std else "—",
     }
-
 
 def _render_score_table(
     per_tile_table: pd.DataFrame | None,
@@ -1788,32 +1779,37 @@ def _render_score_table(
     )
     rows: list[dict[str, str]] = []
     for record in grouped:
-        detected = int(record.get("n_detected") or 0)
-        true_total = int(record.get("n_true_total") or 0)
+        withheld = _metrics_withheld(record)
         rows.append(
             _metric_row(
                 str(record["name"]),
                 "All together",
-                n_detected=detected if detected else None,
-                n_true=int(record.get("n_true") or 0) if detected else None,
-                n_undetected=int(record.get("n_undetected") or 0) if detected or true_total else None,
-                precision=record.get("precision"),
-                recall=record.get("recall"),
+                n_detected=None if withheld else int(record.get("n_detected") or 0),
+                n_true=None if withheld else int(record.get("n_true") or 0),
+                n_false=None if withheld else int(record.get("n_false") or 0),
+                n_undetected=None if withheld else int(record.get("n_undetected") or 0),
+                precision=None if withheld else record.get("precision"),
+                recall=None if withheld else record.get("recall"),
                 beta=beta,
-                precision_std=record.get("precision_std"),
-                recall_std=record.get("recall_std"),
-                f_beta_std=record.get("f_beta_std"),
+                precision_std=None if withheld else record.get("precision_std"),
+                recall_std=None if withheld else record.get("recall_std"),
+                f_beta_std=None if withheld else record.get("f_beta_std"),
                 show_std=True,
             )
         )
     if not rows:
         return
-    st.caption(
-        "Each row is one subfolder, with its tiles scored together. "
-        "Detected, true, and Undetected are the counts on those pictures. "
-        "P std, R std, and Fβ std are the spread across every tile in that subfolder."
-    )
     st.table(pd.DataFrame(rows).set_index(["Tile", "Crop"]))
+
+
+def _render_size_threshold_table(table: pd.DataFrame) -> None:
+    st.caption("Detected particles at least this large (equivalent circular diameter).")
+    st.dataframe(
+        particles_at_least(table),
+        width=250,
+        height=300,
+        hide_index=True,
+    )
 
 
 def render_labeled_tiles_tab(
@@ -1920,24 +1916,19 @@ def render_labeled_tiles_tab(
             run_dir=run_dir,
         )
     folder_score_std = std_of_tile_scores(tile_score_table, beta=beta)
-    n_folder_tiles = (
-        0 if tile_score_table is None or tile_score_table.empty else int(len(tile_score_table))
-    )
     crop_std_by_tile: dict[str, dict[str, float | None]] = {}
     if per_tile_table is not None and not per_tile_table.empty:
         for tile in per_tile_table["tile"].astype(str):
-            crop_std_by_tile[tile] = std_of_crop_cells(
-                _tile_crop_cells(
-                    tile,
-                    detections,
-                    labels_df,
-                    run_config,
-                    mosaic,
-                    origin_cache,
-                    min_size_nm=size_floor_nm,
-                    folder_tiles=label_tiles,
-                    beta=beta,
-                )
+            crop_std_by_tile[tile] = _tile_crop_std(
+                tile,
+                detections,
+                labels_df,
+                run_config,
+                mosaic,
+                origin_cache,
+                min_size_nm=size_floor_nm,
+                folder_tiles=label_tiles,
+                beta=beta,
             )
     _render_score_table(
         per_tile_table,
@@ -1955,33 +1946,16 @@ def render_labeled_tiles_tab(
         horizontal=True,
         key="last_run_metrics_scope",
         help="Each tile is counted on its own. All tiles adds those tiles. "
-        "A false on one picture is not a false on the others.",
     )
 
     if names:
-        st.session_state["_labeled_review_tile_names"] = names
-        if st.session_state.get("labeled_review_tile") not in names:
-            st.session_state["labeled_review_tile"] = names[0]
-        nav = st.columns([1, 4, 1])
-        nav[0].button(
-            "Previous",
-            width="stretch",
-            key="labeled_review_prev",
-            on_click=_advance_labeled_review_tile,
-            args=(-1,),
-        )
-        nav[1].selectbox(
-            "Tile",
+        _review_tile_picker(
             names,
-            format_func=_review_tile_label,
-            key="labeled_review_tile",
-        )
-        nav[2].button(
-            "Next",
-            width="stretch",
-            key="labeled_review_next",
-            on_click=_advance_labeled_review_tile,
-            args=(1,),
+            names_key="_labeled_review_tile_names",
+            tile_key="labeled_review_tile",
+            prev_key="labeled_review_prev",
+            next_key="labeled_review_next",
+            on_advance=_advance_labeled_review_tile,
         )
 
     if scope == "per_tile":
@@ -2012,7 +1986,6 @@ def render_labeled_tiles_tab(
             )
         _render_last_run_summary(
             counts,
-            min_size_nm=size_floor_nm,
             beta=beta,
             score_std=crop_std_by_tile.get(selected),
         )
@@ -2022,16 +1995,9 @@ def render_labeled_tiles_tab(
     else:
         _render_last_run_summary(
             folder_counts,
-            min_size_nm=size_floor_nm,
             beta=beta,
             score_std=folder_score_std,
         )
-        if n_folder_tiles:
-            st.caption(
-                "P std, R std, and Fβ std are the spread across all "
-                f"{n_folder_tiles} tiles in the input folder."
-            )
-        _render_size_threshold_table(detections)
 
     if not names:
         st.info("The last pipeline run has no detections.")
@@ -2084,22 +2050,9 @@ def render_labeled_tiles_tab(
         return
 
     pixel_size = float(cfg_get(run_config, "pixel_size_nm", 960.0))
-    height, width = int(image.shape[0]), int(image.shape[1])
-    x_locals: list[float] = []
-    y_locals: list[float] = []
-    if not tile_hits.empty:
-        for _, row in tile_hits.iterrows():
-            x_local, y_local = local_xy_on_tile(
-                float(row["x_global"]),
-                float(row["y_global"]),
-                placements,
-                pixel_size,
-                width,
-                height,
-            )
-            x_locals.append(x_local)
-            y_locals.append(y_local)
-    circles = circles_from_rows(tile_hits, x_locals, y_locals, label_map)
+    x_locals, _y_locals, circles = _circles_on_tile(
+        image, tile_hits, placements, pixel_size, label_map
+    )
     view = overlay_view(image, circles, pixel_size, crop=None, max_side=OVERVIEW_MAX_SIDE)
     if view.rgb.size == 0:
         st.error("No pixels to show for this tile.")
@@ -2286,14 +2239,11 @@ def _collection_image(
         return None
 
 
-def _source_caption(path: Path | None, *, last_pipeline: bool) -> str:
+def _source_caption(path: Path | None) -> str:
     if path is None:
         return "none"
     folder = path.parent.name or str(path.parent)
-    name = path.name
-    if last_pipeline:
-        return f"{folder}/{name} (last output)"
-    return str(path.name if path.is_file() else path)
+    return f"{folder}/{path.name} (last output)"
 
 
 def _last_pipeline_tables(csv_path: Path | None) -> list[pd.DataFrame]:

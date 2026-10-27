@@ -124,32 +124,50 @@ def _pair_merge_limit(
     return limit
 
 
+def _merge_neighbors(
+    particles: Sequence[Particle],
+    merge_radius: float,
+    size_match_fraction: float,
+) -> tuple[list[Particle], list[list[int]] | None]:
+    remaining = sorted(particles, key=lambda p: p.confidence, reverse=True)
+    search_r = float(merge_radius)
+    if size_match_fraction > 0 and remaining:
+        largest = max(float(p.size) for p in remaining)
+        search_r = max(search_r, float(size_match_fraction) * largest)
+    if search_r <= 0:
+        return remaining, None
+    coords = np.array([[p.x_global, p.y_global] for p in remaining], dtype=np.float64)
+    tree = cKDTree(coords)
+    return remaining, tree.query_ball_tree(tree, search_r)
+
+
+def _cluster_size(members: Sequence[Particle], size_aggregation: str) -> float:
+    sizes = np.array([p.size for p in members], dtype=np.float64)
+    if size_aggregation == "max":
+        return float(np.max(sizes))
+    return float(np.mean(sizes))
+
+
+def _keep_each(particles: Sequence[Particle]) -> list[Particle]:
+    return _renumber([replace(p, **_nsew_fields([p])) for p in particles])
+
+
 def deduplicate(
     particles: Sequence[Particle],
     merge_radius: float,
     size_aggregation: str = "max",
     size_match_fraction: float = 0.0,
 ) -> list[Particle]:
-    
     if not particles:
         return []
-    remaining = sorted(particles, key=lambda p: p.confidence, reverse=True)
-    if merge_radius <= 0 and size_match_fraction <= 0:
-        return _renumber([replace(p, **_nsew_fields([p])) for p in remaining])
+    remaining, neighbor_lists = _merge_neighbors(
+        particles, merge_radius, size_match_fraction
+    )
+    if neighbor_lists is None:
+        return _keep_each(remaining)
 
-    coords = np.array([[p.x_global, p.y_global] for p in remaining], dtype=np.float64)
-    sizes = np.array([p.size for p in remaining], dtype=np.float64)
-    search_r = float(merge_radius)
-    if size_match_fraction > 0 and len(sizes):
-        search_r = max(search_r, float(size_match_fraction) * float(np.max(sizes)))
-    if search_r <= 0:
-        return _renumber([replace(p, **_nsew_fields([p])) for p in remaining])
-
-    tree = cKDTree(coords)
-    neighbor_lists = tree.query_ball_tree(tree, search_r)
     used = np.zeros(len(remaining), dtype=bool)
     kept: list[Particle] = []
-
     for i, seed in enumerate(remaining):
         if used[i]:
             continue
@@ -168,13 +186,15 @@ def deduplicate(
             ):
                 members_idx.append(j)
         members = [remaining[j] for j in members_idx]
-        cluster_sizes = np.array([p.size for p in members], dtype=np.float64)
-        size = float(
-            np.max(cluster_sizes) if size_aggregation == "max" else np.mean(cluster_sizes)
+        kept.append(
+            replace(
+                seed,
+                id=0,
+                size=_cluster_size(members, size_aggregation),
+                **_nsew_fields(members),
+            )
         )
-        kept.append(replace(seed, id=0, size=size, **_nsew_fields(members)))
         used[members_idx] = True
-
     return _renumber(kept)
 
 
@@ -184,23 +204,16 @@ def deduplicate_nsew(
     size_aggregation: str = "max",
     size_match_fraction: float = DEFAULT_NSEW_SIZE_MATCH_FRACTION,
 ) -> list[Particle]:
-    
     if not particles:
         return []
-    remaining = sorted(particles, key=lambda p: p.confidence, reverse=True)
-    coords = np.array([[p.x_global, p.y_global] for p in remaining], dtype=np.float64)
-    sizes = np.array([p.size for p in remaining], dtype=np.float64)
-    search_r = float(merge_radius)
-    if size_match_fraction > 0 and len(sizes):
-        search_r = max(search_r, float(size_match_fraction) * float(np.max(sizes)))
-    if search_r <= 0:
-        return _renumber([replace(p, **_nsew_fields([p])) for p in remaining])
+    remaining, neighbor_lists = _merge_neighbors(
+        particles, merge_radius, size_match_fraction
+    )
+    if neighbor_lists is None:
+        return _keep_each(remaining)
 
-    tree = cKDTree(coords)
-    neighbor_lists = tree.query_ball_tree(tree, search_r)
     used = np.zeros(len(remaining), dtype=bool)
     kept: list[Particle] = []
-
     for i, seed in enumerate(remaining):
         if used[i]:
             continue
@@ -232,13 +245,15 @@ def deduplicate_nsew(
                 members_idx.append(j)
                 stems.add(stem)
         members = [remaining[j] for j in members_idx]
-        cluster_sizes = np.array([p.size for p in members], dtype=np.float64)
-        size = float(
-            np.max(cluster_sizes) if size_aggregation == "max" else np.mean(cluster_sizes)
+        kept.append(
+            replace(
+                seed,
+                id=0,
+                size=_cluster_size(members, size_aggregation),
+                **_nsew_fields(members),
+            )
         )
-        kept.append(replace(seed, id=0, size=size, **_nsew_fields(members)))
         used[members_idx] = True
-
     return _renumber(kept)
 
 

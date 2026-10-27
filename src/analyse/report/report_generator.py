@@ -194,9 +194,6 @@ def photo_display_rgb(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
 
 
-def to_display_rgb(image: np.ndarray) -> np.ndarray:
-    return photo_display_rgb(image)
-
 _DPI = 220.0
 _BASE_DPI = 150.0
 
@@ -566,6 +563,20 @@ def _rgb_tile(mosaic_rgb: np.ndarray) -> Image.Image:
         rgb = cv2.cvtColor(rgb, cv2.COLOR_GRAY2RGB)
     return Image.fromarray(np.ascontiguousarray(rgb[:, :, :3].astype(np.uint8)), mode="RGB")
 
+def _paste_captioned(
+    page: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    y: int,
+    caption: str,
+    rgb: np.ndarray,
+    slot: int,
+    font: ImageFont.ImageFont,
+    caption_h: int,
+) -> int:
+    draw.text((_MARGIN, y), caption, fill=_MUTED, font=font)
+    return _paste_fitted(page, _rgb_tile(rgb), y + caption_h, slot)
+
+
 def _paste_fitted(page: Image.Image, tile: Image.Image, top: int, max_h: int) -> int:
     max_w = _PAGE_W - 2 * _MARGIN
     scale = min(max_w / tile.width, max_h / max(tile.height, 1), 1.0)
@@ -600,13 +611,13 @@ def _mosaic_page(
     gap = _s(28)
     available = _PAGE_H - y - _MARGIN - 2 * caption_h - gap
     slot = max(available // 2, 1)
-    draw.text((_MARGIN, y), "With labels", fill=_MUTED, font=_font(_BODY))
-    y += caption_h
-    y = _paste_fitted(image, _rgb_tile(mosaic_rgb), y, slot)
-    y += gap
-    draw.text((_MARGIN, y), "Without labels", fill=_MUTED, font=_font(_BODY))
-    y += caption_h
-    _paste_fitted(image, _rgb_tile(plain), y, slot)
+    body = _font(_BODY)
+    y = _paste_captioned(
+        image, draw, y, "With labels", mosaic_rgb, slot, body, caption_h
+    )
+    _paste_captioned(
+        image, draw, y + gap, "Without labels", plain, slot, body, caption_h
+    )
     return image
 
 def _filename_is_placeable(filename: str, pattern: str) -> bool:
@@ -744,17 +755,23 @@ def _unstitched_pages(
         slot = max((min(room, _s(900)) - 2 * label_h - gap) // 2, 1)
         plain = None if np.asarray(plain_rgb).size == 0 else plain_rgb
         if plain is None:
-            draw.text((_MARGIN, y), "With labels", fill=_MUTED, font=caption_font)
-            y += label_h
-            y = _paste_fitted(image, _rgb_tile(labeled_rgb), y, slot * 2)
+            y = _paste_captioned(
+                image, draw, y, "With labels", labeled_rgb, slot * 2, caption_font, label_h
+            )
         else:
-            draw.text((_MARGIN, y), "With labels", fill=_MUTED, font=caption_font)
-            y += label_h
-            y = _paste_fitted(image, _rgb_tile(labeled_rgb), y, slot)
-            y += gap
-            draw.text((_MARGIN, y), "Without labels", fill=_MUTED, font=caption_font)
-            y += label_h
-            y = _paste_fitted(image, _rgb_tile(plain), y, slot)
+            y = _paste_captioned(
+                image, draw, y, "With labels", labeled_rgb, slot, caption_font, label_h
+            )
+            y = _paste_captioned(
+                image,
+                draw,
+                y + gap,
+                "Without labels",
+                plain,
+                slot,
+                caption_font,
+                label_h,
+            )
         y += _s(28)
         first_on_page = False
     pages.append(image)

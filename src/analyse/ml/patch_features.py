@@ -9,7 +9,7 @@ from skimage.morphology import skeletonize
 
 from src.analyse.detection.detector import CANDIDATE_FEATURE_FIELDS, ParticleCandidate
 from src.overall.io.tile_loader import DEFAULT_FILENAME_PATTERN
-from src.analyse.ml.features import size_um_from_px
+from src.analyse.ml.features import candidate_feature_vector
 from src.analyse.ml.patches import tile_row_col
 
 HOG_SIZE = 64
@@ -75,18 +75,19 @@ def _hog_vec(channel: np.ndarray) -> np.ndarray:
     ).astype(np.float64)
 
 
-def _lbp_hist(channel: np.ndarray) -> np.ndarray:
+def _uint8(channel: np.ndarray) -> np.ndarray:
     image = _resize(channel)
-    scaled = np.clip(image * 255.0, 0, 255).astype(np.uint8)
-    codes = local_binary_pattern(scaled, P=LBP_POINTS, R=LBP_RADIUS, method="uniform")
+    return np.clip(image * 255.0, 0, 255).astype(np.uint8)
+
+
+def _lbp_hist(channel: np.ndarray) -> np.ndarray:
+    codes = local_binary_pattern(_uint8(channel), P=LBP_POINTS, R=LBP_RADIUS, method="uniform")
     hist, _ = np.histogram(codes, bins=LBP_BINS, range=(0, LBP_BINS), density=True)
     return hist.astype(np.float64)
 
 
 def _hu(channel: np.ndarray) -> np.ndarray:
-    image = _resize(channel)
-    scaled = np.clip(image * 255.0, 0, 255).astype(np.uint8)
-    moments = cv2.moments(scaled)
+    moments = cv2.moments(_uint8(channel))
     hu = cv2.HuMoments(moments).reshape(-1)
     return np.sign(hu) * np.log1p(np.abs(hu))
 
@@ -98,7 +99,8 @@ def _binary(channel: np.ndarray) -> np.ndarray:
 
 
 def _geometry(raw: np.ndarray, residual: np.ndarray) -> np.ndarray:
-    mask = _binary(residual)
+    residual_small = _resize(residual)
+    mask = _binary(residual_small)
     area = float(np.count_nonzero(mask))
     total = float(mask.size)
     solidity = 0.0
@@ -128,7 +130,7 @@ def _geometry(raw: np.ndarray, residual: np.ndarray) -> np.ndarray:
         n_holes, _ = cv2.connectedComponents(inv, 8)
         cc_holes = float(max(n_holes - 1, 0))
         skeleton_frac = float(np.count_nonzero(skeletonize(mask.astype(bool)))) / area
-    gy, gx = np.gradient(_resize(residual).astype(np.float64))
+    gy, gx = np.gradient(residual_small.astype(np.float64))
     angles = np.arctan2(gy, gx)
     mag = np.hypot(gx, gy)
     weights = mag.reshape(-1)
@@ -140,13 +142,12 @@ def _geometry(raw: np.ndarray, residual: np.ndarray) -> np.ndarray:
         orient_entropy = float(-(hist[hist > 0] * np.log(hist[hist > 0] + 1e-12)).sum())
     else:
         orient_entropy = 0.0
-    small = _resize(residual)
-    h, w = small.shape
+    h, w = residual_small.shape
     cy, cx = h // 2, w // 2
     yy, xx = np.ogrid[:h, :w]
     dist = np.hypot(yy - cy, xx - cx)
-    inner = small[dist <= 8]
-    ring = small[(dist > 8) & (dist <= 20)]
+    inner = residual_small[dist <= 8]
+    ring = residual_small[(dist > 8) & (dist <= 20)]
     ring_contrast = float(inner.mean() - ring.mean()) if inner.size and ring.size else 0.0
     return np.array(
         [
@@ -179,41 +180,6 @@ def patch_descriptor(channels: np.ndarray) -> np.ndarray:
     return np.concatenate([np.asarray(p, dtype=np.float64).reshape(-1) for p in parts])
 
 
-def tabular_layout_vector(
-    size_um: float = 0.0,
-    confidence: float = 0.0,
-    circularity: float = 0.0,
-    support_over_area: float = 0.0,
-    edge_distance_px: float = 0.0,
-    tile_border_dist_px: float = 0.0,
-    n_neighbors_48: float = 0.0,
-    local_peak_snr: float = 0.0,
-    radial_inner: float = 0.0,
-    radial_mid: float = 0.0,
-    radial_outer: float = 0.0,
-    tile_row: float = 0.0,
-    tile_col: float = 0.0,
-) -> np.ndarray:
-    return np.array(
-        [
-            float(size_um),
-            float(confidence),
-            float(circularity),
-            float(support_over_area),
-            float(edge_distance_px),
-            float(tile_border_dist_px),
-            float(n_neighbors_48),
-            float(local_peak_snr),
-            float(radial_inner),
-            float(radial_mid),
-            float(radial_outer),
-            float(tile_row),
-            float(tile_col),
-        ],
-        dtype=np.float64,
-    )
-
-
 def layout_from_candidate(
     candidate: ParticleCandidate,
     pixel_size_nm: float,
@@ -221,21 +187,8 @@ def layout_from_candidate(
     pattern: str = DEFAULT_FILENAME_PATTERN,
 ) -> np.ndarray:
     tile_row, tile_col = tile_row_col(source_tile, pattern)
-    return tabular_layout_vector(
-        size_um=size_um_from_px(candidate.size, pixel_size_nm),
-        confidence=float(candidate.confidence),
-        circularity=float(candidate.circularity),
-        support_over_area=float(candidate.support_over_area),
-        edge_distance_px=float(candidate.edge_distance_px),
-        tile_border_dist_px=float(candidate.tile_border_dist_px),
-        n_neighbors_48=float(candidate.n_neighbors_48),
-        local_peak_snr=float(candidate.local_peak_snr),
-        radial_inner=float(candidate.radial_inner),
-        radial_mid=float(candidate.radial_mid),
-        radial_outer=float(candidate.radial_outer),
-        tile_row=tile_row,
-        tile_col=tile_col,
-    )
+    base = candidate_feature_vector(candidate, pixel_size_nm)
+    return np.concatenate([base, [float(tile_row), float(tile_col)]])
 
 
 def patch_feature_vector(

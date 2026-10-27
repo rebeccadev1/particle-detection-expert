@@ -165,13 +165,7 @@ def _gaussian_blur(image: np.ndarray, sigma: float) -> np.ndarray:
             borderType=cv2.BORDER_REFLECT_101,
         )
         return cv2.resize(blurred, (width, height), interpolation=cv2.INTER_LINEAR)
-    return cv2.GaussianBlur(
-        array,
-        ksize=(0, 0),
-        sigmaX=float(sigma),
-        sigmaY=float(sigma),
-        borderType=cv2.BORDER_REFLECT_101,
-    )
+    return _gaussian_blur_full(array, sigma)
 
 
 def _gaussian_blur_full(image: np.ndarray, sigma: float) -> np.ndarray:
@@ -1145,13 +1139,12 @@ def _gate_blob(
     return candidate, "kept"
 
 
-def apply_structure_filters(
+def _structure_stages(
     candidates: list[ParticleCandidate],
     config: dict[str, Any],
-) -> list[ParticleCandidate]:
-    
+) -> tuple[list[ParticleCandidate], list[ParticleCandidate]]:
     if not candidates:
-        return candidates
+        return [], []
     counted = attach_neighbor_counts(candidates, NEIGHBOR_FEATURE_PX)
     size_ratio = float(
         cfg_get(config, "detection.structure_size_ratio", _STRUCTURE_SIZE_RATIO)
@@ -1162,7 +1155,7 @@ def apply_structure_filters(
         int(cfg_get(config, "detection.structure_min_neighbors")),
         size_ratio=size_ratio,
     )
-    return reject_axis_aligned_chains(
+    chained = reject_axis_aligned_chains(
         clustered,
         bin_px=float(cfg_get(config, "detection.structure_line_bin_px", 10.0)),
         min_run=int(cfg_get(config, "detection.structure_line_min_run", 3)),
@@ -1172,6 +1165,17 @@ def apply_structure_filters(
         ),
         size_ratio=size_ratio,
     )
+    return clustered, chained
+
+
+def apply_structure_filters(
+    candidates: list[ParticleCandidate],
+    config: dict[str, Any],
+) -> list[ParticleCandidate]:
+    if not candidates:
+        return candidates
+    _clustered, chained = _structure_stages(candidates, config)
+    return chained
 
 
 def detect_particles(
@@ -1182,12 +1186,11 @@ def detect_particles(
     photo: np.ndarray | None = None,
 ) -> list[ParticleCandidate]:
     
-    _array, residual, edge_distance, blobs, protect = _residual_and_blobs(
+    array, residual, edge_distance, blobs, protect = _residual_and_blobs(
         image, config, fft_mask
     )
     if blobs.size == 0:
         return []
-    array = np.ascontiguousarray(image, dtype=_FLOAT)
     candidates: list[ParticleCandidate] = []
     for y, x, sigma in blobs:
         cand, _reason = _gate_blob(
@@ -1252,28 +1255,9 @@ def trace_locations(
                 )
             )
         gated_reasons.append(reason)
-    pre = attach_neighbor_counts(
-        [c for c, r in zip(gated, gated_reasons) if r == "kept"],
-        NEIGHBOR_FEATURE_PX,
-    )
-    size_ratio = float(
-        cfg_get(config, "detection.structure_size_ratio", _STRUCTURE_SIZE_RATIO)
-    )
-    clustered = reject_clustered_candidates(
-        pre,
-        float(cfg_get(config, "detection.structure_neighbor_px", 48.0)),
-        int(cfg_get(config, "detection.structure_min_neighbors")),
-        size_ratio=size_ratio,
-    )
-    chained = reject_axis_aligned_chains(
-        clustered,
-        bin_px=float(cfg_get(config, "detection.structure_line_bin_px", 10.0)),
-        min_run=int(cfg_get(config, "detection.structure_line_min_run", 3)),
-        min_span=float(cfg_get(config, "detection.structure_line_min_span_px", 48.0)),
-        max_gap=float(
-            cfg_get(config, "detection.structure_line_max_gap_px", _STRUCTURE_LINE_MAX_GAP_PX)
-        ),
-        size_ratio=size_ratio,
+    clustered, chained = _structure_stages(
+        [c for c, reason in zip(gated, gated_reasons) if reason == "kept"],
+        config,
     )
     chained_ids = {(c.x_local, c.y_local) for c in chained}
     clustered_ids = {(c.x_local, c.y_local) for c in clustered}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
 
@@ -40,6 +41,7 @@ from src.verification.ui import (
     render_labeled_tiles_tab,
     render_tile_inspect_tab,
     request_last_run,
+    _render_size_threshold_table,
 )
 from src.verification.queue import load_last_pipeline, load_particles_csv, write_last_pipeline
 from src.analyse.job import claim_pipeline_result, pipeline_status, start_pipeline, stop_pipeline
@@ -49,7 +51,6 @@ from src.analyse.report.report_generator import (
     encode_overlay_jpeg,
     overlay_downsample,
     overlay_rgb,
-    particles_at_least,
     size_distribution,
     summary_pdf_name,
     summary_stats,
@@ -518,12 +519,48 @@ def _nsew_config(base: dict) -> dict:
 def _on_reset_standard(base: dict) -> None:
     _apply_standard_settings(base)
 
-def _on_settings_profile(base: dict) -> None:
-    _apply_standard_settings(base)
-
 def _on_profile_choice(base: dict) -> None:
     st.session_state["ui_settings_nsew"] = st.session_state.get("ui_settings_profile") == "NSEW"
-    _on_settings_profile(base)
+    _apply_standard_settings(base)
+
+
+def _folder_field(
+    label: str,
+    key: str,
+    choices: list[str],
+    help_text: str,
+    *,
+    on_change=None,
+    on_change_args: tuple = (),
+) -> None:
+    placeholder = "Start typing a folder name"
+    extra: dict = {}
+    if on_change is not None:
+        extra["on_change"] = on_change
+        extra["args"] = on_change_args
+    if choices:
+        if key not in st.session_state:
+            extra["index"] = None
+        st.selectbox(
+            label,
+            choices,
+            placeholder=placeholder,
+            accept_new_options=True,
+            filter_mode="fuzzy",
+            persist_state="session",
+            key=key,
+            help=help_text,
+            **extra,
+        )
+        return
+    st.text_input(
+        label,
+        persist_state="session",
+        key=key,
+        placeholder=placeholder,
+        help=help_text,
+        **extra,
+    )
 
 def _prepare_ui_state(base: dict) -> None:
     if st.session_state.get("ui_schema") != UI_SCHEMA:
@@ -534,7 +571,6 @@ def _prepare_ui_state(base: dict) -> None:
         )
         _apply_standard_settings(base, "")
         st.session_state["ui_schema"] = UI_SCHEMA
-        st.session_state["ui_initialized"] = True
         st.session_state["ui_param_mount"] = "session"
     elif st.session_state.get("ui_param_mount") != "session":
         _apply_standard_settings(base)
@@ -640,36 +676,14 @@ def _render_adjust_parameters(base: dict) -> None:
             st.session_state.pop(input_key, None)
             st.session_state["ui_input_dir"] = ""
             st.session_state[_hold_key("ui_input_dir")] = ""
-        folder_help = (
-            "Folder under ASML SE/Inputs. Suggestions appear as you type."
+        _folder_field(
+            "Tile folder",
+            input_key,
+            folder_choices,
+            "Folder under ASML SE/Inputs. Suggestions appear as you type.",
+            on_change=_on_input_folder,
+            on_change_args=(base,),
         )
-        if folder_choices:
-            input_kwargs = {}
-            if input_key not in st.session_state:
-                input_kwargs["index"] = None
-            st.selectbox(
-                "Tile folder",
-                folder_choices,
-                placeholder="Start typing a folder name",
-                accept_new_options=True,
-                filter_mode="fuzzy",
-                persist_state="session",
-                key=input_key,
-                on_change=_on_input_folder,
-                args=(base,),
-                help=folder_help,
-                **input_kwargs,
-            )
-        else:
-            st.text_input(
-                "Tile folder",
-                persist_state="session",
-                key=input_key,
-                placeholder="Start typing a folder name",
-                on_change=_on_input_folder,
-                args=(base,),
-                help=folder_help,
-            )
         st.slider(
             "Tile overlap fraction",
             min_value=0.0,
@@ -918,32 +932,12 @@ def _render_adjust_parameters(base: dict) -> None:
         )
         standard_output = next_versioned_output_name(tile_folder)
         output_choices = output_folder_choices(current_output, standard_output)
-        output_help = (
-            "Folder under ASML SE/Outputs."
+        _folder_field(
+            "Output folder",
+            output_key,
+            output_choices,
+            "Folder under ASML SE/Outputs.",
         )
-        if output_choices:
-            output_kwargs = {}
-            if output_key not in st.session_state:
-                output_kwargs["index"] = None
-            st.selectbox(
-                "Output folder",
-                output_choices,
-                placeholder="Start typing a folder name",
-                accept_new_options=True,
-                filter_mode="fuzzy",
-                persist_state="session",
-                key=output_key,
-                help=output_help,
-                **output_kwargs,
-            )
-        else:
-            st.text_input(
-                "Output folder",
-                persist_state="session",
-                key=output_key,
-                placeholder="Start typing a folder name",
-                help=output_help,
-            )
         st.number_input(
             "Merge radius (px)",
             min_value=0.0,
@@ -1096,8 +1090,6 @@ def _apply_finished_pipeline() -> None:
         if report_path.is_file():
             report_path.touch()
     write_last_pipeline(config, csv_path)
-    st.session_state["last_pipeline_csv"] = str(csv_path)
-    st.session_state["ui_show_last_run"] = True
     st.session_state["load_last_run"] = True
     st.session_state["load_labeled_tiles"] = False
     stats = summary_stats(table)
@@ -1212,6 +1204,14 @@ def _labels_stamp() -> int:
         return 0
 
 
+def _review_label_colors(table: pd.DataFrame, config: dict):
+    return label_colors_for_hits(
+        table,
+        labels_store(ROOT).load(),
+        run_dir=str(config.get("input_dir") or "") or None,
+    )
+
+
 def _mosaic_labels_on() -> bool:
     return st.checkbox(
         "Labels",
@@ -1251,11 +1251,7 @@ def _mosaic_with_review_labels(
     if not getattr(mosaic, "placements", None) or int(mosaic.full_width) < 1:
         return None
     scale = rgb.shape[1] / float(mosaic.full_width)
-    colors = label_colors_for_hits(
-        table,
-        labels_store(ROOT).load(),
-        run_dir=str(config.get("input_dir") or "") or None,
-    )
+    colors = _review_label_colors(table, config)
     marked = draw_overlay_markers(
         rgb, mosaic, table, config, colors=colors, scale=scale
     )
@@ -1303,16 +1299,6 @@ def _finished_run_state(config: dict) -> tuple[pd.DataFrame | None, object, dict
             loaded[key] = value
     loaded["report"] = config.get("report", loaded.get("report", {}))
     return load_particles_csv(last_csv), None, loaded
-
-
-def _render_size_threshold_table(table: pd.DataFrame) -> None:
-    st.caption("Detected particles at least this large (equivalent circular diameter).")
-    st.dataframe(
-        particles_at_least(table),
-        width=250,
-        height=300,
-        hide_index=True,
-    )
 
 
 def _render_size_bins(table: pd.DataFrame, min_size_um: float) -> None:
@@ -1365,7 +1351,7 @@ def _summary_heading(config: dict) -> str:
     name = Path(raw).name if raw else ""
     if not name:
         return "Last run"
-    return f"Summary of {name}"
+    return f"Summary of last run ({name})"
 
 
 def _request_labeled_tiles() -> None:
@@ -1457,7 +1443,7 @@ def _render_finished_run(config: dict) -> bool:
         with dl_csv:
             st.download_button(
                 "Download CSV",
-                data=result_table(table).to_csv(index=False).encode("utf-8"),
+                data=display.to_csv(index=False).encode("utf-8"),
                 file_name="particles.csv",
                 mime="text/csv",
                 key="last_run_download_csv",
@@ -1508,10 +1494,12 @@ def _render_finished_run(config: dict) -> bool:
                         download_mime = "image/jpeg"
                 else:
                     try:
-                        if not (saved.parent / "mosaic_plain.png").is_file():
-                            with st.spinner("Stitching the mosaic without labels…"):
-                                plain_rgb = _saved_plain_mosaic(saved, active_config)
-                        else:
+                        stitch = (
+                            st.spinner("Stitching the mosaic without labels…")
+                            if not (saved.parent / "mosaic_plain.png").is_file()
+                            else nullcontext()
+                        )
+                        with stitch:
                             plain_rgb = _saved_plain_mosaic(saved, active_config)
                     except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
                         st.error("The mosaic without labels could not be built.")
@@ -1560,11 +1548,7 @@ def _render_finished_run(config: dict) -> bool:
                 try:
                     plain = overlay_rgb(mosaic, active_config, crop=None)
                     st.session_state["overlay_plain"] = plain
-                    review_colors = label_colors_for_hits(
-                        table,
-                        labels_store(ROOT).load(),
-                        run_dir=str(active_config.get("input_dir") or "") or None,
-                    )
+                    review_colors = _review_label_colors(table, active_config)
                     st.session_state["overlay"] = draw_overlay_markers(
                         plain,
                         mosaic,
@@ -1580,14 +1564,14 @@ def _render_finished_run(config: dict) -> bool:
                 else:
                     st.session_state["overlay_key"] = overlay_key
                     out_dir = resolve_output_dir(active_config.get("output_dir"))
-                    out_dir.mkdir(parents=True, exist_ok=True)
                     for name, rgb in (
                         ("mosaic_overlay.png", st.session_state["overlay"]),
                         ("mosaic_plain.png", st.session_state["overlay_plain"]),
                     ):
-                        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-                        if not cv2.imwrite(str(out_dir / name), bgr):
-                            st.error(f"Failed to write mosaic image to {out_dir / name}")
+                        try:
+                            _write_mosaic_png(rgb, out_dir / name)
+                        except OSError as exc:
+                            st.error(str(exc))
             labeled = st.session_state.get("overlay")
             plain = st.session_state.get("overlay_plain")
             if not show_labels and plain is None and labeled is not None:
@@ -1639,11 +1623,7 @@ def _render_finished_run(config: dict) -> bool:
                             table,
                             active_config,
                             crop=crop,
-                            colors=label_colors_for_hits(
-                                table,
-                                labels_store(ROOT).load(),
-                                run_dir=str(active_config.get("input_dir") or "") or None,
-                            ),
+                            colors=_review_label_colors(table, active_config),
                         )
                     caption = (
                         "Cropped region with labels"
@@ -1659,11 +1639,6 @@ def _render_finished_run(config: dict) -> bool:
                 )
             _render_unstitched_images(loose_paths, table, active_config, show_labels)
     return True
-
-
-def _render_detection(config: dict) -> None:
-    _apply_finished_pipeline()
-    _pipeline_controls(config)
 
 
 base_config = _base_config()
@@ -1704,7 +1679,8 @@ if page == "Analyse":
     config = _config_from_state(base_config)
     with st.container(border=True, key="block-run"):
         st.header("Run/stop pipeline")
-        _render_detection(config)
+        _apply_finished_pipeline()
+        _pipeline_controls(config)
     run_loaded = _render_finished_run(config)
     if run_loaded:
         with st.container(border=True, key="block-review"):
@@ -1737,7 +1713,6 @@ if page == "Verify":
                 render_label_tab(
                     config,
                     ROOT,
-                    st.session_state.get("table"),
                     st.session_state.get("mosaic"),
                 )
     if pointer_tab.open:

@@ -48,9 +48,6 @@ def _gaussian_blur(image: np.ndarray, sigma: float) -> np.ndarray:
 
 
 def denoise(image: np.ndarray, sigma: float) -> np.ndarray:
-    
-    if sigma <= 0:
-        return np.ascontiguousarray(image, dtype=_FLOAT)
     return _gaussian_blur(image, sigma)
 
 

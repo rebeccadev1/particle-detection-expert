@@ -712,7 +712,7 @@ def last_run_class_counts(
     label_map = label_map_with_aliases(scoped)
     particles = _particle_label_rows(scoped)
 
-    n_true = n_false = n_not_sure = n_unlabeled = 0
+    n_true = n_false = n_not_sure = n_unlabeled = n_inspect = 0
     det_keys: set[str] = set()
     if n_detected and "key" in tagged.columns:
         for key in tagged["key"].astype(str):
@@ -728,6 +728,8 @@ def last_run_class_counts(
                     n_unlabeled += 1
     n_undetected = 0
     n_undetected_below = 0
+    if scoped is not None and not scoped.empty and "source_csv" in scoped.columns:
+        n_inspect = int((scoped["source_csv"].astype(str) == MISS_SOURCE).sum())
     if not particles.empty and "key" in particles.columns:
         found = expand_labeled_keys(det_keys)
         missing = particles.loc[~particles["key"].astype(str).isin(found)]
@@ -746,6 +748,7 @@ def last_run_class_counts(
         "n_true": n_true,
         "n_false": n_false,
         "n_unlabeled": n_unlabeled,
+        "n_inspect": n_inspect,
         "n_undetected": n_undetected,
         "n_undetected_below": n_undetected_below,
         "n_not_sure": n_not_sure,
@@ -869,6 +872,7 @@ def subfolder_score_rows(
         "n_true",
         "n_false",
         "n_unlabeled",
+        "n_inspect",
         "n_undetected",
         "n_undetected_below",
         "n_not_sure",
@@ -889,7 +893,11 @@ def subfolder_score_rows(
                 "name": key or plain_name,
                 "n_detected": n_detected,
                 "n_true": n_true,
+                "n_false": int(totals["n_false"]),
+                "n_unlabeled": int(totals["n_unlabeled"]),
+                "n_inspect": int(totals["n_inspect"]),
                 "n_undetected": n_undetected,
+                "n_undetected_below": int(totals["n_undetected_below"]),
                 "n_true_total": n_true_total,
                 "precision": (n_true / n_detected) if n_detected else None,
                 "recall": (n_true / n_true_total) if n_true_total else None,

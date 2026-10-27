@@ -23,7 +23,7 @@ from src.verification.inspect import candidate_placements
 from src.verification.queue import detection_key
 from src.verification.store import LabelStore, crop_source_folder
 from src.analyse.preprocessing.corrections import apply_corrections, denoise, to_float
-from src.analyse.report.report_generator import to_display_rgb
+from src.analyse.report.report_generator import photo_display_rgb
 
 PICK_MAX_SIDE = 960
 
@@ -422,7 +422,7 @@ def debug_image(
     shadow = np.asarray(debug["shadow"], dtype=bool)
     cx, cy = float(debug["cx"]), float(debug["cy"])
     dx, dy = debug["dir"]
-    rgb = to_display_rgb(patch)
+    rgb = photo_display_rgb(patch)
     tint = rgb.copy()
     tint[shadow] = (255, 0, 0)
     rgb = cv2.addWeighted(tint, 0.45, rgb, 0.55, 0)
@@ -836,7 +836,7 @@ def display_preview(
     max_side: int = PICK_MAX_SIDE,
 ) -> tuple[np.ndarray, float]:
     
-    rgb = to_display_rgb(image)
+    rgb = photo_display_rgb(image)
     height, width = rgb.shape[:2]
     scale = min(1.0, float(max_side) / float(max(height, width, 1)))
     if scale < 1.0:
@@ -856,7 +856,7 @@ def zoom_preview(
     max_side: int = PICK_MAX_SIDE,
 ) -> tuple[np.ndarray, tuple[int, int, int, int]]:
     
-    rgb = to_display_rgb(image)
+    rgb = photo_display_rgb(image)
     height, width = rgb.shape[:2]
     zoom = max(float(zoom), 1.0)
     if zoom <= 1.0 + 1e-9:

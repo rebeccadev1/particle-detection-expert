@@ -9,6 +9,7 @@ from src.capture.capture_ui import (
     _LINK,
     _caption_when_blocked,
     _capture_module,
+    _apply_mode_light,
     _failure,
     _render_port_select,
     _run_serial,
@@ -71,15 +72,12 @@ def keep_stage_inputs() -> None:
 
 def _light_for_manual_autofocus(cap) -> bool:
     mode = _selected_mode()
-    ser = _serial()
-    if ser is None:
+    if _serial() is None:
         if mode == "Uniform":
             return True
         st.error("Connect the Arduino first so North can turn on.")
         return False
-    if mode == "Uniform":
-        return _run_serial(cap.light_all) is not None
-    return _run_serial(lambda port: cap.set_segment(port, 0)) is not None
+    return _apply_mode_light(cap, mode) is not None
 
 
 def _stage_pause() -> dict:
