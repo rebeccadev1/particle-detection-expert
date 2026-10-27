@@ -11,7 +11,6 @@ from src.capture.capture_ui import (
     _caption_when_blocked,
     _capture_module,
     _failure,
-    _nsew_style,
     _render_port_select,
     _run_serial,
     _selected_mode,
@@ -75,12 +74,10 @@ def keep_stage_inputs() -> None:
 def _light_for_manual_autofocus(cap) -> bool:
     """Set the ring before a standalone autofocus. Scan autofocus does not call this.
 
-    Uniform turns every side on. NSEW manual turns North on. Returns False when
-    the lights could not be set, so the search does not start in the dark.
+    Uniform turns every side on. NSEW, automatic or manual, turns North on.
+    Returns False when the lights could not be set, so the search does not start in the dark.
     """
     mode = _selected_mode()
-    if mode == "NSEW" and _nsew_style() != "Manual":
-        return True
     ser = _serial()
     if ser is None:
         if mode == "Uniform":
@@ -303,8 +300,8 @@ def _autofocus_block_reason(printer: dict, snap: dict) -> str | None:
         return "The live view is not ready."
     if _focus_limits() is not None:
         return "Coarse and fine steps have to fit inside the max travel."
-    if _selected_mode() == "NSEW" and _nsew_style() == "Manual" and _serial() is None:
-        return "NSEW manual focus needs the Arduino to light North."
+    if _selected_mode() == "NSEW" and _serial() is None:
+        return "NSEW focus needs the Arduino to light North."
     return None
 
 

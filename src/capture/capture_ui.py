@@ -613,4 +613,4 @@ def _render_live(cap, shutter_ms: float) -> None:
         _live_feed()
 
 
-from src.capture.capture_stage import keep_stage_inputs, render_stage
+from src.capture.capture_stage import _stage_record, keep_stage_inputs, render_stage

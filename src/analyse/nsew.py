@@ -337,7 +337,7 @@ def _combi_2of4_uint8(paths: list[Path], *, use_all_cores: bool = True) -> np.nd
     sorted_stack, sum_val, _flat, gain = load_flattened_nsew(
         *paths, use_all_cores=use_all_cores
     )
-    isotropic, _sym = symmetry_signal_4way(sorted_stack, sum_val, 2)
+    isotropic, _sym = symmetry_signal_4way(sorted_stack, sum_val, 3)
     return scale_combi_uint8(isotropic, gain)
 
 
