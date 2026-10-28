@@ -22,13 +22,20 @@ from src.verification.crops import (
 from src.verification.inspect import candidate_placements
 from src.verification.queue import detection_key
 from src.verification.store import LabelStore, crop_source_folder
-from src.analyse.preprocessing.corrections import apply_corrections, denoise, to_float
 from src.analyse.report.report_generator import photo_display_rgb
 
 PICK_MAX_SIDE = 960
 
 DEFAULT_OUT = "Shadow check"
 LIGHT_FROM_DEG = {"N": 0.0, "E": 90.0, "S": 180.0, "W": 270.0}
+SHADOW_DIRECTIONS = ("N", "E", "S", "W")
+OPPOSITE_DIRECTION = {"N": "S", "E": "W", "S": "N", "W": "E"}
+DIRECTION_RGB = {
+    "N": (255, 70, 70),
+    "E": (255, 170, 40),
+    "S": (80, 170, 255),
+    "W": (186, 90, 255),
+}
 LIGHT_HEIGHT_MM = 5.0
 RING_EDGE_MM = 6.6
 RING_CENTRE_MM = 10.0
@@ -61,17 +68,6 @@ def shadow_direction(light_from_deg: float) -> tuple[float, float]:
     
     a = math.radians(float(light_from_deg))
     return -math.sin(a), math.cos(a)
-
-
-def parse_light_from(value: str | float | None, tile_name: str = "") -> float | None:
-    
-    if value not in (None, ""):
-        text = str(value).strip().upper()
-        if text in LIGHT_FROM_DEG:
-            return LIGHT_FROM_DEG[text]
-        return float(text)
-    stem = Path(tile_name).stem.upper()
-    return LIGHT_FROM_DEG.get(stem)
 
 
 def _component_at(mask: np.ndarray, py: int, px: int) -> np.ndarray:
@@ -145,6 +141,7 @@ def _crop_for_shadow(
     light_from_deg: float,
     max_length_factor: float,
     particle_mask: np.ndarray | None = None,
+    pad_all_sides: bool = False,
 ) -> tuple[np.ndarray, int, int, float, float]:
     
     height, width = image.shape
@@ -155,6 +152,21 @@ def _crop_for_shadow(
     dx, dy = shadow_direction(light_from_deg)
     half_x = max(int(round(abs(dx) * along_half + abs(dy) * across_half)), along_half)
     half_y = max(int(round(abs(dy) * along_half + abs(dx) * across_half)), along_half)
+    if pad_all_sides:
+        half = max(half_x, half_y)
+        if particle_mask is not None and np.any(particle_mask):
+            ys, xs = np.where(particle_mask)
+            pad = max(shadow_reach, int(math.ceil(2.0 * r)), 16)
+            y0 = max(int(ys.min()) - pad, 0)
+            y1 = min(int(ys.max()) + pad + 1, height)
+            x0 = max(int(xs.min()) - pad, 0)
+            x1 = min(int(xs.max()) + pad + 1, width)
+        else:
+            ix, iy = int(round(x)), int(round(y))
+            y0, y1 = max(iy - half, 0), min(iy + half + 1, height)
+            x0, x1 = max(ix - half, 0), min(ix + half + 1, width)
+        patch = np.asarray(image[y0:y1, x0:x1], dtype=np.float64)
+        return patch, x0, y0, float(x) - x0, float(y) - y0
     if particle_mask is not None and np.any(particle_mask):
         ys, xs = np.where(particle_mask)
         pad_light = max(int(math.ceil(2.0 * r)), 16)
@@ -187,6 +199,8 @@ def measure_shadow(
     mass_fraction: float = 0.4,
     min_area_px: int = 4,
     particle_mask: np.ndarray | None = None,
+    half_plane: bool = False,
+    pad_all_sides: bool = False,
 ) -> tuple[ShadowResult, dict[str, Any]]:
     
     height, width = image.shape
@@ -199,14 +213,10 @@ def measure_shadow(
             raise ValueError(
                 f"particle_mask shape {full_mask.shape} != image {(height, width)}"
             )
-        if full_mask.any():
-            ys, xs = np.where(full_mask)
-            x = float(xs.mean())
-            y = float(ys.mean())
-            r = max(0.5 * _mask_thickness_px(full_mask), 1.0)
 
     patch, x0, y0, cx, cy = _crop_for_shadow(
-        image, x, y, 2.0 * r, light_from_deg, max_length_factor, full_mask
+        image, x, y, 2.0 * r, light_from_deg, max_length_factor, full_mask,
+        pad_all_sides=pad_all_sides,
     )
     iy, ix = int(round(y)), int(round(x))
     py = min(max(iy - y0, 0), patch.shape[0] - 1)
@@ -255,6 +265,9 @@ def measure_shadow(
 
     def _collect_shadow(threshold: float) -> np.ndarray:
         dark = (patch < background - threshold * noise) & ~particle
+        if half_plane:
+            limit = particle_along_max if particle.any() else 0.0
+            dark = dark & (along > limit)
         n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
             dark.astype(np.uint8), connectivity=8
         )
@@ -294,6 +307,8 @@ def measure_shadow(
         "shadow": shadow,
         "cx": cx,
         "cy": cy,
+        "x0": x0,
+        "y0": y0,
         "dir": (dx, dy),
         "length_px": length,
         "along": along,
@@ -312,6 +327,89 @@ def measure_shadow(
         True, particle_type, float(np.count_nonzero(shadow)), length, width_px,
         float(contrast), background, noise, edge,
     ), debug
+
+
+def measure_nsew_shadows(
+    image: np.ndarray,
+    x: float,
+    y: float,
+    diameter_px: float,
+    **kwargs: Any,
+) -> tuple[dict[str, ShadowResult], dict[str, Any]]:
+    
+    measured: dict[str, tuple[ShadowResult, dict[str, Any]]] = {}
+    for direction in SHADOW_DIRECTIONS:
+        light_from = LIGHT_FROM_DEG[OPPOSITE_DIRECTION[direction]]
+        result, debug = measure_shadow(
+            image, x, y, diameter_px, light_from,
+            half_plane=True, pad_all_sides=True, **kwargs,
+        )
+        measured[direction] = (result, debug)
+    results = {name: pair[0] for name, pair in measured.items()}
+    return results, _composite_nsew_debug(measured)
+
+
+def _composite_nsew_debug(
+    measured: dict[str, tuple[ShadowResult, dict[str, Any]]],
+) -> dict[str, Any]:
+    
+    x0 = min(int(debug["x0"]) for _result, debug in measured.values())
+    y0 = min(int(debug["y0"]) for _result, debug in measured.values())
+    x1 = max(int(debug["x0"]) + int(debug["patch"].shape[1]) for _result, debug in measured.values())
+    y1 = max(int(debug["y0"]) + int(debug["patch"].shape[0]) for _result, debug in measured.values())
+    patch = np.zeros((max(y1 - y0, 1), max(x1 - x0, 1)), dtype=np.float64)
+    particle = np.zeros(patch.shape, dtype=bool)
+    shadows: dict[str, np.ndarray] = {}
+    directions: dict[str, dict[str, Any]] = {}
+    cx = cy = 0.0
+    for name, (_result, debug) in measured.items():
+        py = int(debug["y0"]) - y0
+        px = int(debug["x0"]) - x0
+        sub = np.asarray(debug["patch"], dtype=np.float64)
+        ph, pw = sub.shape
+        patch[py : py + ph, px : px + pw] = sub
+        particle[py : py + ph, px : px + pw] |= np.asarray(debug["particle"], dtype=bool)
+        mask = np.zeros(patch.shape, dtype=bool)
+        mask[py : py + ph, px : px + pw] = np.asarray(debug["shadow"], dtype=bool)
+        shadows[name] = mask
+        directions[name] = {
+            "dir": debug["dir"],
+            "length_px": float(debug["length_px"]),
+            "mid_across": float(debug["mid_across"]),
+            "mid_edge_along": float(debug["mid_edge_along"]),
+            "color": DIRECTION_RGB[name],
+        }
+        cx = float(debug["cx"]) + int(debug["x0"]) - x0
+        cy = float(debug["cy"]) + int(debug["y0"]) - y0
+    union = np.zeros(patch.shape, dtype=bool)
+    for mask in shadows.values():
+        union |= mask
+    return {
+        "patch": patch,
+        "particle": particle,
+        "shadow": union,
+        "shadows": shadows,
+        "cx": cx,
+        "cy": cy,
+        "dir": (0.0, 1.0),
+        "length_px": 0.0,
+        "directions": directions,
+        "x0": x0,
+        "y0": y0,
+    }
+
+
+def _direction_label(result: ShadowResult, name: str, um: float) -> str:
+    if result.found:
+        return f"{name}  {result.length_px:.0f} px = {result.length_px * um:.1f} um"
+    return f"{name}  none"
+
+
+def nsew_shadow_title(results: dict[str, ShadowResult], um: float) -> str:
+    
+    left = (_direction_label(results["N"], "N", um), _direction_label(results["E"], "E", um))
+    right = (_direction_label(results["S"], "S", um), _direction_label(results["W"], "W", um))
+    return "\n".join(f"{a}\t{b}" for a, b in zip(left, right))
 
 
 def _wrap_cv2_text(text: str, max_w: int, font: int, scale: float, thickness: int) -> list[str]:
@@ -398,19 +496,64 @@ def resolve_named_image(text: str) -> tuple[Path | None, tuple[Path, ...]]:
     return None, found
 
 
-def direction_image(path: Path, light_from: str | float | None) -> Path:
+def _draw_length_arrow(
+    big: np.ndarray,
+    cx: float,
+    cy: float,
+    info: dict[str, Any],
+    particle: np.ndarray,
+) -> None:
     
-    letter = str(light_from).strip().upper() if isinstance(light_from, str) else ""
-    if letter not in LIGHT_FROM_DEG or not path.parent.is_dir():
-        return path
-    for candidate in path.parent.iterdir():
-        if (
-            candidate.is_file()
-            and candidate.stem.upper() == letter
-            and candidate.suffix.lower() in TILE_SUFFIXES
-        ):
-            return candidate
-    return path
+    length_px = float(info.get("length_px") or 0.0)
+    if length_px <= 0 or not particle.any():
+        return
+    dx, dy = info["dir"]
+    mid_across = float(info["mid_across"])
+    a_start = float(info["mid_edge_along"]) + 0.5
+    x0 = cx + a_start * dx - mid_across * dy + 0.5
+    y0 = cy + a_start * dy + mid_across * dx + 0.5
+    x1 = x0 + dx * length_px
+    y1 = y0 + dy * length_px
+    p0 = (int(round(x0 * PNG_SCALE)), int(round(y0 * PNG_SCALE)))
+    p1 = (int(round(x1 * PNG_SCALE)), int(round(y1 * PNG_SCALE)))
+    color = tuple(int(c) for c in info.get("color", (255, 0, 0)))
+    cv2.arrowedLine(big, p0, p1, color, 3, tipLength=0.12, line_type=cv2.LINE_AA)
+
+
+def _title_band(title: str, width: int) -> np.ndarray:
+    
+    font, thickness = cv2.FONT_HERSHEY_SIMPLEX, 1
+    scale = 0.45
+    rows = [row.split("\t") for row in (title.split("\n") if title else [""])]
+    two_cols = any(len(cells) > 1 for cells in rows)
+    gap = 18
+
+    def _measure(text_scale: float) -> tuple[int, int, int, list[int]]:
+        text_h = baseline = 0
+        col_w = [0, 0]
+        for cells in rows:
+            for index, cell in enumerate(cells[:2]):
+                (cell_w, cell_h), cell_base = cv2.getTextSize(cell, font, text_scale, thickness)
+                col_w[index] = max(col_w[index], cell_w)
+                text_h = max(text_h, cell_h)
+                baseline = max(baseline, cell_base)
+        total = col_w[0] + (gap if two_cols else 0) + col_w[1]
+        return total, text_h, baseline, col_w
+
+    total, text_h, baseline, col_w = _measure(scale)
+    if total > width - 8 and total > 0:
+        scale *= (width - 8) / total
+        total, text_h, baseline, col_w = _measure(scale)
+    line_h = text_h + baseline + 4
+    band = np.full((line_h * len(rows) + 4, width, 3), 255, dtype=np.uint8)
+    x_right = 4 + col_w[0] + gap
+    for i, cells in enumerate(rows):
+        y = line_h * i + text_h + 2
+        for index, cell in enumerate(cells[:2]):
+            color = DIRECTION_RGB.get(cell[:1], (255, 0, 0))
+            x = 4 if index == 0 else x_right
+            cv2.putText(band, cell, (x, y), font, scale, color, thickness, lineType=cv2.LINE_AA)
+    return band
 
 
 def debug_image(
@@ -419,47 +562,48 @@ def debug_image(
     
     patch = debug["patch"]
     particle = np.asarray(debug["particle"], dtype=bool)
-    shadow = np.asarray(debug["shadow"], dtype=bool)
     cx, cy = float(debug["cx"]), float(debug["cy"])
-    dx, dy = debug["dir"]
     rgb = photo_display_rgb(patch)
     tint = rgb.copy()
-    tint[shadow] = (255, 0, 0)
+    named = debug.get("shadows")
+    if isinstance(named, dict):
+        for name, mask in named.items():
+            tint[np.asarray(mask, dtype=bool)] = DIRECTION_RGB.get(str(name), (255, 0, 0))
+    else:
+        tint[np.asarray(debug["shadow"], dtype=bool)] = (255, 0, 0)
     rgb = cv2.addWeighted(tint, 0.45, rgb, 0.55, 0)
     big = cv2.resize(rgb, None, fx=PNG_SCALE, fy=PNG_SCALE, interpolation=cv2.INTER_NEAREST)
     outline = cv2.resize(particle.astype(np.uint8), None, fx=PNG_SCALE,
                          fy=PNG_SCALE, interpolation=cv2.INTER_NEAREST)
     contours, _ = cv2.findContours(outline, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     cv2.drawContours(big, contours, -1, (0, 255, 0), 2)
-    light_len = 0.18 * min(big.shape[:2])
-    light_origin = (14, 40)
-    cv2.arrowedLine(
-        big,
-        light_origin,
-        (int(round(light_origin[0] + dx * light_len)),
-         int(round(light_origin[1] + dy * light_len))),
-        (255, 255, 0), 3, tipLength=0.25, line_type=cv2.LINE_AA,
-    )
-    length_px = float(debug.get("length_px") or 0.0)
-    if length_px > 0 and particle.any():
-        mid_across = float(debug["mid_across"])
-        a_start = float(debug["mid_edge_along"]) + 0.5
-        x0 = cx + a_start * dx - mid_across * dy + 0.5
-        y0 = cy + a_start * dy + mid_across * dx + 0.5
-        x1 = x0 + dx * length_px
-        y1 = y0 + dy * length_px
-        p0 = (int(round(x0 * PNG_SCALE)), int(round(y0 * PNG_SCALE)))
-        p1 = (int(round(x1 * PNG_SCALE)), int(round(y1 * PNG_SCALE)))
-        cv2.arrowedLine(big, p0, p1, (255, 0, 0), 3, tipLength=0.12, line_type=cv2.LINE_AA)
-    font, thickness = cv2.FONT_HERSHEY_SIMPLEX, 3
-    scale = 1.6
-    (text_w, text_h), baseline = cv2.getTextSize(title, font, scale, thickness)
-    if text_w > big.shape[1] - 16:
-        scale *= (big.shape[1] - 16) / text_w
-        (text_w, text_h), baseline = cv2.getTextSize(title, font, scale, thickness)
-    band = np.full((text_h + baseline + 20, big.shape[1], 3), 255, dtype=np.uint8)
-    cv2.putText(band, title, (8, text_h + 10), font, scale, (255, 0, 0), thickness,
-                lineType=cv2.LINE_AA)
+    direction_info = debug.get("directions")
+    if isinstance(direction_info, dict):
+        for info in direction_info.values():
+            _draw_length_arrow(big, cx, cy, info, particle)
+    else:
+        dx, dy = debug["dir"]
+        light_len = 0.18 * min(big.shape[:2])
+        light_origin = (14, 40)
+        cv2.arrowedLine(
+            big,
+            light_origin,
+            (int(round(light_origin[0] + dx * light_len)),
+             int(round(light_origin[1] + dy * light_len))),
+            (255, 255, 0), 3, tipLength=0.25, line_type=cv2.LINE_AA,
+        )
+        _draw_length_arrow(
+            big, cx, cy,
+            {
+                "dir": (dx, dy),
+                "length_px": float(debug.get("length_px") or 0.0),
+                "mid_across": float(debug["mid_across"]),
+                "mid_edge_along": float(debug["mid_edge_along"]),
+                "color": (255, 0, 0),
+            },
+            particle,
+        )
+    band = _title_band(title, big.shape[1])
     parts = [band, big]
     if source:
         parts.append(_footer_band(source, big.shape[1]))
@@ -572,12 +716,6 @@ def select_rows(
     return pd.concat(picked).drop_duplicates(), messages
 
 
-def prepare_image(image: np.ndarray, config: dict[str, Any], mode: str) -> np.ndarray:
-    if mode == "config":
-        return apply_corrections(image, config)
-    return denoise(to_float(image), 1.0)
-
-
 def _edge_scales(
     x_nm: float,
     y_nm: float,
@@ -684,6 +822,85 @@ def detection_borders(
     return hits
 
 
+def _shadow_size(
+    length_px: float,
+    found: bool,
+    um: float,
+    distance_mm: float,
+    light_height_mm: float,
+) -> tuple[float, float, float]:
+    length_um = float(length_px) * um
+    elevation_deg = math.degrees(math.atan2(light_height_mm, distance_mm))
+    height_um = (
+        length_um * light_height_mm / distance_mm
+        if found and distance_mm > 0
+        else float("nan")
+    )
+    return length_um, elevation_deg, height_um
+
+
+def _shadow_table_rows(
+    results: dict[str, ShadowResult],
+    *,
+    key: str,
+    pid: object,
+    label: object,
+    folder: str,
+    tile: str,
+    x: float,
+    y: float,
+    width: int,
+    height: int,
+    particle_um: float,
+    um: float,
+    light_height_mm: float,
+    ring_edge_mm: float,
+    ring_centre_mm: float,
+) -> list[dict[str, Any]]:
+    
+    rows: list[dict[str, Any]] = []
+    for direction in SHADOW_DIRECTIONS:
+        shadow = results[direction]
+        light_deg = LIGHT_FROM_DEG[OPPOSITE_DIRECTION[direction]]
+        distance_mm = light_distance_mm(
+            x, y, width, height, light_deg, ring_edge_mm, ring_centre_mm
+        )
+        length_um, elevation_deg, height_um = _shadow_size(
+            shadow.length_px, shadow.found, um, distance_mm, light_height_mm
+        )
+        rows.append({
+            "key": key,
+            "id": pid,
+            "direction": direction,
+            "label": label,
+            "folder": folder,
+            "tile": tile,
+            "x_px": round(x, 1),
+            "y_px": round(y, 1),
+            "light_distance_mm": round(distance_mm, 2),
+            "elevation_deg": round(elevation_deg, 1),
+            "particle_um": round(particle_um, 2),
+            "shadow_length_um": round(length_um, 2),
+            "shadow_height_um": round(height_um, 2),
+            **{
+                k: v for k, v in asdict(shadow).items()
+                if k in ("found", "particle_type", "contrast", "touches_window_edge")
+            },
+        })
+    return rows
+
+
+def _write_shadow_run(result: ShadowRun, out: str | Path | None) -> None:
+    if not out:
+        return
+    out_dir = resolve_output_dir(out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result.table.to_csv(out_dir / "shadow_check.csv", index=False)
+    for name, rgb in result.images:
+        cv2.imwrite(str(out_dir / f"{name}.png"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    result.out_dir = out_dir
+
+
 def run_shadow_check(
     table: pd.DataFrame,
     config: dict[str, Any],
@@ -693,13 +910,11 @@ def run_shadow_check(
     run: str | None = None,
     input_dir: str | None = None,
     tile: Path | None = None,
-    light_from: str | float | None = None,
     light_height_mm: float = LIGHT_HEIGHT_MM,
     ring_edge_mm: float = RING_EDGE_MM,
     ring_centre_mm: float = RING_CENTRE_MM,
     k_mad: float = 3.0,
     max_length_factor: float = 3.0,
-    preprocess: str = "light",
     out: str | Path | None = DEFAULT_OUT,
 ) -> ShadowRun:
     
@@ -744,12 +959,8 @@ def run_shadow_check(
             same_run = (table[table["source_csv"].astype(str) == run_key[0]]
                         if "source_csv" in table.columns else table)
             run_configs[run_key] = config_for_hit_placement(run_config, same_run)
-        light = parse_light_from(light_from, path.name)
-        if light is None:
-            messages.append(f"{name}: no light direction; set where the light comes from.")
-            continue
         if path not in cache:
-            cache[path] = prepare_image(load_tile_image(path), config, preprocess)
+            cache[path] = load_tile_image(path)
         image = cache[path]
         placements = [placement_for_tile(label_path, run_configs[run_key])]
         placements += candidate_placements(label_path, run_configs[run_key])
@@ -784,51 +995,63 @@ def run_shadow_check(
             continue
         um = scale_nm / 1000.0
         diameter_px = float(row["size"]) / scale_nm
-        shadow, debug = measure_shadow(image, x, y, diameter_px, light, k_mad=k_mad,
-                                       max_length_factor=max_length_factor)
-        length_um = shadow.length_px * um
-        distance_mm = light_distance_mm(x, y, image.shape[1], image.shape[0], light,
-                                        ring_edge_mm, ring_centre_mm)
-        elevation_deg = math.degrees(math.atan2(light_height_mm, distance_mm))
-        height_um = (length_um * light_height_mm / distance_mm
-                     if shadow.found and distance_mm > 0 else float("nan"))
-        record = {
-            "key": name,
-            "id": pid,
-            "label": row.get("label", ""),
-            "folder": str(label_path.parent.relative_to(DEFAULT_INPUT_DIR))
-            if label_path.is_relative_to(DEFAULT_INPUT_DIR) else str(label_path.parent),
-            "tile": path.name,
-            "x_px": round(x, 1),
-            "y_px": round(y, 1),
-            "light_from_deg": light,
-            "light_distance_mm": round(distance_mm, 2),
-            "elevation_deg": round(elevation_deg, 1),
-            "particle_um": round(diameter_px * um, 2),
-            "shadow_length_um": round(length_um, 2),
-            "shadow_height_um": round(height_um, 2),
-            **{k: v for k, v in asdict(shadow).items()
-               if k in ("found", "particle_type", "contrast", "touches_window_edge")},
-        }
-        records.append(record)
-        title = f"L = {shadow.length_px:.0f} px = {length_um:.1f} um"
-        result.images.append((name, debug_image(debug, title, _source_lines(path))))
+        shadows, debug = measure_nsew_shadows(
+            image, x, y, diameter_px, k_mad=k_mad, max_length_factor=max_length_factor
+        )
+        folder = (
+            str(label_path.parent.relative_to(DEFAULT_INPUT_DIR))
+            if label_path.is_relative_to(DEFAULT_INPUT_DIR) else str(label_path.parent)
+        )
+        records.extend(_shadow_table_rows(
+            shadows,
+            key=name,
+            pid=pid,
+            label=row.get("label", ""),
+            folder=folder,
+            tile=path.name,
+            x=x,
+            y=y,
+            width=image.shape[1],
+            height=image.shape[0],
+            particle_um=diameter_px * um,
+            um=um,
+            light_height_mm=light_height_mm,
+            ring_edge_mm=ring_edge_mm,
+            ring_centre_mm=ring_centre_mm,
+        ))
+        result.images.append(
+            (name, debug_image(debug, nsew_shadow_title(shadows, um), _source_lines(path)))
+        )
 
     if not records:
         return result
     result.table = pd.DataFrame(records)
-    if out:
-        out_dir = resolve_output_dir(out)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        result.table.to_csv(out_dir / "shadow_check.csv", index=False)
-        for name, rgb in result.images:
-            cv2.imwrite(str(out_dir / f"{name}.png"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-        result.out_dir = out_dir
+    _write_shadow_run(result, out)
     return result
 
 
 def _parse_keys(text: str) -> list[str]:
-    return [token for token in text.replace(",", " ").split() if token]
+    keys: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for ch in text:
+        if ch == "(":
+            depth += 1
+            current.append(ch)
+        elif ch == ")":
+            depth = max(depth - 1, 0)
+            current.append(ch)
+        elif depth == 0 and (ch == "," or ch.isspace()):
+            token = "".join(current).strip()
+            if token:
+                keys.append(token)
+            current = []
+        else:
+            current.append(ch)
+    token = "".join(current).strip()
+    if token:
+        keys.append(token)
+    return keys
 
 
 def display_preview(
@@ -979,14 +1202,12 @@ def run_shadow_on_mask(
     particle_mask: np.ndarray,
     config: dict[str, Any],
     *,
-    light_from: str | float | None = None,
     source_path: Path | None = None,
     light_height_mm: float = LIGHT_HEIGHT_MM,
     ring_edge_mm: float = RING_EDGE_MM,
     ring_centre_mm: float = RING_CENTRE_MM,
     k_mad: float = 3.0,
     max_length_factor: float = 3.0,
-    preprocess: str = "light",
     out: str | Path | None = DEFAULT_OUT,
 ) -> ShadowRun:
     
@@ -994,82 +1215,51 @@ def run_shadow_on_mask(
     um = pixel_nm / 1000.0
     messages: list[str] = []
     result = ShadowRun(table=pd.DataFrame(), messages=messages)
-    light = parse_light_from(light_from, name)
     mask = np.asarray(particle_mask, dtype=bool)
     if not mask.any():
         messages.append("Draw the particle outline on the image first.")
         return result
-    if light is None:
-        light = 0.0
-        messages.append(
-            "No N/S/E/W in the file name — assumed light from N. "
-            "Set “Light comes from” if the shadow is on another side."
-        )
     ys, xs = np.where(mask)
     x, y = float(xs.mean()), float(ys.mean())
     diameter = max(_mask_thickness_px(mask), 1.0)
-    prepared = prepare_image(image, config, preprocess)
-    shadow, debug = measure_shadow(
-        prepared, x, y, diameter, light,
+    shadows, debug = measure_nsew_shadows(
+        image, x, y, diameter,
         k_mad=k_mad, max_length_factor=max_length_factor, particle_mask=mask,
     )
-    if not shadow.found:
+    if not any(item.found for item in shadows.values()):
         messages.append(
-            "No shadow found next to the drawing. Check light direction, lower the "
-            "darkness threshold, draw only the particle (not the shadow), and keep "
-            "max shadow length large enough."
+            "No shadow found in any direction. Lower the darkness threshold, "
+            "draw only the particle (not the shadow), and keep max shadow length large enough."
         )
-    length_um = shadow.length_px * um
-    distance_mm = light_distance_mm(
-        x, y, prepared.shape[1], prepared.shape[0], light, ring_edge_mm, ring_centre_mm
+    folder = (
+        str(source_path.parent.relative_to(DEFAULT_INPUT_DIR))
+        if source_path is not None and source_path.is_relative_to(DEFAULT_INPUT_DIR)
+        else ("upload" if source_path is None else str(source_path.parent))
     )
-    elevation_deg = math.degrees(math.atan2(light_height_mm, distance_mm))
-    height_um = (
-        length_um * light_height_mm / distance_mm
-        if shadow.found and distance_mm > 0
-        else float("nan")
-    )
-    record = {
-        "key": "upload",
-        "id": "",
-        "label": "",
-        "folder": (
-            str(source_path.parent.relative_to(DEFAULT_INPUT_DIR))
-            if source_path is not None and source_path.is_relative_to(DEFAULT_INPUT_DIR)
-            else ("upload" if source_path is None else str(source_path.parent))
-        ),
-        "tile": name,
-        "x_px": round(x, 1),
-        "y_px": round(y, 1),
-        "light_from_deg": light,
-        "light_distance_mm": round(distance_mm, 2),
-        "elevation_deg": round(elevation_deg, 1),
-        "particle_um": round(diameter * um, 2),
-        "shadow_length_um": round(length_um, 2),
-        "shadow_height_um": round(height_um, 2),
-        **{
-            k: v for k, v in asdict(shadow).items()
-            if k in ("found", "particle_type", "contrast", "touches_window_edge")
-        },
-    }
-    result.table = pd.DataFrame([record])
-    title = f"L = {shadow.length_px:.0f} px = {length_um:.1f} um"
+    result.table = pd.DataFrame(_shadow_table_rows(
+        shadows,
+        key="upload",
+        pid="",
+        label="",
+        folder=folder,
+        tile=name,
+        x=x,
+        y=y,
+        width=image.shape[1],
+        height=image.shape[0],
+        particle_um=diameter * um,
+        um=um,
+        light_height_mm=light_height_mm,
+        ring_edge_mm=ring_edge_mm,
+        ring_centre_mm=ring_centre_mm,
+    ))
     if source_path is not None:
         source = _source_lines(source_path)
     else:
         matches = _input_images().get(name, ())
         source = _source_lines(matches[0]) if len(matches) == 1 else ["Uploaded file", name]
-    result.images.append((str(record["key"]), debug_image(debug, title, source)))
-    if out:
-        out_dir = resolve_output_dir(out)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        result.table.to_csv(out_dir / "shadow_check.csv", index=False)
-        for img_name, rgb in result.images:
-            cv2.imwrite(
-                str(out_dir / f"{img_name}.png"),
-                cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
-            )
-        result.out_dir = out_dir
+    result.images.append(("upload", debug_image(debug, nsew_shadow_title(shadows, um), source)))
+    _write_shadow_run(result, out)
     return result
 
 
@@ -1097,15 +1287,11 @@ def _show_shadow_run(last: ShadowRun, *, download_key: str) -> None:
 
 SHADOW_WIDGET_DEFAULTS: dict[str, Any] = {
     "shadow_keys": "",
-    "shadow_tile": "",
-    "shadow_light": "Auto (N/S/E/W file name)",
-    "shadow_light_deg": 0.0,
     "shadow_light_height": LIGHT_HEIGHT_MM,
     "shadow_ring_edge": RING_EDGE_MM,
     "shadow_ring_centre": RING_CENTRE_MM,
     "shadow_k": 3.0,
     "shadow_max_len": 3.0,
-    "shadow_preprocess": "light",
 }
 
 
@@ -1117,23 +1303,10 @@ def keep_shadow_inputs() -> None:
         st.session_state[key] = st.session_state.get(key, default)
 
 
-def _light_controls() -> tuple[str | float | None, float, float, float, float, float, str]:
+def _light_controls() -> tuple[float, float, float, float, float]:
     import streamlit as st
 
-    col_e, col_f, col_g, col_h = st.columns(4)
-    light_choice = col_e.selectbox(
-        "Light comes from",
-        ("Auto (N/S/E/W file name)", "N", "E", "S", "W", "Degrees"),
-        key="shadow_light",
-    )
-    light_from: str | float | None = None
-    if light_choice == "Degrees":
-        light_from = col_e.number_input(
-            "Degrees clockwise from image top", min_value=0.0, max_value=360.0,
-            key="shadow_light_deg",
-        )
-    elif not light_choice.startswith("Auto"):
-        light_from = light_choice
+    col_f, col_g, col_h = st.columns(3)
     light_height = col_f.number_input(
         "Light height above wafer (mm)", min_value=0.1, max_value=100.0, step=0.1,
         key="shadow_light_height",
@@ -1141,13 +1314,15 @@ def _light_controls() -> tuple[str | float | None, float, float, float, float, f
     ring_edge = col_g.number_input(
         "Distance to light at image edge (mm)", min_value=0.1, max_value=100.0, step=0.1,
         key="shadow_ring_edge",
-        help="Particle on the image edge on the light side.",
+        help="A particle on an image edge is this far from the ring on that side. "
+             "Each shadow uses the side opposite the direction it falls.",
     )
     ring_centre = col_h.number_input(
         "Distance to light at image centre (mm)", min_value=0.1, max_value=100.0, step=0.1,
         key="shadow_ring_centre",
-        help="In between, the distance is interpolated linearly from the particle "
-             "position. Height = shadow length × light height / distance.",
+        help="At the centre every side uses this distance. Between centre and edge "
+             "it changes linearly with the particle's position toward that side. "
+             "Height = shadow length × light height / distance.",
     )
     col_k, col_l = st.columns(2)
     k_mad = col_k.number_input(
@@ -1158,52 +1333,35 @@ def _light_controls() -> tuple[str | float | None, float, float, float, float, f
         "Max shadow length (× diameter)", min_value=0.5, max_value=10.0, step=0.5,
         key="shadow_max_len",
     )
-    preprocess = st.radio(
-        "Image preprocessing",
-        ("light", "config"),
-        format_func=lambda v: "Light blur only" if v == "light" else "Sidebar corrections",
-        horizontal=True,
-        key="shadow_preprocess",
-    )
     return (
-        light_from,
         float(light_height),
         float(ring_edge),
         float(ring_centre),
         float(k_mad),
         float(max_len),
-        str(preprocess),
     )
 
 
 def _render_database_shadow(
     config: dict[str, Any],
     *,
-    light_from: str | float | None,
     light_height: float,
     ring_edge: float,
     ring_centre: float,
     k_mad: float,
     max_len: float,
-    preprocess: str,
 ) -> None:
     import streamlit as st
 
     st.caption(
         "Enter keys of particles you already marked (shown under each crop in Database). "
-        "The image folder is found from the label."
+        "The image folder is found from the label. Each key is measured in all four directions."
     )
-    col_a, col_b = st.columns(2)
-    keys_text = col_a.text_input(
+    keys_text = st.text_input(
         "Particle keys",
         key="shadow_keys",
-        placeholder="e.g. R3_1_17_5X_42943680_1240320",
-        help="Separate several keys with commas or spaces.",
-    )
-    tile_text = col_b.text_input(
-        "Measure on this image instead (optional)",
-        key="shadow_tile",
-        help="e.g. a bright-field shot of the same field, same pixel grid.",
+        placeholder="e.g. (1,1)_1402100_346700",
+        help="Separate several keys with commas or spaces. A comma inside (row,col) stays part of the key.",
     )
     keys = _parse_keys(keys_text)
     if st.button("Measure shadows", type="primary", key="shadow_measure_keys"):
@@ -1215,14 +1373,11 @@ def _render_database_shadow(
                     LabelStore(PACKAGE_ROOT / "labels").load(),
                     config,
                     keys=keys,
-                    tile=Path(tile_text.strip().strip('"')) if tile_text.strip() else None,
-                    light_from=light_from,
                     light_height_mm=light_height,
                     ring_edge_mm=ring_edge,
                     ring_centre_mm=ring_centre,
                     k_mad=k_mad,
                     max_length_factor=max_len,
-                    preprocess=preprocess,
                 )
             st.session_state["shadow_last"] = run_result
 
@@ -1273,13 +1428,11 @@ def _load_st_canvas() -> Any | None:
 def _render_upload_shadow(
     config: dict[str, Any],
     *,
-    light_from: str | float | None,
     light_height: float,
     ring_edge: float,
     ring_centre: float,
     k_mad: float,
     max_len: float,
-    preprocess: str,
 ) -> None:
     import streamlit as st
     from PIL import Image
@@ -1287,9 +1440,9 @@ def _render_upload_shadow(
     st_canvas = _load_st_canvas()
 
     st.caption(
-        "Type an image path or file name, draw the particle or hair outline in green, "
-        "then measure its shadow. Trace around the body (or paint over it); the drawing "
-        "is the particle."
+        "Type a combi image path or file name, draw the particle or hair outline in green, "
+        "then measure its shadow toward N, E, S, and W. Trace around the body "
+        "(or paint over it); the drawing is the particle."
     )
     choices = list(image_choice_labels())
     current = st.session_state.get("shadow_image")
@@ -1319,10 +1472,7 @@ def _render_upload_shadow(
         else:
             st.warning("No image found at that path or with that name.")
         return
-    shown = direction_image(base_path, light_from)
-    if shown == base_path and isinstance(light_from, str) and light_from.upper() in LIGHT_FROM_DEG:
-        if base_path.stem.upper() != light_from.upper():
-            st.caption(f"No {light_from.upper()} image next to this file.")
+    shown = base_path
     folder_key = str(base_path.parent)
     if st.session_state.get("shadow_draw_folder") not in (None, folder_key):
         st.session_state.pop("shadow_kept_mask", None)
@@ -1460,7 +1610,7 @@ def _render_upload_shadow(
             st.session_state["shadow_kept_mask"] = mask
         if mask.any():
             st.caption(f"Outline covers {int(mask.sum())} px")
-        if st.button("Measure selected shadow", type="primary", key="shadow_measure_pick"):
+        if st.button("Measure shadows", type="primary", key="shadow_measure_pick"):
             if not mask.any():
                 st.warning("Draw the particle outline on the image first.")
             else:
@@ -1470,14 +1620,12 @@ def _render_upload_shadow(
                         name,
                         mask,
                         config,
-                        light_from=light_from,
                         source_path=source_path,
                         light_height_mm=light_height,
                         ring_edge_mm=ring_edge,
                         ring_centre_mm=ring_centre,
                         k_mad=k_mad,
                         max_length_factor=max_len,
-                        preprocess=preprocess,
                     )
 
     last: ShadowRun | None = st.session_state.get("shadow_upload_last")
@@ -1500,8 +1648,9 @@ def render_shadow_tab(config: dict[str, Any]) -> None:
         )
 
     st.caption(
-        "Measure the dark region next to a particle on the side away from the light. "
-        "Pixel size comes from Adjust parameters on the Run tab."
+        "On an NSEW combi the ring lights all four sides, so each particle is measured "
+        "for a shadow toward N, E, S, and W. Pixel size comes from Adjust parameters "
+        "on the Run tab."
     )
     db_col, upload_col = st.columns(2)
     db_col.button(
@@ -1525,22 +1674,18 @@ def render_shadow_tab(config: dict[str, Any]) -> None:
 
     with st.container(border=True, key="block-shadow-light"):
         (
-            light_from,
             light_height,
             ring_edge,
             ring_centre,
             k_mad,
             max_len,
-            preprocess,
         ) = _light_controls()
     params = dict(
-        light_from=light_from,
         light_height=light_height,
         ring_edge=ring_edge,
         ring_centre=ring_centre,
         k_mad=k_mad,
         max_len=max_len,
-        preprocess=preprocess,
     )
     with st.container(border=True, key="block-shadow-measure"):
         if mode == "database":

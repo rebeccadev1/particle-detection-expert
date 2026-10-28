@@ -102,15 +102,6 @@ def _key_from_tile_xy(source_tile: object, x_global: object, y_global: object) -
     return f"{Path(tile).stem}_{x_nm}_{y_nm}"
 
 
-def label_covers_uniform(key: object) -> bool:
-    
-    text = str(key or "")
-    return (
-        _SET_LIGHT_KEY.fullmatch(text) is not None
-        or _LIGHT_KEY.fullmatch(text) is not None
-    )
-
-
 def nsew_key_aliases(key: str) -> set[str]:
     
     text = str(key)
@@ -882,6 +873,23 @@ def _shares_submap_review(source_tile: str) -> bool:
     return combi_key_family(name) == "light"
 
 
+def _collapse_lighting_groups(
+    tagged: pd.DataFrame,
+    lighting: pd.Series,
+    merge_radius_nm: float,
+    size_match_fraction: float,
+    known: set[str],
+) -> list[pd.DataFrame]:
+    if not bool(lighting.any()):
+        return []
+    subset = tagged.loc[lighting]
+    set_ids = subset["source_tile"].astype(str).map(submap_id)
+    return [
+        _collapse_one_family(group, merge_radius_nm, size_match_fraction, known)
+        for _, group in subset.groupby(set_ids, sort=False)
+    ]
+
+
 def collapse_submap_review_detections(
     df: pd.DataFrame | None,
     merge_radius_nm: float,
@@ -896,14 +904,13 @@ def collapse_submap_review_detections(
     lighting = tiles.map(_shares_submap_review)
     if not bool(lighting.any()):
         return tagged.reset_index(drop=True)
-    frames: list[pd.DataFrame] = [tagged.loc[~lighting].copy()]
-    subset = tagged.loc[lighting]
-    set_ids = subset["source_tile"].astype(str).map(submap_id)
     known = set() if labeled_keys is None else {str(key) for key in labeled_keys}
-    for _, group in subset.groupby(set_ids, sort=False):
-        frames.append(
-            _collapse_one_family(group, merge_radius_nm, size_match_fraction, known)
+    frames: list[pd.DataFrame] = [tagged.loc[~lighting].copy()]
+    frames.extend(
+        _collapse_lighting_groups(
+            tagged, lighting, merge_radius_nm, size_match_fraction, known
         )
+    )
     nonempty = [frame for frame in frames if frame is not None and not frame.empty]
     if not nonempty:
         return tagged.iloc[0:0].reset_index(drop=True)
@@ -933,13 +940,11 @@ def collapse_nsew_detections(
                 tagged.loc[direction], merge_radius_nm, size_match_fraction, known
             )
         )
-    if lighting.any():
-        subset = tagged.loc[lighting]
-        set_ids = subset["source_tile"].astype(str).map(submap_id)
-        for _, group in subset.groupby(set_ids, sort=False):
-            frames.append(
-                _collapse_one_family(group, merge_radius_nm, size_match_fraction, known)
-            )
+    frames.extend(
+        _collapse_lighting_groups(
+            tagged, lighting, merge_radius_nm, size_match_fraction, known
+        )
+    )
     nonempty = [frame for frame in frames if frame is not None and not frame.empty]
     if not nonempty:
         return tagged.iloc[0:0].reset_index(drop=True)

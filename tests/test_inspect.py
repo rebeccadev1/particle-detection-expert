@@ -18,9 +18,11 @@ from src.verification.inspect import (
     display_xy_to_local,
     fresh_inspect_click,
     expand_submap_lighting_names,
+    prefer_stored_grid_names,
     extra_grid_placements,
     last_run_class_counts,
     last_run_class_counts_by_tile,
+    std_of_crop_cells,
     std_of_tile_scores,
     subfolder_score_rows,
     local_xy_on_tile,
@@ -517,6 +519,18 @@ def test_shared_combi_uniform_hit_counts_on_both_pictures() -> None:
     assert on_uniform["n_detected"] == 2
 
 
+def test_std_of_crop_cells_counts_every_crop() -> None:
+    cells = [
+        {"precision": 1.0, "recall": 1.0, "f_beta": 1.0},
+        {"precision": None, "recall": None, "f_beta": None},
+    ]
+    spread = std_of_crop_cells(cells)
+    expected = float(np.std([1.0, 0.0], ddof=1))
+    assert spread["precision"] == pytest.approx(expected)
+    assert spread["recall"] == pytest.approx(expected)
+    assert spread["f_beta"] == pytest.approx(expected)
+
+
 def test_std_of_tile_scores_uses_every_tile() -> None:
     table = pd.DataFrame(
         [
@@ -672,6 +686,28 @@ def test_tinder_saves_a_grid_label_in_this_folder() -> None:
     assert not label_on_run_tiles(saved["source_tile"], {"(1,1).png"}, "Groundup/wafer-b")
 
 
+def test_labeled_tile_list_keeps_the_folder_path_once() -> None:
+    folder = "Final test/v34 crops"
+    bare = ["(1,1).png", "(3,3).png"]
+    stored = [f"{folder}/(1,1).png", f"{folder}/(3,3).png"]
+    assert prefer_stored_grid_names(bare + stored) == stored
+
+    detections = pd.DataFrame(
+        {
+            "id": [1, 2],
+            "x_global": [10.0, 20.0],
+            "y_global": [11.0, 21.0],
+            "size": [20000.0, 20000.0],
+            "confidence": [0.9, 0.8],
+            "source_tile": stored,
+            "key": ["cell_1", "cell_3"],
+        }
+    )
+    table = last_run_class_counts_by_tile(detections, None, bare + stored)
+    assert list(table["tile"]) == bare
+    assert int(table["n_detected"].sum()) == 2
+
+
 def test_grid_source_name_keeps_the_folder() -> None:
     from src.overall.io.naming import lighting_source_name
     from src.overall.config import DEFAULT_INPUT_DIR
@@ -797,55 +833,6 @@ def test_undetected_size_floor_uses_this_run_minimum() -> None:
     assert floor == 20000.0
 
 
-def _area_line_mask(rgb: np.ndarray) -> np.ndarray:
-    
-    red = rgb[:, :, 0].astype(np.int16)
-    green = rgb[:, :, 1].astype(np.int16)
-    blue = rgb[:, :, 2].astype(np.int16)
-    return (blue > 80) & (blue > red + 25) & (blue > green + 25)
-
-
-def test_outline_particle_area_follows_a_green_marker() -> None:
-    import cv2
-
-    from src.verification.inspect import outline_particle_area
-
-    image = np.full((200, 200), 20, dtype=np.uint8)
-    cv2.circle(image, (60, 70), 16, 220, thickness=-1)
-    rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-    cv2.circle(rgb, (60, 70), 26, (40, 180, 70), thickness=3)
-    out = outline_particle_area(rgb, size_nm=32.0, pixel_size_nm=1.0, config={})
-    line = _area_line_mask(out)
-    ys, xs = np.where(line)
-    assert ys.size > 30
-    assert abs(float(np.median(ys)) - 70.0) < 10.0
-    assert abs(float(np.median(xs)) - 60.0) < 10.0
-
-
-def test_outline_particle_area_is_a_thin_line() -> None:
-    import cv2
-
-    from src.verification.inspect import outline_particle_area
-
-    image = np.full((200, 200), 20, dtype=np.uint8)
-    cv2.circle(image, (100, 100), 18, 220, thickness=-1)
-    rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-    cv2.circle(rgb, (100, 100), 28, (255, 140, 40), thickness=3)
-    out = outline_particle_area(
-        rgb,
-        size_nm=36.0,
-        pixel_size_nm=1.0,
-        config={"detection": {"size_mass_fraction": 0.4, "particles_bright": True}},
-    )
-    line = _area_line_mask(out)
-    assert 40 < int(line.sum()) < 500
-    ys, xs = np.where(line)
-    dist = np.hypot(ys - 100.0, xs - 100.0)
-    assert 14.0 < float(np.median(dist)) < 24.0
-    orange = (out[:, :, 0] > 200) & (out[:, :, 1] > 80) & (out[:, :, 2] < 80)
-    assert int(orange.sum()) > 20
-
-
 def test_circles_from_rows_uses_label_color() -> None:
     rows = pd.DataFrame(
         {
@@ -877,106 +864,6 @@ def test_fresh_inspect_click_ignores_the_press_already_seen() -> None:
     assert fresh_inspect_click(press, "1700000000000") is None
     assert fresh_inspect_click({"x": 12, "y": 40}, None) is None
     assert fresh_inspect_click(None, None) is None
-
-
-def test_verify_missed_photo_sizes_replaces_assumed_diameter(tmp_path: Path) -> None:
-    import cv2
-
-    from src.verification.inspect import verify_missed_photo_sizes
-    from src.verification.store import LabelStore
-
-    image = np.zeros((81, 81), dtype=np.uint8)
-    yy, xx = np.ogrid[:81, :81]
-    image[(yy - 40) ** 2 + (xx - 40) ** 2 <= 10.0**2] = 220
-    tile = tmp_path / "v5"
-    tile.mkdir()
-    assert cv2.imwrite(str(tile / "N.png"), image)
-    other = tmp_path / "other.png"
-    assert cv2.imwrite(str(other), image)
-
-    pixel = 1000.0
-    record = missed_particle_record("v5/N.png", 40.0 * pixel, 40.0 * pixel, 15_000.0)
-    elsewhere = missed_particle_record("other.png", 40.0 * pixel, 40.0 * pixel, 15_000.0)
-    store = LabelStore(tmp_path / "labels")
-    store.apply_label(record, "particle", np.zeros((8, 8, 3), dtype=np.uint8))
-    store.apply_label(elsewhere, "particle", np.zeros((8, 8, 3), dtype=np.uint8))
-
-    report = verify_missed_photo_sizes(
-        store.load(),
-        {"v5/N.png": tile / "N.png"},
-        {"detection": {"max_size_nm": 80_000.0, "size_mass_fraction": 0.4, "particles_bright": True}},
-        pixel_size_nm=pixel,
-    )
-    assert len(report) == 1
-    assert report[0]["source_tile"] == "v5/N.png"
-    assert abs(report[0]["photo_um"] - 20.0) < 1.5
-    assert report[0]["note"] == "updated"
-    written = store.update_sizes({report[0]["key"]: report[0]["photo_nm"]})
-    assert written == 1
-    saved = store.load()
-    row = saved.loc[saved["source_tile"].astype(str) == "v5/N.png"].iloc[-1]
-    assert abs(float(row["size"]) / 1000.0 - 20.0) < 1.5
-    other_row = saved.loc[saved["source_tile"].astype(str) == "other.png"].iloc[-1]
-    assert float(other_row["size"]) == 15_000.0
-
-
-def test_verify_drops_a_miss_under_20_um(tmp_path: Path) -> None:
-    import cv2
-
-    from src.verification.inspect import verify_missed_photo_sizes
-    from src.verification.store import LabelStore
-
-    image = np.zeros((81, 81), dtype=np.uint8)
-    yy, xx = np.ogrid[:81, :81]
-    image[(yy - 40) ** 2 + (xx - 40) ** 2 <= 3.0**2] = 220
-    tile = tmp_path / "v5"
-    tile.mkdir()
-    assert cv2.imwrite(str(tile / "combi_2of4.png"), image)
-    pixel = 1000.0
-    record = missed_particle_record(
-        "v5/combi_2of4.png", 40.0 * pixel, 40.0 * pixel, 15_000.0
-    )
-    store = LabelStore(tmp_path / "labels")
-    store.apply_label(record, "particle", np.zeros((8, 8, 3), dtype=np.uint8))
-    report = verify_missed_photo_sizes(
-        store.load(),
-        {"v5/combi_2of4.png": tile / "combi_2of4.png"},
-        {"detection": {"max_size_nm": 80_000.0, "size_mass_fraction": 0.4, "particles_bright": True}},
-        pixel_size_nm=pixel,
-    )
-    assert len(report) == 1
-    assert report[0]["photo_um"] < 20.0
-    assert report[0]["note"] == "removed"
-    assert store.unlabel(report[0]["key"]) is not None
-    assert store.load().empty
-
-
-def test_verify_keeps_a_grown_mark_above_20_um(tmp_path: Path) -> None:
-    import cv2
-
-    from src.verification.inspect import verify_missed_photo_sizes
-    from src.verification.store import LabelStore
-
-    image = np.zeros((81, 81), dtype=np.uint8)
-    yy, xx = np.ogrid[:81, :81]
-    image[(yy - 40) ** 2 + (xx - 40) ** 2 <= 4.0**2] = 220
-    tile = tmp_path / "v5"
-    tile.mkdir()
-    assert cv2.imwrite(str(tile / "combi_2of4.png"), image)
-    pixel = 1000.0
-    record = missed_particle_record(
-        "v5/combi_2of4.png", 40.0 * pixel, 40.0 * pixel, 28_000.0
-    )
-    store = LabelStore(tmp_path / "labels")
-    store.apply_label(record, "particle", np.zeros((8, 8, 3), dtype=np.uint8))
-    report = verify_missed_photo_sizes(
-        store.load(),
-        {"v5/combi_2of4.png": tile / "combi_2of4.png"},
-        {"detection": {"max_size_nm": 80_000.0, "size_mass_fraction": 0.4, "particles_bright": True}},
-        pixel_size_nm=pixel,
-    )
-    assert report[0]["photo_um"] < 20.0
-    assert report[0]["note"] == "kept stored size"
 
 
 def test_missed_particle_record_uses_tile_inspect_source() -> None:
@@ -1173,38 +1060,6 @@ def test_pointer_uses_directional_photos_and_shares_one_set(tmp_path: Path) -> N
     assert set(pointer_set_hits(detections, marks, "v2")["key"].astype(str)) == {"v2_NSEW_300_400"}
 
 
-def test_growing_the_click_includes_the_dim_edge() -> None:
-    from src.verification.inspect import footprint_grow_mass, photo_particle_edge
-
-    image = np.full((81, 81), 40.0, dtype=np.float32)
-    yy, xx = np.ogrid[:81, :81]
-    radius = np.hypot(yy - 40, xx - 40)
-    image[radius <= 6] = 220.0
-    image[(radius > 6) & (radius <= 14)] = 90.0
-    config = {
-        "detection": {
-            "max_size_nm": 80_000.0,
-            "size_mass_fraction": 0.4,
-            "particles_bright": True,
-        }
-    }
-    tight_nm, _tight = photo_particle_edge(
-        image, 40.0, 40.0, pixel_size_nm=1000.0, config=config, mass_fraction=0.4
-    )
-    wide_nm, _wide = photo_particle_edge(
-        image,
-        40.0,
-        40.0,
-        pixel_size_nm=1000.0,
-        config=config,
-        mass_fraction=footprint_grow_mass(config, 300),
-    )
-    assert footprint_grow_mass(config, 1) == 0.4
-    assert footprint_grow_mass(config, 300) == 0.0
-    assert footprint_grow_mass(config, 1.5) < footprint_grow_mass(config, 1)
-    assert wide_nm > tight_nm + 4_000.0
-
-
 def test_mosaic_uses_this_folders_review_color() -> None:
     from src.analyse.report.report_generator import draw_overlay_markers
     from src.analyse.stitching.stitcher import LazyMosaic
@@ -1261,7 +1116,7 @@ def test_mosaic_uses_this_folders_review_color() -> None:
         rgb,
         mosaic,
         hits.iloc[:1].assign(x_global=20_000.0, y_global=20_000.0, size=1_000.0),
-        {"pixel_size_nm": 1000.0, "report": {"downsample": 1}},
+        {"pixel_size_nm": 1000.0},
         colors=colors,
         scale=1.0,
     )
@@ -1340,7 +1195,6 @@ def test_write_marked_mosaic_saves_review_and_inspect_circles(tmp_path: Path) ->
             "output_dir": str(out),
             "input_dir": str(tmp_path),
             "pixel_size_nm": 1000.0,
-            "report": {"downsample": 1},
         },
         hits,
         labels,

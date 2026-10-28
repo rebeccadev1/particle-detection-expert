@@ -39,7 +39,6 @@ from src.verification.crops import (
 )
 from src.verification.inspect import (
     CELL_NAMES,
-    DEFAULT_MISS_SIZE_UM,
     GRID_N,
     INSPECT_DISPLAY_WIDTH,
     LABEL_CIRCLE_COLORS,
@@ -55,22 +54,18 @@ from src.verification.inspect import (
     fresh_inspect_click,
     expand_direction_tile_names,
     expand_submap_lighting_names,
+    prefer_stored_grid_names,
     label_color_for_key,
     label_on_run_tiles,
     with_grid_folder,
     crop_metric_cells,
     f_beta_score,
     std_of_crop_cells,
-    std_of_tile_scores,
     subfolder_score_rows,
-    last_run_class_counts,
     last_run_class_counts_by_tile,
     local_xy_on_tile,
     missed_particle_record,
-    footprint_grow_mass,
-    outline_particle_crop_file,
     photo_particle_edge,
-    verify_missed_photo_sizes,
     write_marked_mosaic,
     overlay_view,
     pointer_miss_rows,
@@ -109,7 +104,7 @@ from src.analyse.measurement.measurer import (
     DEFAULT_NSEW_MERGE_RADIUS_PX,
     DEFAULT_NSEW_SIZE_MATCH_FRACTION,
 )
-from src.verification.store import LabelStore, crop_source_folder, rows_for_campaign
+from src.verification.store import LabelStore, crop_source_folder, resolve_crop_path
 from src.analyse.report.report_generator import particles_at_least
 from src.analyse.stitching.stitcher import LazyMosaic
 
@@ -253,8 +248,7 @@ def render_label_tab(
     cache = st.session_state.setdefault("label_tile_cache", TileImageCache())
     origin_cache = st.session_state.setdefault("label_origin_cache", {})
 
-    st.header("Label detections")
-    st.caption("One crop at a time. The key for each action is on its button.")
+    st.header("Label hits")
     _show_marked_mosaic_note()
 
     pipeline_csv, pipeline_config = load_last_pipeline(config)
@@ -1159,60 +1153,6 @@ def render_tile_inspect_tab(
 
     store = labels_store(project_root)
     labels_df = store.load()
-    paths_by_name = (
-        {tile.label: tile.path for tile in pointer_tiles}
-        if pointer_tiles
-        else {_pointer_tile_name(path): path for path in paths}
-    )
-    if st.button(
-        "Verify all sizes in this folder",
-        key="inspect_verify_sizes",
-        help=(
-            "Remeasure every missed click in this folder on the photograph. "
-            "Replace the assumed size with that diameter. "
-            "Drop the mark, and its dark green circle, when the photo is under 20 µm."
-        ),
-    ):
-        with st.spinner("Measuring missed clicks on the photos…"):
-            report = verify_missed_photo_sizes(
-                labels_df,
-                paths_by_name,
-                run_config,
-                pixel_size_nm=float(cfg_get(run_config, "pixel_size_nm", 960.0)),
-            )
-            written = store.update_sizes(
-                {
-                    row["key"]: row["photo_nm"]
-                    for row in report
-                    if row["note"] == "updated"
-                }
-            )
-            removed = 0
-            for row in report:
-                if row["note"] != "removed":
-                    continue
-                if store.unlabel(str(row["key"])) is not None:
-                    removed += 1
-        st.session_state["inspect_size_report"] = report
-        st.session_state["inspect_size_written"] = written
-        st.session_state["inspect_size_removed"] = removed
-        labels_df = store.load()
-    report = st.session_state.get("inspect_size_report")
-    if report is not None:
-        written = int(st.session_state.get("inspect_size_written") or 0)
-        removed = int(st.session_state.get("inspect_size_removed") or 0)
-        if not report:
-            st.info("No missed clicks in this folder.")
-        else:
-            st.caption(
-                f"Photo sizes for {len(report)} missed clicks. "
-                f"Updated {written}. Removed {removed} under 20 µm."
-            )
-            st.dataframe(
-                pd.DataFrame(report).drop(columns=["photo_nm"]),
-                width="stretch",
-                hide_index=True,
-            )
     scene_labels = _labels_for_scene(labels_df, run_config, names)
 
     if detections is None:
@@ -1274,45 +1214,23 @@ def render_tile_inspect_tab(
     _x_locals, _y_locals, circles = _circles_on_tile(
         image, tile_hits, placements, pixel_size, label_map
     )
-    for circle, (_, row) in zip(circles, tile_hits.iterrows(), strict=False):
-        missed = row["missed"] if "missed" in row else False
-        if missed is not True and str(missed).lower() != "true":
-            continue
-        _diameter_nm, edge = photo_particle_edge(
-            image,
-            float(circle["y_local"]),
-            float(circle["x_local"]),
-            pixel_size_nm=pixel_size,
-            config=run_config,
-        )
-        circle["edge"] = edge
     pending_diameter_nm = 0.0
-    pending_edge: list = []
     pending_early = st.session_state.get("inspect_pending")
-    pending_mass = footprint_grow_mass(
-        run_config, float(st.session_state.get("inspect_footprint_grow", 1.0))
-    )
     if pending_early and pending_early.get("tile") == tile_name:
-        pending_diameter_nm, pending_edge = photo_particle_edge(
+        pending_diameter_nm = photo_particle_edge(
             image,
             float(pending_early["y_local"]),
             float(pending_early["x_local"]),
             pixel_size_nm=pixel_size,
             config=run_config,
-            mass_fraction=pending_mass,
         )
         circles.append(
             {
                 "x_local": float(pending_early["x_local"]),
                 "y_local": float(pending_early["y_local"]),
-                "size": (
-                    pending_diameter_nm
-                    if pending_diameter_nm > 0
-                    else DEFAULT_MISS_SIZE_UM * NM_PER_UM
-                ),
+                "size": pending_diameter_nm,
                 "color": MISSED_PARTICLE_COLOR,
                 "key": "",
-                "edge": pending_edge,
             }
         )
 
@@ -1400,55 +1318,26 @@ def render_tile_inspect_tab(
             "y_local": y_local,
             "tile": tile_name,
         }
-        st.session_state["inspect_footprint_grow"] = 1.0
         st.rerun()
 
     pending = st.session_state.get("inspect_pending")
     if pending and pending.get("tile") == tile_name:
-        size_um = float(
-            st.number_input(
-                "Assumed size (µm)",
-                min_value=10.0,
-                max_value=100.0,
-                value=DEFAULT_MISS_SIZE_UM,
-                step=1.0,
-                key="inspect_miss_size_um",
-                help="Missed flakes have no DoG size. 15 µm is the audit target.",
-            )
-        )
-        size_nm = size_um * NM_PER_UM
-        st.slider(
-            "Grow yellow area",
-            min_value=1.0,
-            max_value=300.0,
-            value=1.0,
-            step=0.5,
-            key="inspect_footprint_grow",
-            help=(
-                "1 is the automatic area. Move right when the particle is "
-                "larger than the yellow. The diameter follows the yellow area."
-            ),
-        )
         measured_nm = float(pending_diameter_nm)
-        shown_nm = measured_nm if measured_nm > 0 else size_nm
         preview = preview_click_crop(
             image,
             float(pending["x_local"]),
             float(pending["y_local"]),
-            shown_nm,
+            measured_nm,
             pixel_size,
-            edge=pending_edge,
             zoom=8.0,
         )
         if measured_nm <= 0:
-            edge_caption = "No footprint on the photo. The circle uses the assumed size."
+            size_caption = "No footprint on the photo, so it is not kept."
         elif measured_nm < 20_000.0:
-            edge_caption = (
-                f"{measured_nm / NM_PER_UM:.1f} µm from the yellow area, under 20 µm."
-            )
+            size_caption = f"{measured_nm / NM_PER_UM:.1f} µm, under 20 µm."
         else:
-            edge_caption = f"{measured_nm / NM_PER_UM:.1f} µm from the yellow area."
-        st.image(preview, caption=edge_caption, width=520)
+            size_caption = f"{measured_nm / NM_PER_UM:.1f} µm."
+        st.image(preview, caption=size_caption, width=520)
         mark_cols = st.columns(2)
         if mark_cols[0].button(
             "Mark missed particle",
@@ -1462,19 +1351,20 @@ def render_tile_inspect_tab(
                 placement,
                 pixel_size,
             )
-            saved_nm = measured_nm if measured_nm > 0 else size_nm
-            if 0 < saved_nm < 20_000.0:
-                st.warning("That yellow area is under 20 µm, so it is not kept.")
+            if measured_nm <= 0:
+                st.warning("No footprint on the photo, so it is not kept.")
+            elif measured_nm < 20_000.0:
+                st.warning("That size is under 20 µm, so it is not kept.")
             else:
                 record = with_grid_folder(
-                    missed_particle_record(tile_name, x_global, y_global, saved_nm),
+                    missed_particle_record(tile_name, x_global, y_global, measured_nm),
                     str(cfg_get(run_config, "input_dir", "") or "") or None,
                 )
                 saved = preview_click_crop(
                     image,
                     float(pending["x_local"]),
                     float(pending["y_local"]),
-                    shown_nm,
+                    measured_nm,
                     pixel_size,
                     zoom=8.0,
                 )
@@ -1527,34 +1417,6 @@ def _last_run_f_beta_text(counts: dict[str, float], *, beta: float, defined: boo
             float(counts.get("precision", 0.0)),
             float(counts.get("recall", 0.0)),
             beta,
-        )
-    )
-
-
-def _tile_crop_std(
-    tile_name: str,
-    detections: pd.DataFrame | None,
-    labels: pd.DataFrame | None,
-    run_config: dict[str, Any],
-    mosaic: LazyMosaic | None,
-    origin_cache: dict[str, tuple[int, int]],
-    *,
-    min_size_nm: float,
-    folder_tiles: list[str],
-    beta: float,
-) -> dict[str, float | None]:
-    
-    return std_of_crop_cells(
-        _tile_crop_cells(
-            tile_name,
-            detections,
-            labels,
-            run_config,
-            mosaic,
-            origin_cache,
-            min_size_nm=min_size_nm,
-            folder_tiles=folder_tiles,
-            beta=beta,
         )
     )
 
@@ -1768,18 +1630,18 @@ def _render_score_table(
     *,
     beta: float,
     folder_name: str = "",
-    std_tiles: pd.DataFrame | None = None,
+    crop_std_by_name: dict[str, dict[str, float | None]] | None = None,
 ) -> None:
     
     grouped = subfolder_score_rows(
         per_tile_table,
         folder_name=folder_name,
         beta=beta,
-        std_tiles=std_tiles,
     )
     rows: list[dict[str, str]] = []
     for record in grouped:
         withheld = _metrics_withheld(record)
+        spread = (crop_std_by_name or {}).get(str(record["name"]), {})
         rows.append(
             _metric_row(
                 str(record["name"]),
@@ -1791,9 +1653,9 @@ def _render_score_table(
                 precision=None if withheld else record.get("precision"),
                 recall=None if withheld else record.get("recall"),
                 beta=beta,
-                precision_std=None if withheld else record.get("precision_std"),
-                recall_std=None if withheld else record.get("recall_std"),
-                f_beta_std=None if withheld else record.get("f_beta_std"),
+                precision_std=None if withheld else spread.get("precision"),
+                recall_std=None if withheld else spread.get("recall"),
+                f_beta_std=None if withheld else spread.get("f_beta"),
                 show_std=True,
             )
         )
@@ -1887,7 +1749,7 @@ def render_labeled_tiles_tab(
         if name not in listed:
             names.append(name)
             listed.add(name)
-    names = sorted(names, key=_review_tile_rank)
+    names = sorted(prefer_stored_grid_names(names), key=_review_tile_rank)
     hit_tiles = tile_names_for_hits(detections)
     metric_tiles = hit_tiles or list(recovery_tiles or names)
     label_tiles = list(scene_tiles) if scene_tiles else metric_tiles
@@ -1903,23 +1765,12 @@ def render_labeled_tiles_tab(
     raw_beta = cfg_get(config, "report.f_beta", 1.0)
     beta = 1.0 if raw_beta is None else float(raw_beta)
     origin_cache = st.session_state.setdefault("label_origin_cache", {})
-    std_names = sorted(run_tiles) if run_tiles else list(metric_tiles)
-    if set(std_names) == set(metric_tiles):
-        tile_score_table = per_tile_table
-    else:
-        tile_score_table = last_run_class_counts_by_tile(
-            detections,
-            labels_df,
-            std_names,
-            min_size_nm=size_floor_nm,
-            folder_tiles=label_tiles,
-            run_dir=run_dir,
-        )
-    folder_score_std = std_of_tile_scores(tile_score_table, beta=beta)
-    crop_std_by_tile: dict[str, dict[str, float | None]] = {}
-    if per_tile_table is not None and not per_tile_table.empty:
-        for tile in per_tile_table["tile"].astype(str):
-            crop_std_by_tile[tile] = _tile_crop_std(
+    crop_cells_by_name: dict[str, list[dict[str, Any]]] = {}
+    plain_name = Path(str(folder_label).replace("\\", "/")).name or "Folder"
+    for tile in metric_tiles:
+        group = submap_id(str(tile)) or plain_name
+        crop_cells_by_name.setdefault(group, []).extend(
+            _tile_crop_cells(
                 tile,
                 detections,
                 labels_df,
@@ -1930,23 +1781,25 @@ def render_labeled_tiles_tab(
                 folder_tiles=label_tiles,
                 beta=beta,
             )
+        )
+    crop_std_by_name = {
+        name: std_of_crop_cells(cells) for name, cells in crop_cells_by_name.items()
+    }
+    pooled_cells = [cell for cells in crop_cells_by_name.values() for cell in cells]
+    folder_score_std = std_of_crop_cells(pooled_cells)
     _render_score_table(
         per_tile_table,
         beta=beta,
         folder_name=folder_label,
-        std_tiles=tile_score_table,
+        crop_std_by_name=crop_std_by_name,
     )
 
-    scope = st.radio(
-        "Metrics",
-        options=["all_tiles", "per_tile"],
-        format_func=lambda value: (
-            "All tiles in folder" if value == "all_tiles" else "Tile by tile"
-        ),
-        horizontal=True,
-        key="last_run_metrics_scope",
-        help="Each tile is counted on its own. All tiles adds those tiles. "
+    _render_last_run_summary(
+        folder_counts,
+        beta=beta,
+        score_std=folder_score_std,
     )
+    _render_size_threshold_table(detections)
 
     if names:
         _review_tile_picker(
@@ -1956,47 +1809,6 @@ def render_labeled_tiles_tab(
             prev_key="labeled_review_prev",
             next_key="labeled_review_next",
             on_advance=_advance_labeled_review_tile,
-        )
-
-    if scope == "per_tile":
-        tile_name = str(st.session_state.get("labeled_review_tile") or "")
-        if tile_name:
-            counts = last_run_class_counts(
-                detections,
-                labels_df,
-                tile_names=[tile_name],
-                min_size_nm=size_floor_nm,
-                folder_tiles=label_tiles,
-                run_dir=run_dir,
-            )
-        else:
-            counts = folder_counts
-        selected = lighting_tile_id(tile_name) if tile_name else ""
-        if selected and selected not in crop_std_by_tile and tile_name:
-            crop_std_by_tile[selected] = _tile_crop_std(
-                tile_name,
-                detections,
-                labels_df,
-                run_config,
-                mosaic,
-                origin_cache,
-                min_size_nm=size_floor_nm,
-                folder_tiles=label_tiles,
-                beta=beta,
-            )
-        _render_last_run_summary(
-            counts,
-            beta=beta,
-            score_std=crop_std_by_tile.get(selected),
-        )
-        _render_size_threshold_table(
-            detections_on_review_picture(detections, tile_name) if tile_name else detections
-        )
-    else:
-        _render_last_run_summary(
-            folder_counts,
-            beta=beta,
-            score_std=folder_score_std,
         )
 
     if not names:
@@ -2050,7 +1862,7 @@ def render_labeled_tiles_tab(
         return
 
     pixel_size = float(cfg_get(run_config, "pixel_size_nm", 960.0))
-    x_locals, _y_locals, circles = _circles_on_tile(
+    x_locals, y_locals, circles = _circles_on_tile(
         image, tile_hits, placements, pixel_size, label_map
     )
     view = overlay_view(image, circles, pixel_size, crop=None, max_side=OVERVIEW_MAX_SIDE)
@@ -2136,20 +1948,24 @@ def _review_side_images(
     return loaded if len(loaded) >= 2 else []
 
 
-def render_collection_tab(
-    project_root: str | Path,
+def render_database_tab(project_root: str | Path, n_columns: int = 2) -> None:
+    store = labels_store(project_root)
+    particle_col, not_particle_col = st.columns(2)
+    with particle_col:
+        _render_label_gallery(store, "particle", "Particles", n_columns=n_columns)
+    with not_particle_col:
+        _render_label_gallery(
+            store, "not_particle", "Not a particle", n_columns=n_columns
+        )
+
+
+def _render_label_gallery(
+    store: LabelStore,
     label: str,
     title: str,
-    n_columns: int = 4,
-    campaign: str | None = None,
-    config: dict[str, Any] | None = None,
-    show_area_line: bool = False,
+    n_columns: int = 2,
 ) -> None:
-    
-    store = labels_store(project_root)
     df = store.by_label(label)
-    if campaign is not None:
-        df = rows_for_campaign(df, campaign)
     st.header(title)
     st.caption(f"{len(df)} crops")
     if df.empty:
@@ -2160,7 +1976,7 @@ def render_collection_tab(
     display.insert(
         display.columns.get_loc("size") + 1,
         "size_um",
-        display["size"].astype(float) / NM_PER_UM,
+        pd.to_numeric(display["size"], errors="coerce") / NM_PER_UM,
     )
     st.dataframe(
         display.drop(columns=["crop_path"], errors="ignore"),
@@ -2174,7 +1990,7 @@ def render_collection_tab(
             "Page",
             min_value=1,
             max_value=n_pages,
-            key=f"gallery_page_{campaign or 'all'}_{label}",
+            key=f"gallery_page_{label}",
         )
     )
     start = (page - 1) * GALLERY_PAGE_SIZE
@@ -2183,60 +1999,38 @@ def render_collection_tab(
     columns = st.columns(n_columns)
     for index, record in enumerate(chunk.to_dict(orient="records")):
         with columns[index % n_columns]:
-            path = Path(str(record["crop_path"]))
+            path = resolve_crop_path(
+                store.root,
+                record.get("crop_path"),
+                key=record.get("key", ""),
+                label=record.get("label", ""),
+            )
             folder = crop_source_folder(
                 record.get("source_csv", ""), record.get("source_tile", "")
             )
+            try:
+                size_um = float(record["size"]) / NM_PER_UM
+                size_text = f"{size_um:.1f} µm"
+            except (TypeError, ValueError):
+                size_text = "size unknown"
             caption = (
                 f"{record.get('key', '')} · "
-                f"{float(record['size']) / NM_PER_UM:.1f} µm"
+                f"{size_text}"
                 + (f" · {folder}" if folder else "")
             )
-            if path.is_file():
-                shown = _collection_image(
-                    path, record, label, config, show_area_line=show_area_line
-                )
-                st.image(
-                    shown if shown is not None else str(path),
-                    caption=caption,
-                    width=GALLERY_IMAGE_WIDTH,
-                )
+            if path is not None:
+                st.image(str(path), caption=caption, width=GALLERY_IMAGE_WIDTH)
             else:
-                st.caption(f"Missing file: {path.name}")
+                name = Path(str(record.get("crop_path") or record.get("key") or "")).name
+                st.caption(f"Missing file: {name}")
             if st.button(
                 "Send back to queue",
-                key=f"unlabel_{campaign or 'all'}_{label}_{record['key']}",
+                key=f"unlabel_{label}_{record.get('key', '')}",
                 width="stretch",
             ):
                 store.unlabel(str(record["key"]))
                 st.session_state["label_front_key"] = str(record["key"])
                 st.rerun()
-
-
-def _collection_image(
-    path: Path,
-    record: dict[str, Any],
-    label: str,
-    config: dict[str, Any] | None,
-    show_area_line: bool = False,
-) -> np.ndarray | None:
-    
-    if not show_area_line or label != "particle" or config is None:
-        return None
-    try:
-        size_nm = float(record.get("size") or 0.0)
-    except (TypeError, ValueError):
-        size_nm = 0.0
-    pixel_size = float(cfg_get(config, "pixel_size_nm", 960.0) or 960.0)
-    try:
-        return outline_particle_crop_file(
-            path,
-            size_nm=size_nm,
-            pixel_size_nm=pixel_size,
-            config=config,
-        )
-    except (OSError, ValueError):
-        return None
 
 
 def _source_caption(path: Path | None) -> str:

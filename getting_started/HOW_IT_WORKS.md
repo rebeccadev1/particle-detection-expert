@@ -58,7 +58,7 @@ Analyse places those names on a grid. The overlap you set here should match `ove
 
 ### What you do
 
-**Adjust parameters** holds the detector settings. The profile is **Uniform** or **NSEW**. Uniform loads `config/config.yaml`. NSEW overlays `config/nsew_config.yaml` on top of it. **Reset to standard values** restores the selected profile and keeps the folder you just chose.
+**Adjust parameters** holds the detector settings. The mode is **Uniform** or **NSEW**. Uniform loads `config/config.yaml`. NSEW overlays `config/nsew_config.yaml` on top of it. **Reset to standard values** restores the selected mode and keeps the folder you just chose.
 
 **Run/stop pipeline** detects on the input folder and writes the output folder. When it finishes, the page shows the particle table, a size histogram in micrometres, the mosaic, and any image that was detected but could not be placed on the grid. **Labeled tiles** stay unloaded until you click **Load labeled tiles**.
 
@@ -98,18 +98,18 @@ On each image the worker:
 2. Denoises (σ 1 px), flattens slow illumination (σ 160 px), and stretches contrast.
 3. Removes a periodic lattice with an FFT notch built on **this** tile. If the spectrum has no lattice peaks, it uses a white top-hat instead. Area borders survive both and are handled next.
 4. Boosts compact blobs relative to long edges (local SNR, FFT residuals only), then softens a band around long region borders. A compact residual island on a single edge (≥ 20 µm) or a large flake (≥ 40 µm) is protected so a true particle on a die step is not erased. Pad-corner L-junctions are not protected.
-5. Finds blobs with difference-of-Gaussians (LoG if `blob_method` is `log`).
+5. Finds blobs with difference-of-Gaussians.
 6. Drops peaks that fail, in order: residual prominence, confidence, distance to a border, circularity, a local peak on the preprocessed tile, compact support, then measured size.
 7. Drops clusters and long axis-aligned rows of equal-sized hits. A blob much larger than its neighbours is kept.
-8. Optionally scores the survivors with a frozen ExtraTrees model. Uniform uses residual features (`src/analyse/models/particle_clf_v4_residual.joblib`, threshold **0.23**). The NSEW profile uses `src/analyse/models/particle_clf_v8.joblib` at **0.37**. A missing joblib raises. The app does not train.
+8. Optionally scores the survivors with a frozen ExtraTrees model. Uniform uses residual features (`src/analyse/models/particle_clf_v4_residual.joblib`, threshold **0.23**). The NSEW mode uses `src/analyse/models/particle_clf_v8.joblib` at **0.37**. A missing joblib raises. The app does not train.
 
 Reported **size** is the equivalent circular diameter of the footprint on the **raw photo**, not the DoG sigma. Pixels that stand out from the local background by `size_mass_fraction` (0.4) of the peak contrast form that footprint. The keep window is **20–100 µm**.
 
-DoG itself searches pixel scales σ **3.7–36** (about 10–100 px across). Those sigmas were chosen when 1 px was 0.96 µm. At the current `pixel_size_nm: 3610` (3.61 µm/px) the same sigmas search about **38–368 µm**, so the 20 µm floor sits below the search and the 100 µm ceiling still cuts large DoG hits.
+DoG searches the scales that match the size window. Diameter is about 2.8 times sigma, and sigma is in pixels, so it follows min size, max size, and pixel size. At `pixel_size_nm: 3610` (3.61 µm/px) the 20–100 µm window is about σ **1.96–9.79**.
 
 Placeable names match `filename_pattern`. Current `config/config.yaml` is `(row,col)` plus an image suffix. The mosaic origin is the smallest row and column in the folder, stepped by tile size times `(1 − overlap_fraction)`. Current overlap is **0.1**. Files that do not match are still detected. They are omitted from the stitch and shown on their own PDF pages. Overlapping grid tiles that report the same particle are merged (8 px, about 29 µm at 3.61 µm/px). The highest-confidence hit keeps the position. Cluster size is the max of the members.
 
-The two profiles differ in a few gates. Everything else is shared.
+The two modes differ in a few gates. Everything else is shared.
 
 | | Uniform (`config/config.yaml`) | NSEW (`config/nsew_config.yaml`) |
 |--|-------------------------|---------------------------|
@@ -151,7 +151,7 @@ Undo steps back.
 
 **All hits** shows the queue as a grid. You click the exceptions, and **All done** writes those clicks as one label and every remaining hit as the other. It also writes `mosaic_marked.png` in the output folder.
 
-Crops and the master table go to `labels/` (`all_labels.csv`, plus JPEGs under `labels/crops/`). Each hit is also copied into a campaign file: uniform, NSEW, or glovebox, chosen from the source image. A 3-of-6 angle set has no campaign yet, so it stays in `all_labels.csv` only.
+Crops and the label table go to `labels/` (`all_labels.csv`, plus JPEGs under `labels/crops/`).
 
 ### Inspect
 
@@ -169,7 +169,7 @@ Walks the tiles of the loaded run. Zoom and pan the full image. Circles already 
 
 ### Database
 
-Saved crops, split into **Uniform**, **NSEW**, and **Glovebox**. Each campaign shows particles and not-particles side by side. **Area line** draws the measured footprint on particle crops. The 3-of-6 set is absent here until those labels are placed in a campaign.
+Particles are on the left and not-a-particle crops are on the right, each newest first. Each image is the JPEG under `labels/crops/`. An older stored path is ignored when that file name is already in the current crops folder.
 
 ---
 
@@ -177,7 +177,7 @@ Saved crops, split into **Uniform**, **NSEW**, and **Glovebox**. Each campaign s
 
 ### Shadow
 
-Measures the dark region beside an already found particle, on the side away from the light. Height is shadow length times light height, divided by the horizontal distance from that particle to the ring. That distance depends on where the particle sits in the field.
+Measures the dark regions around an already found particle on an NSEW combi image. The combi is lit from all four sides, so the shadow is measured toward N, E, S, and W. Height for each direction is that shadow’s length times the light height, divided by the horizontal distance from the particle to the ring on the opposite side. That distance depends on where the particle sits in the field.
 
 **From database** takes label keys (the key printed under each crop). **From uploaded image** measures a picture you provide, and you can draw the particle outline instead of the automatic mask. Pixel size comes from Adjust parameters on Analyse. `src/shadow/shadow_check.py` is the same measurement from the command line.
 

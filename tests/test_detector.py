@@ -20,6 +20,20 @@ def _nearest_distance(detected: list[tuple[float, float]], truth: tuple[float, f
     )
 
 
+def test_blob_sigma_follows_size_window() -> None:
+    from src.analyse.detection.detector import blob_sigmas_for_size
+
+    diameter_per_sigma = 2.0 * np.sqrt(2.0)
+    min_sigma, max_sigma = blob_sigmas_for_size(20_000.0, 100_000.0, 3610.0)
+    assert abs(min_sigma - (20_000.0 / 3610.0) / diameter_per_sigma) < 1e-9
+    assert abs(max_sigma - (100_000.0 / 3610.0) / diameter_per_sigma) < 1e-9
+    assert abs(min_sigma - 1.959) < 0.001
+    assert abs(max_sigma - 9.794) < 0.001
+    floor, capped = blob_sigmas_for_size(1.0, 2.0, 10_000.0)
+    assert floor == 0.5
+    assert capped == 0.5
+
+
 def test_equivalent_diameter_matches_disk_area() -> None:
     from src.analyse.detection.detector import blob_equivalent_diameter
 
@@ -33,20 +47,18 @@ def test_equivalent_diameter_matches_disk_area() -> None:
     assert abs(diameter - 20.0) < 1.0
 
 
-def test_footprint_edge_encloses_the_disk() -> None:
+def test_footprint_diameter_matches_the_disk() -> None:
     from src.analyse.detection.detector import blob_equivalent_diameter, blob_footprint
 
     image = np.zeros((81, 81), dtype=np.float32)
     yy, xx = np.ogrid[:81, :81]
     disk = (yy - 40) ** 2 + (xx - 40) ** 2 <= 10.0**2
     image[disk] = 1.0
-    diameter, edge = blob_footprint(image, 40.0, 40.0, radius=10.0)
+    diameter = blob_footprint(image, 40.0, 40.0, radius=10.0)
     assert abs(diameter - blob_equivalent_diameter(image, 40.0, 40.0, radius=10.0)) < 1e-6
-    assert edge
-    pts = np.concatenate([np.asarray(contour).reshape(-1, 2) for contour in edge])
-    radii = np.hypot(pts[:, 1] - 40.0, pts[:, 0] - 40.0)
-    assert radii.min() > 8.0
-    assert radii.max() < 12.0
+    expected = 2.0 * np.sqrt(float(np.count_nonzero(disk)) / np.pi)
+    assert abs(diameter - expected) < 0.05
+    assert abs(diameter - 20.0) < 1.0
 
 
 def test_equivalent_diameter_uses_photo_not_floor() -> None:

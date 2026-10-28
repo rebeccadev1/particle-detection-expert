@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from pathlib import Path
 
@@ -275,6 +276,46 @@ def test_size_distribution_starts_at_detection_floor() -> None:
     counts = size_distribution(table, min_um=20.0)["count"]
     assert list(counts.index) == ["20–25", "25–30", "30–35"]
     assert list(counts) == [1, 1, 1]
+
+
+def test_last_pipeline_json_keeps_one_ml_model(tmp_path: Path) -> None:
+    from src.overall.io.results_writer import write_run_settings
+
+    config = {
+        "ml": {
+            "enabled": True,
+            "score_before_structure": False,
+            "model_path": "models/other.joblib",
+            "threshold": 0.9,
+        },
+        "report": {
+            "f_beta": 1.0,
+            "target_mb": 20.0,
+            "beta_presets": [
+                {
+                    "beta": 1.0,
+                    "model_path": "src/analyse/models/particle_clf_v4_residual.joblib",
+                    "threshold": 0.23,
+                },
+                {
+                    "beta": 2.0,
+                    "model_path": "src/analyse/models/particle_clf_v6.joblib",
+                    "threshold": 0.55,
+                },
+            ],
+        },
+    }
+    path = write_run_settings(config, tmp_path / "last_pipeline.json")
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert "beta_presets" not in saved["report"]
+    assert saved["report"]["f_beta"] == 1.0
+    assert saved["ml"] == {
+        "enabled": True,
+        "score_before_structure": False,
+        "model_path": "src/analyse/models/particle_clf_v4_residual.joblib",
+        "threshold": 0.23,
+    }
+    assert config["report"]["beta_presets"][1]["threshold"] == 0.55
 
 
 def test_excel_bytes_includes_parameters_sheet() -> None:

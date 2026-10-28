@@ -25,20 +25,13 @@ from src.verification.inspect import (
     preview_click_crop,
 )
 from src.verification.queue import load_particles_csv
-from src.verification.store import LabelStore
+from src.verification.store import ALL_LABELS_NAME, LabelStore
 from src.analyse.preprocessing.corrections import apply_corrections
 
 NEAR_PX = 20.0
 
 
 POSITIVE_LABEL = "particle"
-
-
-def format_trace_caption(row: Mapping[str, Any]) -> str:
-    reason = str(row.get("reason", "unknown"))
-    residual = float(row.get("residual", float("nan")))
-    edge = float(row.get("edge_distance_px", float("nan")))
-    return f"Gate: {reason} · residual {residual:.3f} · edge {edge:.1f} px"
 
 
 def trace_click(
@@ -86,24 +79,6 @@ def _tile_name(row: Mapping[str, Any]) -> str:
     return Path(str(row["source_tile"])).name
 
 
-def localize_label_row(
-    row: Mapping[str, Any],
-    config: Mapping[str, Any],
-    placements: Sequence[Any],
-    width: int,
-    height: int,
-) -> tuple[float, float]:
-    pixel_size = float(cfg_get(dict(config), "pixel_size_nm", 960.0))
-    return local_xy_on_tile(
-        float(row["x_global"]),
-        float(row["y_global"]),
-        placements,
-        pixel_size,
-        width,
-        height,
-    )
-
-
 def unmatched_particle_marks(
     labels: pd.DataFrame,
     detections: pd.DataFrame | None,
@@ -137,7 +112,14 @@ def unmatched_particle_marks(
         path = find_tile_path(tile_name, input_dir=folder)
         height, width = peek_tile_hw(path)
         placements = candidate_placements(path, config, origin_cache=origin_cache)
-        x_local, y_local = localize_label_row(record, config, placements, width, height)
+        x_local, y_local = local_xy_on_tile(
+            float(record["x_global"]),
+            float(record["y_global"]),
+            placements,
+            pixel_size,
+            width,
+            height,
+        )
         if not (0.0 <= x_local < float(width) and 0.0 <= y_local < float(height)):
             continue
         dedupe = (tile_name, int(round(x_local)), int(round(y_local)))
@@ -241,16 +223,14 @@ def promote_unmatched_to_inspect(
     return written
 
 
-def default_label_path() -> Path:
-    from src.verification.store import default_labels_path
-
-    return default_labels_path()
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
-    parser.add_argument("--labels", type=Path, default=default_label_path())
+    parser.add_argument(
+        "--labels",
+        type=Path,
+        default=PACKAGE_ROOT / "labels" / ALL_LABELS_NAME,
+    )
     parser.add_argument(
         "--detections",
         type=Path,

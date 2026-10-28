@@ -15,12 +15,14 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.analyse.detection.detector import blob_sigmas_for_size
 from src.capture.camera_automation import latest_run_folder
 from src.overall.io.tile_loader import input_folder_labels
 from src.capture.capture_ui import keep_capture_inputs, keep_stage_inputs, render_capture_tab, suspend_live_view
 from src.overall.config import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_INPUT_DIR,
+    apply_beta_ml,
     apply_nsew_settings,
     beta_preset_rows,
     cfg_get,
@@ -36,7 +38,7 @@ from src.overall.io.results_writer import excel_bytes, result_table, write_csv, 
 from src.verification.inspect import label_colors_for_hits
 from src.verification.ui import (
     labels_store,
-    render_collection_tab,
+    render_database_tab,
     render_label_tab,
     render_labeled_tiles_tab,
     render_tile_inspect_tab,
@@ -238,7 +240,7 @@ st.html(
 st.title("Particle Detection Expert")
 
 NM_PER_UM = 1000.0
-UI_SCHEMA = "mixed_layout_v28"
+UI_SCHEMA = "mixed_layout_v29"
 
 def _nm_to_um(nm: float) -> float:
     return float(nm) / NM_PER_UM
@@ -292,6 +294,10 @@ def _widget_defaults(base: dict) -> dict:
     size_agg = str(meas.get("size_aggregation", "max"))
     if size_agg not in ("max", "mean"):
         size_agg = "max"
+    beta_choice = preset_for_beta(
+        beta_preset_rows(base),
+        1.0 if report.get("f_beta") is None else report.get("f_beta"),
+    )
     return {
         "ui_input_dir": str(base.get("input_dir") or ""),
         "ui_output_dir": "",
@@ -312,10 +318,8 @@ def _widget_defaults(base: dict) -> dict:
         "ui_min_size_um": _nm_to_um(float(det.get("min_size_nm", 10000.0))),
         "ui_max_size_um": _nm_to_um(float(det.get("max_size_nm", 100000.0))),
         "ui_blob_threshold": float(det.get("blob_threshold", 0.08)),
-        "ui_blob_min_sigma": float(det.get("blob_min_sigma", 3.7)),
         "ui_min_prominence": float(det.get("min_prominence", 0.30)),
         "ui_min_confidence_pct": int(round(float(det.get("min_confidence", 0.50)) * 100.0)),
-        "ui_blob_max_sigma": float(det.get("blob_max_sigma", 36.0)),
         "ui_local_snr_sigma": float(det.get("local_snr_sigma", 0.0)),
         "ui_edge_soften_sigma": float(det.get("edge_soften_sigma", 12.0)),
         "ui_edge_soften_strength": float(det.get("edge_soften_strength", 2.0)),
@@ -323,15 +327,10 @@ def _widget_defaults(base: dict) -> dict:
         "ui_min_circularity": float(det.get("min_circularity", 0.0)),
         "ui_structure_neighbor_px": float(det.get("structure_neighbor_px", 48.0)),
         "ui_ml_enabled": bool((base.get("ml") or {}).get("enabled", False)),
-        "ui_ml_threshold": float((base.get("ml") or {}).get("threshold", 0.25)),
         "ui_merge_radius_px": float(meas.get("merge_radius_px", 8.0)),
         "ui_size_aggregation": size_agg,
         "ui_target_mb": float(report.get("target_mb", 20.0)),
-        "ui_downsample": int(report.get("downsample", 0) or 0),
-        "ui_f_beta": preset_for_beta(
-            beta_preset_rows(base),
-            1.0 if report.get("f_beta") is None else report.get("f_beta"),
-        )["beta"],
+        "ui_f_beta": beta_choice["beta"],
     }
 
 def _hold_key(key: str) -> str:
@@ -402,29 +401,25 @@ _SIDEBAR_SECTIONS: dict[str, tuple[str, ...]] = {
         "ui_blob_threshold",
         "ui_min_prominence",
         "ui_min_confidence_pct",
-        "ui_blob_min_sigma",
-        "ui_blob_max_sigma",
         "ui_local_snr_sigma",
         "ui_edge_soften_sigma",
         "ui_edge_soften_strength",
         "ui_edge_exclude_px",
         "ui_min_circularity",
         "ui_structure_neighbor_px",
+        "ui_f_beta",
         "ui_ml_enabled",
-        "ui_ml_threshold",
     ),
     "Output": (
         "ui_output_dir",
         "ui_merge_radius_px",
         "ui_size_aggregation",
         "ui_target_mb",
-        "ui_downsample",
-        "ui_f_beta",
     ),
 }
 
 
-def _selected_profile(base: dict) -> dict:
+def _selected_mode(base: dict) -> dict:
     if st.session_state.get("ui_settings_nsew"):
         return _nsew_config(base)
     return base
@@ -436,45 +431,20 @@ def _assign_widget(key: str, value, *, previous_epoch: int | None = None) -> Non
     if previous_epoch is None or previous_epoch > 0:
         st.session_state[key] = value
 
-def _apply_beta_preset(base: dict, *, previous_epoch: int | None = None) -> None:
-    beta = float(
-        st.session_state.get(_live_key("ui_f_beta"), st.session_state.get("ui_f_beta", 1.0))
-    )
-    preset = preset_for_beta(beta_preset_rows(_selected_profile(base)), beta)
-    _assign_widget("ui_ml_threshold", float(preset["threshold"]), previous_epoch=previous_epoch)
-    st.session_state["ui_beta_model_path"] = str(preset["model_path"])
-
-def _on_beta_change(base: dict) -> None:
-    previous_epoch = _epoch()
-    captured: dict[str, object] = {}
-    for keys in _SIDEBAR_SECTIONS.values():
-        for key in keys:
-            live = _live_key(key)
-            if live in st.session_state:
-                captured[key] = st.session_state[live]
-            elif key in st.session_state:
-                captured[key] = st.session_state[key]
-            elif _hold_key(key) in st.session_state:
-                captured[key] = st.session_state[_hold_key(key)]
-    st.session_state["ui_settings_epoch"] = previous_epoch + 1
-    for key, value in captured.items():
-        _assign_widget(key, value, previous_epoch=previous_epoch)
-    _apply_beta_preset(base, previous_epoch=previous_epoch)
-
 def _apply_standard_settings(base: dict, folder: str | None = None) -> None:
     previous = _live_key("ui_input_dir")
-    profile = _selected_profile(base)
+    mode = _selected_mode(base)
     if folder is None:
         chosen = str(
             st.session_state.get(previous) or st.session_state.get("ui_input_dir") or ""
         )
         if not chosen:
-            chosen = str(profile.get("input_dir") or "")
+            chosen = str(mode.get("input_dir") or "")
     else:
         chosen = folder
     previous_epoch = _epoch()
     st.session_state["ui_settings_epoch"] = previous_epoch + 1
-    _apply_widget_defaults(profile)
+    _apply_widget_defaults(mode)
     live = _live_key("ui_input_dir")
     st.session_state[live] = chosen
     if previous_epoch > 0:
@@ -485,7 +455,7 @@ def _apply_standard_settings(base: dict, folder: str | None = None) -> None:
         next_versioned_output_name(chosen),
         previous_epoch=previous_epoch,
     )
-    _apply_beta_preset(base, previous_epoch=previous_epoch)
+    _apply_wafer_ml(base)
 
 def _on_input_folder(base: dict) -> None:
     chosen = str(st.session_state.get(_live_key("ui_input_dir")) or "")
@@ -516,12 +486,25 @@ def _widget_value(key: str):
 def _nsew_config(base: dict) -> dict:
     return apply_nsew_settings(base)
 
+def _patterned_wafer() -> bool:
+    return st.session_state.get("ui_wafer") != "Empty"
+
+def _apply_wafer_ml(base: dict, *, previous_epoch: int | None = None) -> None:
+    if _patterned_wafer():
+        enabled = bool((_selected_mode(base).get("ml") or {}).get("enabled", False))
+    else:
+        enabled = False
+    _assign_widget("ui_ml_enabled", enabled, previous_epoch=previous_epoch)
+
 def _on_reset_standard(base: dict) -> None:
     _apply_standard_settings(base)
 
-def _on_profile_choice(base: dict) -> None:
-    st.session_state["ui_settings_nsew"] = st.session_state.get("ui_settings_profile") == "NSEW"
+def _on_mode_choice(base: dict) -> None:
+    st.session_state["ui_settings_nsew"] = st.session_state.get("ui_settings_mode") == "NSEW"
     _apply_standard_settings(base)
+
+def _on_wafer_choice(base: dict) -> None:
+    _apply_wafer_ml(base)
 
 
 def _folder_field(
@@ -566,7 +549,7 @@ def _prepare_ui_state(base: dict) -> None:
     if st.session_state.get("ui_schema") != UI_SCHEMA:
         if not isinstance(st.session_state.get("ui_settings_nsew"), bool):
             st.session_state["ui_settings_nsew"] = False
-        st.session_state["ui_settings_profile"] = (
+        st.session_state["ui_settings_mode"] = (
             "NSEW" if st.session_state.get("ui_settings_nsew") else "Uniform"
         )
         _apply_standard_settings(base, "")
@@ -581,10 +564,12 @@ def _prepare_ui_state(base: dict) -> None:
     _apply_capture_suggestion()
     if not isinstance(st.session_state.get("ui_settings_nsew"), bool):
         st.session_state["ui_settings_nsew"] = False
-    if st.session_state.get("ui_settings_profile") not in ("Uniform", "NSEW"):
-        st.session_state["ui_settings_profile"] = (
+    if st.session_state.get("ui_settings_mode") not in ("Uniform", "NSEW"):
+        st.session_state["ui_settings_mode"] = (
             "NSEW" if st.session_state.get("ui_settings_nsew") else "Uniform"
         )
+    if st.session_state.get("ui_wafer") not in ("Patterned", "Empty"):
+        st.session_state["ui_wafer"] = "Patterned"
 
 
 def _capture_folder_label(folder: Path) -> str:
@@ -601,22 +586,41 @@ def _apply_capture_suggestion() -> None:
     st.session_state["ui_suggested_capture"] = _capture_folder_label(latest_path)
 
 
+def _ml_choice_caption(model_path: str, threshold: float) -> str:
+    stem = Path(str(model_path)).stem
+    if stem.startswith("particle_clf_"):
+        stem = stem[len("particle_clf_") :]
+    return f"{stem.replace('_', ' ')}, threshold {float(threshold):.2f}"
+
+
 def _render_adjust_parameters(base: dict) -> None:
-    st.radio(
-        "Settings profile",
-        ("Uniform", "NSEW"),
-        horizontal=True,
-        key="ui_settings_profile",
-        persist_state="session",
-        on_change=_on_profile_choice,
-        args=(base,),
-        help="Uniform or NSEW standard settings.",
-    )
+    mode_col, wafer_col = st.columns(2, vertical_alignment="bottom")
+    with mode_col:
+        st.radio(
+            "Mode",
+            ("Uniform", "NSEW"),
+            horizontal=True,
+            key="ui_settings_mode",
+            persist_state="session",
+            on_change=_on_mode_choice,
+            args=(base,),
+        )
+    with wafer_col:
+        st.radio(
+            "Wafer",
+            ("Patterned", "Empty"),
+            horizontal=True,
+            key="ui_wafer",
+            persist_state="session",
+            on_change=_on_wafer_choice,
+            args=(base,),
+            help="Patterned uses this mode's ML model and threshold. Empty does not use ML.",
+        )
     st.button(
         "Reset to standard values",
         on_click=_on_reset_standard,
         args=(base,),
-        help="Restore settings for the profile (Uniform or NSEW) selected above.",
+        help="Restore settings for the mode (Uniform or NSEW) selected above.",
         width="stretch",
     )
 
@@ -788,24 +792,27 @@ def _render_adjust_parameters(base: dict) -> None:
             key=_live_key("ui_tophat_radius"),
             help="Must be larger than the biggest particle, or large debris is erased.",
         )
-        st.number_input(
-            "Min size (µm)",
-            min_value=0.1,
-            step=0.5,
-            format="%.2f",
-            persist_state="session",
-            key=_live_key("ui_min_size_um"),
-            help="Keep particles larger than this.",
-        )
-        st.number_input(
-            "Max size (µm)",
-            min_value=0.1,
-            step=0.5,
-            format="%.2f",
-            persist_state="session",
-            key=_live_key("ui_max_size_um"),
-            help="Drop particles larger than this.",
-        )
+        min_size_col, max_size_col = st.columns(2, vertical_alignment="bottom")
+        with min_size_col:
+            st.number_input(
+                "Min size (µm)",
+                min_value=0.1,
+                step=0.5,
+                format="%.2f",
+                persist_state="session",
+                key=_live_key("ui_min_size_um"),
+                help="Keep particles larger than this. The smallest blob scale follows this size and the pixel size.",
+            )
+        with max_size_col:
+            st.number_input(
+                "Max size (µm)",
+                min_value=0.1,
+                step=0.5,
+                format="%.2f",
+                persist_state="session",
+                key=_live_key("ui_max_size_um"),
+                help="Drop particles larger than this. The largest blob scale follows this size and the pixel size.",
+            )
         st.slider(
             "Blob threshold",
             0.001,
@@ -832,25 +839,11 @@ def _render_adjust_parameters(base: dict) -> None:
             help="Drop blobs whose residual at the peak is below this; 0 disables.",
         )
         st.number_input(
-            "Blob min sigma",
-            min_value=0.5,
-            persist_state="session",
-            key=_live_key("ui_blob_min_sigma"),
-            help="Smallest scale searched; diameter is about 2.8 times sigma.",
-        )
-        st.number_input(
-            "Blob max sigma",
-            min_value=1.0,
-            persist_state="session",
-            key=_live_key("ui_blob_max_sigma"),
-            help="Largest scale searched; raise it with Max size so large flakes are found.",
-        )
-        st.number_input(
-            "Local SNR sigma (0 = auto)",
+            "Local SNR sigma",
             min_value=0.0,
             persist_state="session",
             key=_live_key("ui_local_snr_sigma"),
-            help="Envelope for local energy; 0 turns this on for FFT residuals and off for top-hat.",
+            help="Envelope for local energy, in pixels. The standard value is 3.5 times the largest blob scale. 0 uses that standard on FFT residuals.",
         )
         st.number_input(
             "Edge soften sigma",
@@ -886,32 +879,32 @@ def _render_adjust_parameters(base: dict) -> None:
             min_value=0.0,
             persist_state="session",
             key=_live_key("ui_structure_neighbor_px"),
-            help="Drop blobs with at least this profile's minimum neighbours this close. Uniform uses 3, NSEW uses 2. 0 disables.",
+            help="Drop blobs with at least this mode's minimum neighbours this close. Uniform uses 3, NSEW uses 2. 0 disables.",
         )
-        st.checkbox(
-            "Apply ML filter",
-            persist_state="session",
-            key=_live_key("ui_ml_enabled"),
-            help="Score each proposal with the trained model and drop false positives.",
-        )
-        ml_min, ml_max = 0.0, 1.0
-        live_threshold = _live_key("ui_ml_threshold")
-        stored = float(
-            st.session_state.get(live_threshold, st.session_state.get("ui_ml_threshold", 0.0))
-        )
-        clamped = min(ml_max, max(ml_min, stored))
-        if stored != clamped:
-            st.session_state[live_threshold] = clamped
-            st.session_state["ui_ml_threshold"] = clamped
-        st.slider(
-            "ML P(particle) threshold",
-            min_value=ml_min,
-            max_value=ml_max,
-            step=0.01,
-            persist_state="session",
-            key=_live_key("ui_ml_threshold"),
-            help="Keep blobs with at least this probability; 0 keeps every proposal.",
-        )
+        if _patterned_wafer():
+            beta_rows = beta_preset_rows(_selected_mode(base))
+            beta_options = [float(row["beta"]) for row in beta_rows]
+            beta_col, ml_col = st.columns([1, 1.6], vertical_alignment="bottom")
+            with beta_col:
+                st.selectbox(
+                    "Beta",
+                    options=beta_options,
+                    format_func=lambda value: f"{float(value):.2f}",
+                    persist_state="session",
+                    key=_live_key("ui_f_beta"),
+                    help="Chooses the Fβ score. The run uses that beta's model and threshold.",
+                )
+            with ml_col:
+                st.checkbox(
+                    "Apply ML filter",
+                    persist_state="session",
+                    key=_live_key("ui_ml_enabled"),
+                    help="Score each proposal with the trained model and drop false positives.",
+                )
+            if bool(st.session_state.get(_live_key("ui_ml_enabled"))):
+                beta = float(st.session_state.get(_live_key("ui_f_beta"), 1.0))
+                preset = preset_for_beta(beta_rows, beta)
+                st.caption(_ml_choice_caption(str(preset["model_path"]), float(preset["threshold"])))
     with st.container(key="sidebar_sec_Output"):
         _restore_widgets(_SIDEBAR_SECTIONS["Output"], force=seed_frontend)
         output_key = _live_key("ui_output_dir")
@@ -961,25 +954,6 @@ def _render_adjust_parameters(base: dict) -> None:
             key=_live_key("ui_target_mb"),
             help="Each tile is downsampled before stitching so the full mosaic is about this large.",
         )
-        st.number_input(
-            "Overlay downsample (0 = auto)",
-            min_value=0,
-            persist_state="session",
-            key=_live_key("ui_downsample"),
-            help="0 picks a factor from the target size; a value above 0 forces that factor.",
-        )
-        beta_rows = beta_preset_rows(base)
-        beta_options = [float(row["beta"]) for row in beta_rows]
-        st.selectbox(
-            "Beta",
-            options=beta_options,
-            format_func=lambda value: f"{float(value):.2f}",
-            persist_state="session",
-            key=_live_key("ui_f_beta"),
-            on_change=_on_beta_change,
-            args=(base,),
-            help="Chooses the Fβ score and the ML model and starting threshold for the next run.",
-        )
     st.session_state["ui_sidebar_frontend_seeded"] = True
 
 
@@ -1013,11 +987,14 @@ def _config_from_state(base: dict) -> dict:
     det["tophat_radius"] = int(_widget_value("ui_tophat_radius"))
     det["min_size_nm"] = _um_to_nm(float(_widget_value("ui_min_size_um")))
     det["max_size_nm"] = _um_to_nm(float(_widget_value("ui_max_size_um")))
+    det["blob_min_sigma"], det["blob_max_sigma"] = blob_sigmas_for_size(
+        det["min_size_nm"],
+        det["max_size_nm"],
+        float(config["pixel_size_nm"]),
+    )
     det["blob_threshold"] = float(_widget_value("ui_blob_threshold"))
     det["min_prominence"] = float(_widget_value("ui_min_prominence"))
     det["min_confidence"] = float(_widget_value("ui_min_confidence_pct")) / 100.0
-    det["blob_min_sigma"] = float(_widget_value("ui_blob_min_sigma"))
-    det["blob_max_sigma"] = float(_widget_value("ui_blob_max_sigma"))
     det["local_snr_sigma"] = float(_widget_value("ui_local_snr_sigma"))
     det["edge_soften_sigma"] = float(_widget_value("ui_edge_soften_sigma"))
     det["edge_soften_strength"] = float(_widget_value("ui_edge_soften_strength"))
@@ -1026,16 +1003,8 @@ def _config_from_state(base: dict) -> dict:
     det["structure_neighbor_px"] = float(_widget_value("ui_structure_neighbor_px"))
 
     ml = config.setdefault("ml", {})
-    ml["enabled"] = bool(_widget_value("ui_ml_enabled"))
-    ml_min, ml_max = 0.0, 1.0
-    ml["threshold"] = min(ml_max, max(ml_min, float(_widget_value("ui_ml_threshold"))))
-    beta_choice = preset_for_beta(
-        beta_preset_rows(_selected_profile(base)), float(_widget_value("ui_f_beta"))
-    )
-    if not st.session_state.get("ui_beta_model_path"):
-        st.session_state["ui_beta_model_path"] = str(beta_choice["model_path"])
-    ml["model_path"] = str(
-        st.session_state.get("ui_beta_model_path") or beta_choice["model_path"]
+    ml["enabled"] = (
+        False if not _patterned_wafer() else bool(_widget_value("ui_ml_enabled"))
     )
 
     meas = config.setdefault("measurement", {})
@@ -1043,8 +1012,13 @@ def _config_from_state(base: dict) -> dict:
     meas["size_aggregation"] = _widget_value("ui_size_aggregation")
     report = config.setdefault("report", {})
     report["target_mb"] = float(_widget_value("ui_target_mb"))
-    report["downsample"] = int(_widget_value("ui_downsample"))
+    mode_report = (_selected_mode(base).get("report") or {})
     report["f_beta"] = float(_widget_value("ui_f_beta"))
+    if _patterned_wafer():
+        presets = mode_report.get("beta_presets")
+        if isinstance(presets, list) and presets:
+            report["beta_presets"] = deepcopy(presets)
+        apply_beta_ml(config)
     return config
 
 
@@ -1378,7 +1352,6 @@ def _render_unstitched_images(
         bool(show_labels),
         int(len(table)),
         float(report.get("target_mb", 20.0)),
-        int(report.get("downsample", 0) or 0),
     )
     cached = st.session_state.get("unstitched_images")
     if st.session_state.get("unstitched_key") != key or not isinstance(cached, list):
@@ -1540,7 +1513,6 @@ def _render_finished_run(config: dict) -> bool:
             overlay_key = (
                 "full",
                 float(active_config.get("report", {}).get("target_mb", 20.0)),
-                int(active_config.get("report", {}).get("downsample", 0) or 0),
                 len(table),
                 _labels_stamp(),
             )
@@ -1726,46 +1698,8 @@ if page == "Verify":
                 )
     if database_tab.open:
         with database_tab:
-            show_area_line = st.toggle(
-                "Area line",
-                value=True,
-                key="database_area_line",
-                help="Outline the measured particle area on the particle crops.",
-            )
-            uniform_tab, nsew_tab, glovebox_tab = st.tabs(
-                ["Uniform", "NSEW", "Glovebox"],
-                on_change="rerun",
-                key="database_campaign_tabs",
-            )
-            for campaign_tab, campaign in (
-                (uniform_tab, "uniform"),
-                (nsew_tab, "nsew"),
-                (glovebox_tab, "glovebox"),
-            ):
-                if not campaign_tab.open:
-                    continue
-                with campaign_tab:
-                    particle_col, not_particle_col = st.columns(2)
-                    with particle_col:
-                        with st.container(border=True, key="block-particles"):
-                            render_collection_tab(
-                                ROOT,
-                                "particle",
-                                "Particles",
-                                n_columns=2,
-                                campaign=campaign,
-                                config=config,
-                                show_area_line=show_area_line,
-                            )
-                    with not_particle_col:
-                        with st.container(border=True, key="block-not-particles"):
-                            render_collection_tab(
-                                ROOT,
-                                "not_particle",
-                                "Not particles",
-                                n_columns=2,
-                                campaign=campaign,
-                            )
+            with st.container(border=True, key="block-database"):
+                render_database_tab(ROOT)
 
 if page == "Additional tools":
     shadow_tab, redirector_tab = st.tabs(

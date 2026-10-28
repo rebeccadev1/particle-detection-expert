@@ -9,16 +9,15 @@ import pandas as pd
 from src.shadow.shadow import (
     _parse_keys,
     detection_borders,
-    direction_image,
     image_choice_labels,
     resolve_named_image,
     display_preview,
     find_label_image,
     light_distance_mm,
     mask_from_canvas,
+    measure_nsew_shadows,
     measure_shadow,
     paint_kept_mask,
-    parse_light_from,
     run_shadow_check,
     scale_from_borders,
     shadow_direction,
@@ -128,11 +127,37 @@ def test_display_preview_downscales() -> None:
     assert rgb.shape[0] == 200 and rgb.shape[1] == 200
 
 
-def test_light_from_compass_and_stem() -> None:
-    assert parse_light_from("e") == 90.0
-    assert parse_light_from(None, "S.bmp") == 180.0
+def test_shadow_direction_from_north_points_down() -> None:
     dx, dy = shadow_direction(0.0)
     assert abs(dx) < 1e-9 and abs(dy - 1.0) < 1e-9
+
+
+def _combi_scene() -> np.ndarray:
+    rng = np.random.default_rng(2)
+    image = 0.5 + rng.normal(0.0, 0.01, (200, 200))
+    yy, xx = np.indices(image.shape)
+    image[np.hypot(xx - 100, yy - 100) <= 10] = 0.9
+    image[111:141, 92:109] = 0.2
+    image[60:89, 92:109] = 0.2
+    image[92:109, 111:131] = 0.2
+    image[92:109, 70:89] = 0.2
+    return image
+
+
+def test_combi_shadows_are_measured_in_four_directions() -> None:
+    results, debug = measure_nsew_shadows(_combi_scene(), 100.0, 100.0, 20.0)
+    assert set(results) == {"N", "E", "S", "W"}
+    assert all(item.found for item in results.values())
+    assert abs(results["S"].length_px - 30.0) <= 4.0
+    assert abs(results["N"].length_px - 30.0) <= 4.0
+    assert abs(results["E"].length_px - 20.0) <= 4.0
+    assert abs(results["W"].length_px - 20.0) <= 4.0
+    assert set(debug["shadows"]) == {"N", "E", "S", "W"}
+    union = np.zeros(debug["shadow"].shape, dtype=bool)
+    for mask in debug["shadows"].values():
+        union |= mask
+    assert union.shape == debug["shadow"].shape
+    assert int(union.sum()) >= int(debug["shadow"].sum())
 
 
 def test_light_distance_edge_centre_far_edge() -> None:
@@ -168,16 +193,6 @@ def test_resolve_named_image_uses_an_existing_path(tmp_path: Path) -> None:
     assert hits == ()
     missing, hits = resolve_named_image("no-such-shadow-image-xyz.png")
     assert missing is None
-
-
-def test_direction_image_switches_to_sibling(tmp_path: Path) -> None:
-    north = tmp_path / "N.png"
-    east = tmp_path / "E.png"
-    north.write_bytes(b"")
-    east.write_bytes(b"")
-    assert direction_image(north, "E") == east
-    assert direction_image(north, None) == north
-    assert direction_image(north, "S") == north
 
 
 def test_paint_kept_mask_tints_only_saved_pixels() -> None:
@@ -234,10 +249,10 @@ def test_crop_key_uses_detection_pixel_size_when_sidebar_scale_misses(tmp_path: 
         {"pixel_size_nm": 960.0},
         keys=["angles_v1_exp200000_3of6_70000_280000"],
         input_dir=str(tmp_path),
-        light_from="N",
         out=None,
     )
     assert result.messages == []
+    assert list(result.table["direction"]) == ["N", "E", "S", "W"]
     assert abs(float(result.table.iloc[0]["x_px"]) - 20.0) < 0.2
     assert abs(float(result.table.iloc[0]["y_px"]) - 80.0) < 0.2
     assert len(detection_borders(particles, tile.name, {})) == 2
@@ -250,3 +265,8 @@ def test_parse_keys_splits_on_commas_and_spaces() -> None:
         "v1_NSEW_1_2",
         "R3_4_12_5X_1386512_1834272",
     ]
+
+
+def test_parse_keys_keeps_commas_inside_tile_coordinates() -> None:
+    keys = _parse_keys("(1,1)_1402100_346700, (2,3)_10_20")
+    assert keys == ["(1,1)_1402100_346700", "(2,3)_10_20"]

@@ -118,6 +118,41 @@ def test_advance_versioned_output_name_bumps_each_run(tmp_path: Path) -> None:
     )
 
 
+def test_reserve_fresh_output_dir_skips_an_existing_folder(tmp_path: Path, monkeypatch) -> None:
+    import src.overall.config as config_mod
+    from src.overall.config import reserve_fresh_output_dir
+
+    outputs = tmp_path / "Outputs"
+    monkeypatch.setattr(config_mod, "DEFAULT_OUTPUT_DIR", outputs)
+    run = "Tiles"
+    taken = outputs / f"{run} v1"
+    taken.mkdir(parents=True)
+    (taken / "particles.csv").write_text("old", encoding="utf-8")
+    (outputs / f"{run} v2").mkdir()
+    config = {
+        "input_dir": str(tmp_path / "Inputs" / run),
+        "output_dir": f"{run} v1",
+    }
+
+    dest = reserve_fresh_output_dir(config)
+
+    assert dest == (outputs / f"{run} v3").resolve()
+    assert config["output_dir"] == f"{run} v3"
+    assert (taken / "particles.csv").read_text(encoding="utf-8") == "old"
+
+    absolute = {
+        "input_dir": str(tmp_path / "Inputs" / run),
+        "output_dir": str(taken),
+    }
+    assert reserve_fresh_output_dir(absolute) == (outputs / f"{run} v3").resolve()
+    assert absolute["output_dir"] == str((outputs / f"{run} v3").resolve())
+
+    empty = outputs / f"{run} v4"
+    fresh = {"input_dir": config["input_dir"], "output_dir": str(empty)}
+    assert reserve_fresh_output_dir(fresh) == empty
+    assert fresh["output_dir"] == str(empty)
+
+
 def test_output_folder_choices_keep_current_and_standard_name(tmp_path: Path) -> None:
     from src.overall.config import output_choice_label, output_folder_choices, output_folder_labels
 
@@ -553,17 +588,18 @@ def test_pipeline_caches_mosaic_thumbnails(tmp_path: Path) -> None:
     right = make_structured_tile((height, width), particles=[(20.0, 10.0, 3.5)])
     write_tile_tiff(tmp_path / "R3_0_1_5X.tif", left)
     write_tile_tiff(tmp_path / "R3_0_2_5X.tif", right)
-    config = detector_test_config(report={"downsample": 4, "target_mb": 20.0})
+    config = detector_test_config(report={"target_mb": 0.0015})
     config["input_dir"] = str(tmp_path)
     config["output_dir"] = str(tmp_path / "out")
     _table, mosaic = run_pipeline(config)
-    assert mosaic.thumbnail_factor == 4
+    factor = mosaic.thumbnail_factor
+    assert factor == 4
     assert set(mosaic.thumbnails) == {"R3_0_1_5X.tif", "R3_0_2_5X.tif"}
-    preview = mosaic.preview(downsample=4, workers=1)
+    preview = mosaic.preview(downsample=factor, workers=1)
     step = int(width * (1.0 - 0.25))
-    assert preview.shape == (height // 4, (step + width) // 4)
+    assert preview.shape == (height // factor, (step + width) // factor)
     for thumb in mosaic.thumbnails.values():
-        assert thumb.shape == (height // 4, width // 4)
+        assert thumb.shape == (height // factor, width // factor)
 
 
 def test_photo_mosaic_keeps_saved_brightness() -> None:
@@ -581,13 +617,13 @@ def test_grid_tile_mosaic_keeps_the_photo(tmp_path: Path, monkeypatch: pytest.Mo
     )
     image = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])
     write_tile_tiff(tmp_path / "(1,1).tif", image)
-    config = detector_test_config(report={"downsample": 4, "target_mb": 20.0})
+    config = detector_test_config(report={"target_mb": 0.01})
     config["filename_pattern"] = r"\((?P<row>\d+),(?P<col>\d+)\)\.(?:tiff?|png)"
     config["input_dir"] = str(tmp_path)
     config["output_dir"] = str(tmp_path / "out")
     _table, mosaic = run_pipeline(config)
     assert set(mosaic.thumbnails) == {"(1,1).tif"}
-    preview = mosaic.preview(downsample=4, workers=1)
+    preview = mosaic.preview(downsample=mosaic.thumbnail_factor, workers=1)
     assert float(preview.max()) > 0.0
 
 
@@ -670,7 +706,7 @@ def test_full_mosaic_preview_downsamples_tiles_before_stitch(tmp_path: Path) -> 
         TilePlacement(right_path, right_path.name, y0=0, x0=width, height=height, width=width),
     ]
     mosaic = LazyMosaic(placements)
-    config = detector_test_config(report={"downsample": 0, "target_mb": 0.01})
+    config = detector_test_config(report={"target_mb": 0.01})
     factor = overlay_downsample(mosaic, config, crop=None)
     assert factor > 1
     overlay = draw_overlay_markers(
@@ -754,7 +790,7 @@ def test_pipeline_stitches_only_patterned_tiles(tmp_path: Path) -> None:
     loose = make_structured_tile((64, 64), particles=[(20.0, 22.0, 3.5)])
     write_tile_tiff(tmp_path / "R3_0_1_5X.tif", patterned)
     write_tile_tiff(tmp_path / "loose_photo.tif", loose)
-    config = detector_test_config(report={"downsample": 4})
+    config = detector_test_config()
     config["input_dir"] = str(tmp_path)
     config["output_dir"] = str(tmp_path / "out")
     table, mosaic = run_pipeline(config)

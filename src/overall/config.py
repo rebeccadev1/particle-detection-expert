@@ -72,6 +72,46 @@ def advance_versioned_output_name(
     return f"{name} v{max(fresh_n, used_n + 1)}"
 
 
+def reserve_fresh_output_dir(config: dict[str, Any]) -> Path:
+    chosen = str(cfg_get(config, "output_dir", "") or "").strip()
+    if not chosen:
+        return resolve_output_dir(None)
+    dest = resolve_output_dir(chosen)
+    if not dest.exists():
+        return dest
+    fresh = _next_free_output_path(config, dest)
+    config["output_dir"] = _output_dir_config_value(chosen, fresh)
+    return fresh
+
+
+def _next_free_output_path(config: dict[str, Any], occupied: Path) -> Path:
+    root = occupied.parent
+    fresh = next_versioned_output_name(cfg_get(config, "input_dir", ""), root)
+    if fresh:
+        candidate = root / fresh
+        if candidate != occupied and not candidate.exists():
+            return candidate
+    match = re.fullmatch(r"(?P<base>.*) v(?P<n>\d+)", occupied.name)
+    if match:
+        base = match.group("base")
+        number = int(match.group("n")) + 1
+    else:
+        base = occupied.name
+        number = 2
+    while True:
+        candidate = root / f"{base} v{number}"
+        if not candidate.exists():
+            return candidate
+        number += 1
+
+
+def _output_dir_config_value(chosen: str, path: Path) -> str:
+    raw = Path(chosen.strip().strip('"').strip("'"))
+    if raw.is_absolute() or (raw.parts and raw.parts[0] in (".", "..")):
+        return str(path)
+    return path.name
+
+
 def output_choice_label(folder: str | Path | None) -> str:
     
     text = str(folder or "").strip().strip('"').strip("'")
@@ -228,3 +268,16 @@ def preset_for_beta(presets: list[dict[str, Any]], beta: float) -> dict[str, Any
             }
     known = ", ".join(f"{float(row['beta']):.2f}" for row in presets) or "(none)"
     raise ValueError(f"No ML preset for beta {target:.2f}. Known betas: {known}.")
+
+
+def apply_beta_ml(config: dict[str, Any]) -> dict[str, Any]:
+    """Point the run's classifier at the model and threshold for report.f_beta."""
+    raw = cfg_get(config, "report.beta_presets", None)
+    if not isinstance(raw, list) or not raw:
+        return config
+    beta = cfg_get(config, "report.f_beta", 1.0)
+    preset = preset_for_beta(beta_preset_rows(config), 1.0 if beta is None else beta)
+    ml = config.setdefault("ml", {})
+    ml["model_path"] = preset["model_path"]
+    ml["threshold"] = preset["threshold"]
+    return config

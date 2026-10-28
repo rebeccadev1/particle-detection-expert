@@ -198,8 +198,6 @@ def start_scan_capture(
     if mode not in ("Uniform", "NSEW"):
         raise ValueError("mode must be Uniform or NSEW")
     ring_open = ser is not None and getattr(ser, "is_open", False)
-    if mode == "NSEW" and not ring_open:
-        raise RuntimeError("NSEW capture needs the Arduino to switch sides.")
     if ser is not None and not ring_open:
         raise RuntimeError("The Arduino port is closed.")
     status = printer_status()

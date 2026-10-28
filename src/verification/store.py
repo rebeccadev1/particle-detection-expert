@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -8,37 +7,21 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
-from src.overall.config import PACKAGE_ROOT
-from src.verification.queue import detection_key, label_covers_uniform, nsew_key_aliases
+from src.verification.queue import detection_key, nsew_key_aliases
 from src.overall.io.naming import (
     is_nsew_family_tile,
     is_submap_lighting_tile,
-    lighting_role,
 )
 from src.analyse.report.report_generator import encode_overlay_jpeg
 
 LABEL_VALUES = ("particle", "not_sure", "not_particle")
-DATABASES = ("uniform", "nsew", "glovebox")
-CAMPAIGNS = DATABASES
 ALL_LABELS_NAME = "all_labels.csv"
-LEGACY_LABELS_NAME = "labels.csv"
-SPLIT_FILES = {
-    "uniform": "labels_uniform.csv",
-    "nsew": "labels_nsew.csv",
-    "glovebox": "labels_glovebox.csv",
-}
-
-def default_labels_path() -> Path:
-    
-    root = PACKAGE_ROOT / "labels"
-    current = root / ALL_LABELS_NAME
-    legacy = root / LEGACY_LABELS_NAME
-    if current.is_file() or not legacy.is_file():
-        return current
-    return legacy
-
-
-_GLOVEBOX_TILE = re.compile(r"^(?:R[1-9]|n2_|n3_|bf_)", re.IGNORECASE)
+_SPLIT_LABEL_FILES = (
+    "labels_uniform.csv",
+    "labels_nsew.csv",
+    "labels_glovebox.csv",
+    "labels_groundup.csv",
+)
 
 COLUMNS = (
     "key",
@@ -66,13 +49,9 @@ class LabelStore:
             (self.crops_dir / label).mkdir(parents=True, exist_ok=True)
         self._frame: pd.DataFrame | None = None
         self._frame_stamp: tuple[str, int, int] | None = None
-        self._migrate_legacy()
 
     def load(self) -> pd.DataFrame:
         path = self.csv_path
-        if not path.exists():
-            legacy = self.root / LEGACY_LABELS_NAME
-            path = legacy if legacy.exists() else path
         if not path.exists():
             return _empty_table()
         try:
@@ -150,10 +129,8 @@ class LabelStore:
         if not df.empty:
             mask = df["key"].astype(str).isin(drop_keys)
             for crop_path in df.loc[mask, "crop_path"].tolist():
-                if crop_path in (None, ""):
-                    continue
-                path = Path(str(crop_path))
-                if path.is_file():
+                path = resolve_crop_path(self.root, crop_path)
+                if path is not None and path.is_file():
                     path.unlink()
             df = df.loc[~mask].reset_index(drop=True)
 
@@ -171,26 +148,6 @@ class LabelStore:
         self._write(df)
         return dests
 
-    def update_sizes(self, sizes_nm: Mapping[str, float]) -> int:
-        
-        if not sizes_nm:
-            return 0
-        df = self.load()
-        if df.empty or "key" not in df.columns:
-            return 0
-        updated = 0
-        keys = df["key"].astype(str)
-        for key, size_nm in sizes_nm.items():
-            mask = keys == str(key)
-            if not mask.any():
-                continue
-            idx = df.index[mask][-1]
-            df.loc[idx, "size"] = float(size_nm)
-            updated += 1
-        if updated:
-            self._write(df)
-        return updated
-
     def unlabel(self, key: str) -> dict[str, Any] | None:
         
         df = self.load()
@@ -201,10 +158,8 @@ class LabelStore:
             return None
         dropped = df.loc[mask].iloc[-1].to_dict()
         for crop_path in df.loc[mask, "crop_path"].tolist():
-            if crop_path in (None, ""):
-                continue
-            path = Path(str(crop_path))
-            if path.is_file():
+            path = resolve_crop_path(self.root, crop_path)
+            if path is not None and path.is_file():
                 path.unlink()
         self._write(df.loc[~mask].reset_index(drop=True))
         return {str(k): v for k, v in dropped.items()}
@@ -218,17 +173,6 @@ class LabelStore:
         idx = times.idxmax()
         key = str(df.loc[idx, "key"])
         return self.unlabel(key)
-
-    def _migrate_legacy(self) -> None:
-        
-        legacy = self.root / LEGACY_LABELS_NAME
-        if self.csv_path.exists() or not legacy.is_file():
-            return
-        df = pd.read_csv(legacy)
-        for column in COLUMNS:
-            if column not in df.columns:
-                df[column] = pd.NA
-        self._write(df.loc[:, list(COLUMNS)])
 
     def _write(self, df: pd.DataFrame) -> None:
         
@@ -245,14 +189,7 @@ class LabelStore:
             )
         except OSError:
             self._frame_stamp = None
-        for database, filename in SPLIT_FILES.items():
-            if table.empty:
-                part = _empty_table()
-            else:
-                part = table.loc[_in_database(table, database)]
-                if part.empty:
-                    part = _empty_table()
-            part.to_csv(self.root / filename, index=False)
+        _drop_split_label_files(self.root)
 
 
 def _label_key(record: Mapping[str, Any]) -> str:
@@ -285,36 +222,11 @@ def _label_row(
     }
 
 
-def label_database(source_tile: object) -> str | None:
-    
-    name = Path(str(source_tile or "")).name
-    if _GLOVEBOX_TILE.match(name):
-        return "glovebox"
-    stem = Path(name).stem.lower()
-    if "3of6" in stem:
-        return None
-    if lighting_role(name) == "all" or stem in {"all", "uniform"}:
-        return "uniform"
-    return "nsew"
-
-
-def _in_database(df: pd.DataFrame, database: str) -> pd.Series:
-    
-    primary = df["source_tile"].map(label_database)
-    mask = primary == database
-    if database == "uniform" and "key" in df.columns:
-        shared = df["key"].map(label_covers_uniform) & (primary == "nsew")
-        mask = mask | shared
-    return mask
-
-
-def rows_for_campaign(df: pd.DataFrame, campaign: str) -> pd.DataFrame:
-    
-    if campaign not in CAMPAIGNS:
-        raise ValueError(f"Unknown campaign {campaign!r}")
-    if df is None or df.empty or "source_tile" not in df.columns:
-        return df
-    return df.loc[_in_database(df, campaign)].reset_index(drop=True)
+def _drop_split_label_files(root: Path) -> None:
+    for name in _SPLIT_LABEL_FILES:
+        path = root / name
+        if path.is_file():
+            path.unlink()
 
 
 def newest_first(df: pd.DataFrame) -> pd.DataFrame:
@@ -328,6 +240,67 @@ def newest_first(df: pd.DataFrame) -> pd.DataFrame:
         "_labeled_at", ascending=False, na_position="last", kind="mergesort"
     )
     return ordered.drop(columns="_labeled_at").reset_index(drop=True)
+
+
+def resolve_crop_path(
+    labels_root: str | Path,
+    crop_path: object,
+    key: object = "",
+    label: object = "",
+) -> Path | None:
+    root = Path(labels_root)
+    crops = root / "crops"
+    text = _path_text(crop_path)
+    stored = Path(text) if text else None
+    if stored is not None and stored.is_file():
+        return stored
+
+    names: list[str] = []
+    if stored is not None and stored.name not in ("", ".", ".."):
+        names.append(stored.name)
+    key_text = _path_text(key)
+    if key_text:
+        filename = f"{key_text}.jpg"
+        if filename not in names:
+            names.append(filename)
+
+    folders: list[str] = []
+    if stored is not None:
+        parent = stored.parent.name
+        if parent not in ("", ".", "..", "crops", "labels"):
+            folders.append(parent)
+    label_text = _path_text(label)
+    if label_text and label_text not in folders:
+        folders.append(label_text)
+    for folder_name in LABEL_VALUES:
+        if folder_name not in folders:
+            folders.append(folder_name)
+
+    for folder_name in folders:
+        for name in names:
+            candidate = crops / folder_name / name
+            if candidate.is_file():
+                return candidate
+    if stored is not None and not stored.is_absolute():
+        for base in (root.parent, root):
+            candidate = base / stored
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def _path_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if text.lower() in ("", "nan", "none"):
+        return ""
+    return text
 
 
 def crop_source_folder(source_csv: object, source_tile: object = "") -> str:

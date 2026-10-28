@@ -108,9 +108,6 @@ def overlay_downsample(
     config: dict[str, Any],
     crop: tuple[int, int, int, int] | None = None,
 ) -> int:
-    configured = int(cfg_get(config, "report.downsample", 0) or 0)
-    if configured > 0:
-        return configured
     if crop is None:
         height, width = mosaic.full_height, mosaic.full_width
     else:
@@ -661,9 +658,6 @@ def _particles_for_path(table: pd.DataFrame, path: Path) -> pd.DataFrame:
 
 def _tile_preview_factor(height: int, width: int, config: Mapping[str, Any]) -> int:
     settings = dict(config)
-    configured = int(cfg_get(settings, "report.downsample", 0) or 0)
-    if configured > 0:
-        return configured
     target_mb = float(cfg_get(settings, "report.target_mb", 8.0))
     return downsample_for_target(
         height, width, target_mb=min(target_mb, 8.0), channels=3

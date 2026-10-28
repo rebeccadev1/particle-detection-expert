@@ -129,9 +129,11 @@ def test_rejects_a_zero_step() -> None:
         build_scan_gcode(step_mm=0)
 
 
-def test_z_move_needs_a_printer() -> None:
+def test_jog_needs_a_printer() -> None:
     with pytest.raises(RuntimeError, match="Connect the printer"):
         move_z(0.1, 300)
+    with pytest.raises(RuntimeError, match="Connect the printer"):
+        move_axis("X", 1, 1000)
 
 
 def test_xy_jog_is_one_relative_millimetre() -> None:
@@ -198,31 +200,20 @@ def test_scan_stops_follow_the_serpentine() -> None:
     assert stops[4][2:] == ("X", -1.5)
 
 
-def test_xy_jog_needs_a_printer() -> None:
-    with pytest.raises(RuntimeError, match="Connect the printer"):
-        move_axis("X", 1, 1000)
-
-
-def test_pipx_printrun_site_finds_a_unix_venv(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "site_parts",
+    [
+        ("lib", "python3.13", "site-packages"),
+        ("Lib", "site-packages"),
+    ],
+)
+def test_pipx_printrun_site_finds_a_venv(
+    tmp_path: Path, monkeypatch, site_parts: tuple[str, ...]
+) -> None:
     from src.capture import stage
 
     root = tmp_path / "venvs" / "printrun"
-    site = root / "lib" / "python3.13" / "site-packages"
-    package = site / "printrun"
-    package.mkdir(parents=True)
-    (package / "printcore.py").write_text("# test\n", encoding="utf-8")
-    monkeypatch.setattr(stage, "_pipx_printrun_roots", lambda: [root])
-    found = stage._pipx_printrun_site()
-    assert found is not None
-    assert (found / "printrun" / "printcore.py").is_file()
-
-
-def test_pipx_printrun_site_finds_a_windows_venv(tmp_path: Path, monkeypatch) -> None:
-    from src.capture import stage
-
-    root = tmp_path / "venvs" / "printrun"
-    site = root / "Lib" / "site-packages"
-    package = site / "printrun"
+    package = root.joinpath(*site_parts) / "printrun"
     package.mkdir(parents=True)
     (package / "printcore.py").write_text("# test\n", encoding="utf-8")
     monkeypatch.setattr(stage, "_pipx_printrun_roots", lambda: [root])

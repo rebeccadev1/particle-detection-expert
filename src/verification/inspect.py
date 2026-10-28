@@ -11,11 +11,10 @@ import numpy as np
 import pandas as pd
 
 from src.overall.config import DEFAULT_INPUT_DIR, cfg_get, resolve_output_dir
-from src.analyse.detection.detector import blob_footprint
+from src.analyse.detection.detector import blob_equivalent_diameter
 from src.overall.io.tile_loader import (
     DEFAULT_FILENAME_PATTERN,
     TILE_SUFFIXES,
-    load_tile_image,
     parse_tile_filename,
     resolve_input_dir,
 )
@@ -76,8 +75,6 @@ CELL_NAMES = (
 )
 MISS_SOURCE = "tile_inspect"
 MARKED_MOSAIC_NAME = "mosaic_marked.png"
-DEFAULT_MISS_SIZE_UM = 15.0
-MISSED_MIN_SIZE_NM = 20_000.0
 _PARTICLES_ONLY_DIR_NAMES = {"particles only", "particles only output"}
 
 
@@ -146,17 +143,13 @@ def _sample_std(values: list[float]) -> float | None:
     return float(np.std(np.asarray(values, dtype=float), ddof=1))
 
 
-def rows_detected_on_file(table: pd.DataFrame, tile_name: str) -> pd.Series:
-    
-    sources = table["source_tile"].astype(str)
-    return sources.map(lighting_tile_id) == lighting_tile_id(tile_name)
-
-
 def detections_on_this_file(table: pd.DataFrame | None, tile_name: str) -> pd.DataFrame:
     
     if table is None or table.empty or "source_tile" not in table.columns:
         return pd.DataFrame()
-    return table.loc[rows_detected_on_file(table, tile_name)].reset_index(drop=True)
+    sources = table["source_tile"].astype(str)
+    on_file = sources.map(lighting_tile_id) == lighting_tile_id(tile_name)
+    return table.loc[on_file].reset_index(drop=True)
 
 
 def _nsew_dir_set(text: object) -> set[str]:
@@ -789,9 +782,16 @@ def last_run_class_counts_by_tile(
 
 def std_of_crop_cells(cells: Sequence[Mapping[str, Any]]) -> dict[str, float | None]:
     
-    precisions = [float(cell["precision"]) for cell in cells if cell.get("precision") is not None]
-    recalls = [float(cell["recall"]) for cell in cells if cell.get("recall") is not None]
-    f_betas = [float(cell["f_beta"]) for cell in cells if cell.get("f_beta") is not None]
+    precisions: list[float] = []
+    recalls: list[float] = []
+    f_betas: list[float] = []
+    for cell in cells:
+        precision = cell.get("precision")
+        recall = cell.get("recall")
+        f_beta = cell.get("f_beta")
+        precisions.append(0.0 if precision is None else float(precision))
+        recalls.append(0.0 if recall is None else float(recall))
+        f_betas.append(0.0 if f_beta is None else float(f_beta))
     return {
         "precision": _sample_std(precisions),
         "recall": _sample_std(recalls),
@@ -837,11 +837,6 @@ def std_of_tile_scores(
     }
 
 
-def subfolder_of_tile(tile: str) -> str:
-    
-    return submap_id(tile)
-
-
 def subfolder_score_rows(
     per_tile: pd.DataFrame | None,
     *,
@@ -856,7 +851,7 @@ def subfolder_score_rows(
     order: list[str] = []
     grouped: dict[str, list[dict[str, Any]]] = {}
     for record in per_tile.to_dict(orient="records"):
-        key = subfolder_of_tile(str(record["tile"]))
+        key = submap_id(str(record["tile"]))
         if key not in grouped:
             order.append(key)
             grouped[key] = []
@@ -864,7 +859,7 @@ def subfolder_score_rows(
     std_grouped: dict[str, list[Mapping[str, Any]]] = {}
     if std_tiles is not None and not std_tiles.empty and "tile" in std_tiles.columns:
         for record in std_tiles.to_dict(orient="records"):
-            std_grouped.setdefault(subfolder_of_tile(str(record["tile"])), []).append(record)
+            std_grouped.setdefault(submap_id(str(record["tile"])), []).append(record)
 
     rows: list[dict[str, Any]] = []
     count_keys = (
@@ -1038,6 +1033,26 @@ def tile_names_for_hits(hits: pd.DataFrame | None) -> list[str]:
             seen.add(name)
             names.append(name)
     return names
+
+
+def prefer_stored_grid_names(names: Sequence[str]) -> list[str]:
+    
+    texts = [str(name).replace("\\", "/") for name in names]
+    stored = {
+        lighting_tile_id(text)
+        for text in texts
+        if is_grid_tile(text) and "/" in text
+    }
+    kept: list[str] = []
+    seen: set[str] = set()
+    for text in texts:
+        if is_grid_tile(text) and "/" not in text and lighting_tile_id(text) in stored:
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        kept.append(text)
+    return kept
 
 
 def expand_direction_tile_names(
@@ -1248,153 +1263,7 @@ def overlay_view(
             color=color,
             thickness=max(CIRCLE_THICKNESS, 3),
         )
-        _draw_footprint_edge(
-            out,
-            circle.get("edge") or [],
-            crop_x0=crop_x0,
-            crop_y0=crop_y0,
-            scale=scale,
-        )
     return OverlayView(rgb=out, crop_x0=crop_x0, crop_y0=crop_y0, scale=scale)
-
-
-FOOTPRINT_EDGE_COLOR = (255, 220, 40)
-
-
-def _draw_footprint_edge(
-    rgb: np.ndarray,
-    edge: Sequence[np.ndarray],
-    *,
-    crop_x0: float = 0.0,
-    crop_y0: float = 0.0,
-    scale: float = 1.0,
-    color: tuple[int, int, int] = FOOTPRINT_EDGE_COLOR,
-    thickness: int = cv2.FILLED,
-) -> None:
-    
-    if rgb.size == 0 or not edge:
-        return
-    drawn: list[np.ndarray] = []
-    for contour in edge:
-        pts = np.asarray(contour, dtype=np.float64)
-        if pts.size == 0:
-            continue
-        pts = pts.copy()
-        pts[..., 0] = (pts[..., 0] - crop_x0) * scale
-        pts[..., 1] = (pts[..., 1] - crop_y0) * scale
-        drawn.append(np.round(pts).astype(np.int32))
-    if not drawn:
-        return
-    stroke = {"lineType": cv2.LINE_AA} if thickness != cv2.FILLED else {}
-    cv2.drawContours(
-        rgb,
-        drawn,
-        contourIdx=-1,
-        color=color,
-        thickness=thickness,
-        **stroke,
-    )
-
-
-AREA_LINE_COLOR = (15, 35, 140)
-AREA_LINE_THICKNESS = 2
-
-
-def _saved_marker_mask(rgb: np.ndarray) -> np.ndarray:
-    
-    red = rgb[:, :, 0].astype(np.int16)
-    green = rgb[:, :, 1].astype(np.int16)
-    blue = rgb[:, :, 2].astype(np.int16)
-    orange = (red > 190) & (green > 70) & (green < 200) & (blue < 100) & (red > green + 30)
-    marked_green = (green > 140) & (green > red + 40) & (green > blue + 20) & (red < 140) & (
-        blue < 140
-    )
-    if int(orange.sum()) >= int(marked_green.sum()):
-        return orange
-    return marked_green
-
-
-def outline_particle_area(
-    rgb: np.ndarray,
-    *,
-    size_nm: float,
-    pixel_size_nm: float,
-    config: Mapping[str, Any] | None = None,
-) -> np.ndarray:
-    
-    image = np.asarray(rgb)
-    if image.ndim != 3 or image.shape[2] < 3 or image.size == 0:
-        return image
-    shown = np.ascontiguousarray(image[:, :, :3])
-    if shown.dtype != np.uint8:
-        shown = np.clip(shown, 0, 255).astype(np.uint8)
-    else:
-        shown = shown.copy()
-    marker = _saved_marker_mask(shown)
-    gray = shown.astype(np.float64).mean(axis=2)
-    height, width = gray.shape
-    if int(marker.sum()) >= 12:
-        ys, xs = np.where(marker)
-        cy = float(np.median(ys))
-        cx = float(np.median(xs))
-        ring = float(np.median(np.hypot(ys.astype(np.float64) - cy, xs.astype(np.float64) - cx)))
-        radius = max(ring - 10.0, 2.0)
-        keep = ~marker
-        fill = float(np.median(gray[keep])) if np.any(keep) else float(np.median(gray))
-        gray = gray.copy()
-        gray[marker] = fill
-    else:
-        cy = 0.5 * float(height - 1)
-        cx = 0.5 * float(width - 1)
-        scale = float(pixel_size_nm) if float(pixel_size_nm) > 0 else 1.0
-        radius = max(float(size_nm) / scale / 2.0, 2.0)
-    cfg = dict(config or {})
-    mass = float(cfg_get(cfg, "detection.size_mass_fraction", 0.4) or 0.4)
-    bright = bool(cfg_get(cfg, "detection.particles_bright", True))
-    _diameter, edge = blob_footprint(
-        gray,
-        cy,
-        cx,
-        radius,
-        mass_fraction=mass,
-        bright=bright,
-        half=max(height, width),
-    )
-    if not edge or _diameter <= 0:
-        return shown
-    area = np.pi * (0.5 * _diameter) ** 2
-    if area > 0.45 * float(height * width):
-        return shown
-    _draw_footprint_edge(
-        shown,
-        edge,
-        color=AREA_LINE_COLOR,
-        thickness=AREA_LINE_THICKNESS,
-    )
-    return shown
-
-
-def outline_particle_crop_file(
-    path: str | Path,
-    *,
-    size_nm: float,
-    pixel_size_nm: float,
-    config: Mapping[str, Any] | None = None,
-) -> np.ndarray | None:
-    
-    file_path = Path(path)
-    if not file_path.is_file():
-        return None
-    bgr = cv2.imread(str(file_path), cv2.IMREAD_COLOR)
-    if bgr is None:
-        return None
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    return outline_particle_area(
-        rgb,
-        size_nm=size_nm,
-        pixel_size_nm=pixel_size_nm,
-        config=config,
-    )
 
 
 def local_xy_on_tile(
@@ -1542,32 +1411,7 @@ def missed_particle_record(
     return record
 
 
-def folder_missed_marks(
-    labels: pd.DataFrame | None,
-    tile_names: Sequence[str],
-) -> pd.DataFrame:
-    
-    if labels is None or labels.empty or not tile_names:
-        return pd.DataFrame()
-    names = {str(name).replace("\\", "/") for name in tile_names}
-    tile = labels["source_tile"].astype(str).str.replace("\\", "/", regex=False)
-    source = labels["source_csv"].astype(str) if "source_csv" in labels.columns else ""
-    kind = labels["label"].astype(str) if "label" in labels.columns else ""
-    kept = labels.loc[
-        tile.isin(names) & (source == MISS_SOURCE) & (kind == "particle")
-    ].copy()
-    if kept.empty:
-        return kept
-    if "labeled_at" in kept.columns:
-        times = pd.to_datetime(kept["labeled_at"], utc=True, errors="coerce")
-        kept = kept.assign(_labeled_at=times).sort_values("_labeled_at")
-        kept = kept.drop(columns="_labeled_at")
-    if "key" in kept.columns:
-        kept = kept.drop_duplicates(subset=["key"], keep="last")
-    return kept.reset_index(drop=True)
-
-
-def photo_equivalent_diameter_nm(
+def photo_particle_edge(
     image: np.ndarray,
     y_local: float,
     x_local: float,
@@ -1576,50 +1420,19 @@ def photo_equivalent_diameter_nm(
     config: Mapping[str, Any],
 ) -> float:
     
-    diameter_nm, _edge = photo_particle_edge(
-        image,
-        y_local,
-        x_local,
-        pixel_size_nm=pixel_size_nm,
-        config=config,
-    )
-    return diameter_nm
-
-
-def footprint_grow_mass(config: Mapping[str, Any], grow: float) -> float:
-    
-    base = float(cfg_get(dict(config), "detection.size_mass_fraction", 0.4) or 0.4)
-    span = max(0.0, min(299.0, float(grow) - 1.0))
-    return float(max(0.0, base * (1.0 - span / 299.0)))
-
-
-def photo_particle_edge(
-    image: np.ndarray,
-    y_local: float,
-    x_local: float,
-    *,
-    pixel_size_nm: float,
-    config: Mapping[str, Any],
-    mass_fraction: float | None = None,
-) -> tuple[float, list[np.ndarray]]:
-    
     gray = np.asarray(image)
     if gray.ndim == 3:
         gray = gray.mean(axis=2)
     pixel = float(pixel_size_nm) if float(pixel_size_nm) > 0 else 1.0
     max_nm = float(cfg_get(dict(config), "detection.max_size_nm", 100_000.0) or 100_000.0)
-    mass = (
-        float(mass_fraction)
-        if mass_fraction is not None
-        else float(cfg_get(dict(config), "detection.size_mass_fraction", 0.4))
-    )
+    mass = float(cfg_get(dict(config), "detection.size_mass_fraction", 0.4))
     bright = bool(cfg_get(dict(config), "detection.particles_bright", True))
     max_d = max(max_nm / pixel, 8.0)
     radius = 0.5 * max_d
     half = max(int(np.ceil(radius)) + 4, 8)
     search = max(4.0, min(12.0, 0.25 * max_d))
     y_peak, x_peak = _snap_to_peak(gray, y_local, x_local, search, bright=bright)
-    diameter_px, edge = blob_footprint(
+    diameter_px = blob_equivalent_diameter(
         gray,
         y_peak,
         x_peak,
@@ -1628,76 +1441,7 @@ def photo_particle_edge(
         bright=bright,
         half=half,
     )
-    return float(diameter_px) * pixel, edge
-
-
-def verify_missed_photo_sizes(
-    labels: pd.DataFrame | None,
-    paths_by_name: Mapping[str, Path],
-    config: Mapping[str, Any],
-    *,
-    pixel_size_nm: float,
-) -> list[dict[str, Any]]:
-    
-    marks = folder_missed_marks(labels, list(paths_by_name))
-    if marks.empty:
-        return []
-    images: dict[str, np.ndarray] = {}
-    placements: dict[str, Any] = {}
-    rows: list[dict[str, Any]] = []
-    for record in marks.to_dict(orient="records"):
-        tile_name = str(record["source_tile"]).replace("\\", "/")
-        path = paths_by_name.get(tile_name)
-        stored = float(record.get("size") or 0.0)
-        key = str(record.get("key") or detection_key(record))
-        if path is None or not Path(path).is_file():
-            rows.append(_size_row(key, tile_name, stored, 0.0))
-            continue
-        if tile_name not in images:
-            images[tile_name] = load_tile_image(path)
-            placements[tile_name] = placement_for_tile(Path(path), dict(config))
-        image = images[tile_name]
-        height, width = int(image.shape[0]), int(image.shape[1])
-        x_local, y_local = local_xy_on_tile(
-            float(record["x_global"]),
-            float(record["y_global"]),
-            [placements[tile_name]],
-            pixel_size_nm,
-            width,
-            height,
-        )
-        photo = photo_equivalent_diameter_nm(
-            image,
-            y_local,
-            x_local,
-            pixel_size_nm=pixel_size_nm,
-            config=config,
-        )
-        rows.append(_size_row(key, tile_name, stored, photo))
-    return rows
-
-
-def _size_row(key: str, tile_name: str, stored_nm: float, photo_nm: float) -> dict[str, Any]:
-    assumed_nm = DEFAULT_MISS_SIZE_UM * 1000.0
-    grown = stored_nm >= MISSED_MIN_SIZE_NM and abs(stored_nm - assumed_nm) > 1.0
-    if photo_nm <= 0:
-        note = "kept stored size"
-    elif grown and photo_nm + 1.0 < stored_nm:
-        note = "kept stored size"
-    elif photo_nm < MISSED_MIN_SIZE_NM:
-        note = "removed"
-    elif abs(photo_nm - stored_nm) >= 1.0:
-        note = "updated"
-    else:
-        note = "already the photo size"
-    return {
-        "key": key,
-        "source_tile": tile_name,
-        "stored_um": stored_nm / 1000.0,
-        "photo_um": photo_nm / 1000.0,
-        "photo_nm": photo_nm,
-        "note": note,
-    }
+    return float(diameter_px) * pixel
 
 
 def _snap_to_peak(
@@ -1728,7 +1472,6 @@ def preview_click_crop(
     size_nm: float,
     pixel_size_nm: float,
     color: tuple[int, int, int] | None = None,
-    edge: Sequence[np.ndarray] | None = None,
     zoom: float = 1.0,
 ) -> np.ndarray:
     
@@ -1778,7 +1521,6 @@ def preview_click_crop(
         crop_y0=y0,
         color=LABEL_CIRCLE_COLORS["particle"] if color is None else color,
     )
-    _draw_footprint_edge(rgb, edge or [], crop_x0=x0, crop_y0=y0, scale=1.0)
     factor = float(zoom)
     if factor > 1.0 and rgb.size:
         side = max(int(rgb.shape[0]), int(rgb.shape[1]))

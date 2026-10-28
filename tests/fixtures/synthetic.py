@@ -138,9 +138,7 @@ def detector_test_config(**overrides: object) -> dict:
             "max_size_nm": 40.0,
             "blob_min_sigma": 1.5,
             "blob_max_sigma": 6.0,
-            "blob_num_sigma": 5,
             "blob_sigma_ratio": 1.4,
-            "blob_method": "dog",
             "blob_threshold": 0.05,
             "min_area_px": 8,
             "fft_mask": "per_tile",
@@ -157,7 +155,7 @@ def detector_test_config(**overrides: object) -> dict:
             "max_support_area_px": 0.0,
         },
         "measurement": {"merge_radius_px": 6.0, "size_aggregation": "max"},
-        "report": {"downsample": 2, "target_mb": 20.0},
+        "report": {"target_mb": 20.0},
         "pipeline": {"workers": 1},
     }
     for key, value in overrides.items():

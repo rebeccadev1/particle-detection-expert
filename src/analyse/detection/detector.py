@@ -7,7 +7,6 @@ import cv2
 import numpy as np
 from scipy import fft as sp_fft
 from scipy.spatial import cKDTree
-from skimage.feature import blob_log
 from skimage.morphology import skeletonize
 
 from src.overall.config import cfg_get
@@ -21,6 +20,7 @@ _STRUCTURE_SIZE_RATIO = 1.30
 _STRUCTURE_LINE_MAX_GAP_PX = 48.0
 _STRUCTURE_SNR_RATIO = 2.5
 _AUTO_SNR_SIGMA_FACTOR = 3.5
+_BLOB_DIAMETER_PER_SIGMA = 2.0 * float(np.sqrt(2.0))
 _PERCENTILE_EXACT_LIMIT = 50_000
 _HIST_BINS = 512
 _MEDIAN_SAMPLE = 250_000
@@ -512,7 +512,7 @@ def blob_equivalent_diameter(
     half: int | None = None,
 ) -> float:
     
-    diameter_px, _edge = blob_footprint(
+    return blob_footprint(
         image,
         y,
         x,
@@ -521,7 +521,6 @@ def blob_equivalent_diameter(
         bright=bright,
         half=half,
     )
-    return diameter_px
 
 
 def blob_footprint(
@@ -533,11 +532,11 @@ def blob_footprint(
     *,
     bright: bool = True,
     half: int | None = None,
-) -> tuple[float, list[np.ndarray]]:
+) -> float:
     
     window = _blob_window(image, y, x, radius, half=half)
     if window is None:
-        return 0.0, []
+        return 0.0
     patch, iy, ix, y0, x0 = window
     height, width = image.shape
     cy_i = min(max(iy, 0), height - 1)
@@ -556,30 +555,25 @@ def blob_footprint(
     if bright:
         contrast = center - background
         if contrast <= 1e-12:
-            return 0.0, []
+            return 0.0
         thresh = background + float(mass_fraction) * contrast
         mask = (patch >= thresh).astype(np.uint8)
     else:
         contrast = background - center
         if contrast <= 1e-12:
-            return 0.0, []
+            return 0.0
         thresh = background - float(mass_fraction) * contrast
         mask = (patch <= thresh).astype(np.uint8)
     py = min(max(iy - y0, 0), mask.shape[0] - 1)
     px = min(max(ix - x0, 0), mask.shape[1] - 1)
     if mask[py, px] == 0:
-        return 0.0, []
+        return 0.0
     _n_labels, labels = cv2.connectedComponents(mask, connectivity=8)
-    component = (labels == labels[py, px]).astype(np.uint8)
+    component = labels == labels[py, px]
     area = float(np.count_nonzero(component))
     if area <= 0:
-        return 0.0, []
-    contours, _hierarchy = cv2.findContours(
-        component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
-    )
-    offset = np.array([[[int(x0), int(y0)]]], dtype=np.int32)
-    edge = [contour + offset for contour in contours]
-    return float(2.0 * np.sqrt(area / np.pi)), edge
+        return 0.0
+    return float(2.0 * np.sqrt(area / np.pi))
 
 
 def blob_local_peak_snr(
@@ -688,13 +682,22 @@ def _size_bounds_px(config: dict[str, Any]) -> tuple[float, float]:
     return min_nm / pixel_size, max_nm / pixel_size
 
 
-def _blob_sigma_ratio(config: dict[str, Any], min_sigma: float, max_sigma: float) -> float:
+def blob_sigmas_for_size(
+    min_size_nm: float,
+    max_size_nm: float,
+    pixel_size_nm: float,
+) -> tuple[float, float]:
+    """DoG scales whose diameter (about 2.8 sigma) matches the size window."""
+    pixel = float(pixel_size_nm) if float(pixel_size_nm) > 0 else 1.0
+    min_sigma = max(float(min_size_nm) / pixel / _BLOB_DIAMETER_PER_SIGMA, 0.5)
+    max_sigma = max(float(max_size_nm) / pixel / _BLOB_DIAMETER_PER_SIGMA, min_sigma)
+    return min_sigma, max_sigma
+
+
+def _blob_sigma_ratio(config: dict[str, Any]) -> float:
     configured = cfg_get(config, "detection.blob_sigma_ratio", None)
     if configured is not None:
         return max(float(configured), 1.05)
-    num_sigma = int(cfg_get(config, "detection.blob_num_sigma", 5))
-    if max_sigma > min_sigma and num_sigma > 1:
-        return max(float((max_sigma / min_sigma) ** (1.0 / (num_sigma - 1))), 1.05)
     return 1.4
 
 
@@ -948,16 +951,6 @@ def _island_seed_blobs(protect: np.ndarray) -> np.ndarray:
     return np.asarray(rows, dtype=np.float64)
 
 
-def compute_tile_residual(
-    image: np.ndarray,
-    config: dict[str, Any],
-    fft_mask: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    
-    array, residual, _edge, _protect = _tile_residual_maps(image, config, fft_mask)
-    return array, residual
-
-
 def _tile_residual_maps(
     image: np.ndarray,
     config: dict[str, Any],
@@ -1012,29 +1005,18 @@ def _residual_and_blobs(
     min_sigma = float(cfg_get(config, "detection.blob_min_sigma", 1.0))
     max_sigma = float(cfg_get(config, "detection.blob_max_sigma", 8.0))
     threshold = float(cfg_get(config, "detection.blob_threshold", 0.025))
-    blob_method = str(cfg_get(config, "detection.blob_method", "dog")).lower()
     empty = np.empty((0, 3), dtype=np.float64)
     if float(np.max(residual)) < threshold:
         seeds = _island_seed_blobs(protect)
         return array, residual, edge_distance, seeds, protect
-    if blob_method == "log":
-        blobs = blob_log(
-            residual,
-            min_sigma=min_sigma,
-            max_sigma=max_sigma,
-            num_sigma=int(cfg_get(config, "detection.blob_num_sigma", 5)),
-            threshold=threshold,
-            overlap=0.5,
-        )
-    else:
-        blobs = blob_dog_fast(
-            residual,
-            min_sigma=min_sigma,
-            max_sigma=max_sigma,
-            sigma_ratio=_blob_sigma_ratio(config, min_sigma, max_sigma),
-            threshold=threshold,
-            overlap=0.5,
-        )
+    blobs = blob_dog_fast(
+        residual,
+        min_sigma=min_sigma,
+        max_sigma=max_sigma,
+        sigma_ratio=_blob_sigma_ratio(config),
+        threshold=threshold,
+        overlap=0.5,
+    )
     blobs = np.asarray(blobs, dtype=np.float64)
     seeds = _island_seed_blobs(protect)
     if seeds.size:

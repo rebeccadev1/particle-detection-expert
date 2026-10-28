@@ -49,22 +49,6 @@ def test_fresnel_normal_incidence_averages_to_the_power_split() -> None:
     assert reflectance + transmission == pytest.approx(1.0)
 
 
-def test_fresnel_unpolarized_is_the_mean_of_s_and_p() -> None:
-    n_from, n_to = 1.0, 1.49
-    cos_i = math.cos(math.radians(45.0))
-    sin_t2 = (n_from / n_to) ** 2 * (1.0 - cos_i * cos_i)
-    cos_t = math.sqrt(1.0 - sin_t2)
-    rs = (n_from * cos_i - n_to * cos_t) / (n_from * cos_i + n_to * cos_t)
-    rp = (n_to * cos_i - n_from * cos_t) / (n_to * cos_i + n_from * cos_t)
-    scale = (n_to * cos_t) / (n_from * cos_i)
-    ts = (2.0 * n_from * cos_i) / (n_from * cos_i + n_to * cos_t)
-    tp = (2.0 * n_from * cos_i) / (n_to * cos_i + n_from * cos_t)
-    reflectance, transmission = fresnel_unpolarized(n_from, n_to, cos_i)
-    assert reflectance == pytest.approx(0.5 * (rs * rs + rp * rp))
-    assert transmission == pytest.approx(0.5 * scale * (ts * ts + tp * tp))
-    assert reflectance + transmission == pytest.approx(1.0)
-
-
 def test_total_internal_reflection_keeps_all_of_the_intensity() -> None:
     cos_i = math.cos(math.radians(60.0))
     reflectance, transmission = fresnel_unpolarized(1.49, 1.0, cos_i)

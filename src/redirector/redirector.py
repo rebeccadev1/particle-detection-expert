@@ -531,14 +531,8 @@ def trace_fan(
     ]
 
 
-def sample_z_mm(shape: RedirectorShape) -> float:
-    
-    return shape.bottom[0][1]
-
-
 def fov_plane_z_mm(shape: RedirectorShape) -> float:
-    
-    return sample_z_mm(shape) - shape.fov_depth_mm
+    return shape.bottom[0][1] - shape.fov_depth_mm
 
 
 def fov_crossing_mm(shape: RedirectorShape, trace: RayTrace) -> float | None:

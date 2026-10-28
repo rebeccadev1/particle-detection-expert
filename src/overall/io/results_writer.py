@@ -53,7 +53,14 @@ def write_csv(df: pd.DataFrame, path: str | Path) -> Path:
 
 def parameters_payload(config: Mapping[str, Any] | None) -> dict[str, Any]:
     
-    return _json_ready(dict(config) if config else {})
+    from src.overall.config import apply_beta_ml
+
+    payload = _json_ready(dict(config) if config else {})
+    apply_beta_ml(payload)
+    report = payload.get("report")
+    if isinstance(report, dict):
+        report.pop("beta_presets", None)
+    return payload
 
 
 def write_run_settings(

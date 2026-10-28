@@ -27,7 +27,6 @@ _POSITIONAL_COMBI = re.compile(r"^\((?P<row>\d+),(?P<col>\d+)\)$")
 ORTHOGONAL_PAIRS = (("N", "E"), ("N", "W"), ("S", "E"), ("S", "W"))
 IMAGE_EXTS = {".bmp", ".png", ".tif", ".tiff", ".jpg", ".jpeg"}
 MIN_COUNTS = (2, 3, 4)
-KIND_NAMES = ("combi", "symmetry_map")
 COMBINE_CORES = 10
 KIND_FOLDERS = {
     "combi": "Combi",
@@ -133,14 +132,6 @@ def save_same_resolution(path: str | Path, array: np.ndarray, reference_path: st
     image.save(path, **save_kw)
 
 
-def flatten_directional_illumination(img: np.ndarray, sigma: float = 120) -> np.ndarray:
-    
-    img_f = img.astype(np.float32)
-    background = cv2.GaussianBlur(img_f, (0, 0), sigma)
-    background = np.clip(background, 1.0, None)
-    return img_f / background
-
-
 def symmetry_signal_4way(
     sorted_stack: np.ndarray,
     sum_val: np.ndarray,
@@ -179,15 +170,6 @@ def symmetry_signal_orthogonal_2of4(
     return isotropic, sym
 
 
-def source_display_gain(images: list[np.ndarray]) -> float:
-    
-    medians = [float(np.median(image)) for image in images if image.size]
-    if not medians:
-        return 1.0
-    gain = float(np.median(medians))
-    return gain if gain > 0 else 1.0
-
-
 def scale_combi_uint8(values: np.ndarray, gain: float) -> np.ndarray:
     
     array = np.nan_to_num(np.asarray(values, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
@@ -208,7 +190,6 @@ def load_flattened_nsew(
     path2: str | Path,
     path3: str | Path,
     path4: str | Path,
-    flatten_sigma: float = 120,
     *,
     use_all_cores: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
@@ -222,10 +203,8 @@ def load_flattened_nsew(
             raise FileNotFoundError(f"Could not read image: {paths[i]}")
         if img.shape != imgs[0].shape:
             raise ValueError("All images must be the same size and pixel-aligned")
-    gain = source_display_gain(imgs)
-    f_imgs = [flatten_directional_illumination(img, flatten_sigma) for img in imgs]
-    stack = np.array(f_imgs)
-    return np.sort(stack, axis=0), np.sum(stack, axis=0), stack, gain
+    stack = np.array([img.astype(np.float32) for img in imgs])
+    return np.sort(stack, axis=0), np.sum(stack, axis=0), stack, 1.0
 
 
 def combine_nsew_folder(
@@ -314,14 +293,20 @@ def _combi_2of4_uint8(paths: list[Path], *, use_all_cores: bool = True) -> np.nd
     return scale_combi_uint8(isotropic, gain)
 
 
+def _combi_2of4_path(folder: Path, reference: Path) -> Path:
+    return folder / f"combi_2of4{output_suffix(reference)}"
+
+
+def _write_letter_combi(folder: Path, sources: list[Path]) -> Path:
+    out = _combi_2of4_path(folder, sources[0])
+    save_same_resolution(out, _combi_2of4_uint8(sources), sources[0])
+    return out
+
+
 def write_combi_2of4(folder: str | Path) -> Path:
-    
     folder = Path(folder)
     nsew = find_nsew_images(folder)
-    paths = [nsew[d] for d in DIRECTIONS]
-    out = folder / f"combi_2of4{output_suffix(paths[0])}"
-    save_same_resolution(out, _combi_2of4_uint8(paths), paths[0])
-    return out
+    return _write_letter_combi(folder, [nsew[d] for d in DIRECTIONS])
 
 
 def positional_direction(path: str | Path) -> tuple[int, int, str] | None:
@@ -411,14 +396,15 @@ def _combine_positional_cell(
     row: int,
     col: int,
     found: dict[str, Path],
+    *,
+    use_all_cores: bool = False,
 ) -> tuple[int, int, Path]:
-    
     sources = [found[direction] for direction in DIRECTIONS]
     out = positional_combi_path(folder, row, col, found)
     if combi_is_current(out, sources):
         return row, col, out
     return row, col, write_positional_combi(
-        folder, row, col, found, use_all_cores=False
+        folder, row, col, found, use_all_cores=use_all_cores
     )
 
 
@@ -462,12 +448,10 @@ def prepare_detection_paths(
         folder, row, col, found = pending[0]
         if progress_cb is not None:
             progress_cb(1, 1, f"Combining ({row},{col})")
-        sources = [found[direction] for direction in DIRECTIONS]
-        out = positional_combi_path(folder, row, col, found)
-        if combi_is_current(out, sources):
-            extras.append(out)
-        else:
-            extras.append(write_positional_combi(folder, row, col, found))
+        _row, _col, out = _combine_positional_cell(
+            folder, row, col, found, use_all_cores=True
+        )
+        extras.append(out)
     elif n_cells > 1:
         workers = combine_worker_count(n_cells)
         cv2.setNumThreads(0)
@@ -500,11 +484,11 @@ def prepare_detection_paths(
         for path in rest:
             if path.parent.resolve() == folder and is_uniform_image(path):
                 consumed.add(path.resolve())
-        out = folder / f"combi_2of4{output_suffix(sources[0])}"
+        out = _combi_2of4_path(folder, sources[0])
         if combi_is_current(out, sources):
             extras.append(out)
         else:
-            extras.append(write_combi_2of4(folder))
+            extras.append(_write_letter_combi(folder, sources))
         if progress_cb is not None:
             progress_cb(1, 1, f"Combining {folder.name}")
     kept: list[Path] = []

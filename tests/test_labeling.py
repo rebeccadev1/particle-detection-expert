@@ -30,9 +30,8 @@ from src.verification.queue import (
 from src.verification.store import (
     LabelStore,
     crop_source_folder,
-    label_database,
     newest_first,
-    rows_for_campaign,
+    resolve_crop_path,
 )
 from src.overall.io.placement import TilePlacement
 from tests.fixtures.synthetic import write_tile_tiff
@@ -563,6 +562,31 @@ def test_store_round_trip_and_undo(tmp_path: Path) -> None:
     assert key not in store.labeled_keys()
     assert not dest.is_file()
     assert store.by_label("particle").empty
+
+
+def test_resolve_crop_path_finds_a_moved_labels_folder(tmp_path: Path) -> None:
+    store = LabelStore(tmp_path / "labels")
+    rgb = np.zeros((8, 8, 3), dtype=np.uint8)
+    record = {
+        "id": 1,
+        "source_tile": "v7/wafer_shot_0_quad0_exp200000.png",
+        "x_global": 6_499_000.0,
+        "y_global": 318_250.0,
+        "size": 20_000.0,
+        "confidence": 0.5,
+        "source_csv": "particles.csv",
+    }
+    dest = store.apply_label(record, "not_particle", rgb)
+    stale = Path("/Users/old/particle_detection/labels/crops/not_particle") / dest.name
+    found = resolve_crop_path(store.root, stale, key=dest.stem, label="not_particle")
+    assert found == dest
+
+    saved = pd.read_csv(store.csv_path)
+    saved.loc[saved["key"].astype(str) == dest.stem, "crop_path"] = str(stale)
+    saved.to_csv(store.csv_path, index=False)
+    store.unlabel(dest.stem)
+    assert not dest.is_file()
+    assert resolve_crop_path(store.root, stale, key=dest.stem, label="not_particle") is None
 
 
 def test_store_apply_labels_writes_particle_and_not_particle(tmp_path: Path) -> None:
@@ -1112,64 +1136,10 @@ def test_shared_hit_keeps_the_label_from_either_picture() -> None:
         assert colors[labeled_key] == "particle"
 
 
-def test_label_database_splits_uniform_nsew_and_glovebox() -> None:
-    assert label_database("R3_1_23_5X.tif") == "glovebox"
-    assert label_database("n2_4_16.tif") == "glovebox"
-    assert label_database("n2_v2_6_18.tif") == "glovebox"
-    assert label_database("n3_1ms_1_1_bf.tif") == "glovebox"
-    assert label_database("bf_-1.2ms.tif") == "glovebox"
-    assert label_database("R0_1_1.tiff") == "nsew"
-    assert label_database("v7/wafer_shot_0_quad0_exp200000.png") == "nsew"
-    assert label_database("N.png") == "nsew"
-    assert label_database("combi_2of4.png") == "nsew"
-    assert label_database("v3_2of4.bmp") == "nsew"
-    assert label_database("(1,1).png") == "nsew"
-    assert label_database("5e4.png") == "nsew"
-    assert label_database("WhatsApp Image 2026-09-15 at 15.21.42.jpeg") == "nsew"
-    assert label_database("v5/wafer_shot_4_all_exp200000.png") == "uniform"
-    assert label_database("uniform.png") == "uniform"
-    assert label_database("angles_v1_exp200000_3of6.png") is None
-
-    frame = pd.DataFrame(
-        {
-            "source_tile": [
-                "R3_1_1_5X.tif",
-                "v5/wafer_shot_4_all_exp200000.png",
-                "N.png",
-                "angles_v1_exp200000_3of6.png",
-                "n2_1_8.tif",
-            ],
-            "label": ["particle", "not_particle", "particle", "particle", "particle"],
-        }
-    )
-    glovebox = rows_for_campaign(frame, "glovebox")
-    uniform = rows_for_campaign(frame, "uniform")
-    nsew = rows_for_campaign(frame, "nsew")
-    assert glovebox["source_tile"].tolist() == ["R3_1_1_5X.tif", "n2_1_8.tif"]
-    assert uniform["source_tile"].tolist() == ["v5/wafer_shot_4_all_exp200000.png"]
-    assert nsew["source_tile"].tolist() == ["N.png"]
-
-    shared = pd.DataFrame(
-        {
-            "key": ["v7_LIGHT_100_200", "v3_NSEW_100_200"],
-            "source_tile": [
-                "v7/wafer_shot_0_quad0_exp200000.png",
-                "v3/N.png",
-            ],
-            "label": ["particle", "particle"],
-        }
-    )
-    assert rows_for_campaign(shared, "uniform")["source_tile"].tolist() == [
-        "v7/wafer_shot_0_quad0_exp200000.png"
-    ]
-    assert rows_for_campaign(shared, "nsew")["source_tile"].tolist() == [
-        "v7/wafer_shot_0_quad0_exp200000.png",
-        "v3/N.png",
-    ]
-
-
-def test_label_store_writes_all_labels_and_the_mode_file(tmp_path: Path) -> None:
+def test_label_store_writes_one_table(tmp_path: Path) -> None:
     store = LabelStore(tmp_path / "labels")
+    leftover = store.root / "labels_uniform.csv"
+    leftover.write_text("key,label\nold,particle\n", encoding="utf-8")
     rgb = np.zeros((8, 8, 3), dtype=np.uint8)
     rows = [
         ("v5/wafer_shot_4_all_exp200000.png", 1.0, "particle"),
@@ -1194,13 +1164,10 @@ def test_label_store_writes_all_labels_and_the_mode_file(tmp_path: Path) -> None
     saved = pd.read_csv(store.csv_path)
     assert len(saved) == 4
     assert store.csv_path.name == "all_labels.csv"
-    uniform = pd.read_csv(store.root / "labels_uniform.csv")
-    nsew = pd.read_csv(store.root / "labels_nsew.csv")
-    glovebox = pd.read_csv(store.root / "labels_glovebox.csv")
-    assert uniform["source_tile"].tolist() == ["v5/wafer_shot_4_all_exp200000.png"]
-    assert nsew["source_tile"].tolist() == ["N.png"]
-    assert glovebox["source_tile"].tolist() == ["R3_1_1_5X.tif"]
-    assert not (store.root / "labels.csv").exists()
+    assert set(saved["source_tile"].astype(str)) == {tile for tile, _x, _label in rows}
+    assert not leftover.is_file()
+    assert not (store.root / "labels_nsew.csv").is_file()
+    assert not (store.root / "labels_glovebox.csv").is_file()
 
     store.apply_label(
         {
@@ -1219,8 +1186,4 @@ def test_label_store_writes_all_labels_and_the_mode_file(tmp_path: Path) -> None
     quad_key = "v7_LIGHT_50_60"
     assert quad_key in set(saved["key"].astype(str))
     assert int((saved["key"].astype(str) == quad_key).sum()) == 1
-    uniform = pd.read_csv(store.root / "labels_uniform.csv")
-    nsew = pd.read_csv(store.root / "labels_nsew.csv")
-    assert quad_key in set(uniform["key"].astype(str))
-    assert quad_key in set(nsew["key"].astype(str))
-    assert "NSEW_2_10" not in set(uniform["key"].astype(str))
+    assert not leftover.is_file()

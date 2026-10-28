@@ -198,7 +198,7 @@ def render_capture_tab() -> None:
     with st.container(border=True, key="block-capture"):
         st.header("Lighting")
         mode = st.radio(
-            "Select mode",
+            "Mode",
             ("Uniform", "NSEW"),
             horizontal=True,
             key="capture_mode",

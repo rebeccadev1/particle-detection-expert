@@ -11,7 +11,12 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from src.overall.config import cfg_get, resolve_output_dir
+from src.overall.config import (
+    apply_beta_ml,
+    cfg_get,
+    reserve_fresh_output_dir,
+    resolve_output_dir,
+)
 from src.analyse.detection.detector import (
     apply_structure_filters,
     build_fft_notch_mask,
@@ -113,6 +118,21 @@ def _tile_is_placeable(tile: Tile) -> bool:
     return tile.row is not None and tile.col is not None
 
 
+def _placements_for_paths(
+    paths: list[Path],
+    pattern: str,
+    overlap: float,
+    row_origin: int,
+    col_origin: int,
+) -> list[TilePlacement]:
+    return [
+        placement
+        for path in paths
+        if (placement := placement_from_path(path, pattern, overlap, row_origin, col_origin))
+        is not None
+    ]
+
+
 def load_report_mosaic(config: dict[str, Any]) -> LazyMosaic:
     
     folder = cfg_get(config, "input_dir", "")
@@ -127,13 +147,7 @@ def load_report_mosaic(config: dict[str, Any]) -> LazyMosaic:
     )
     paths = prepare_detection_paths(paths)
     row_origin, col_origin = grid_index_origin(paths, pattern)
-    placements = [
-        placement
-        for path in paths
-        if (placement := placement_from_path(path, pattern, overlap, row_origin, col_origin))
-        is not None
-    ]
-    return LazyMosaic(placements)
+    return LazyMosaic(_placements_for_paths(paths, pattern, overlap, row_origin, col_origin))
 
 
 def _prepare_fft_mask(paths: list[Path], config: dict[str, Any]) -> np.ndarray | None:
@@ -152,9 +166,6 @@ def _prepare_fft_mask(paths: list[Path], config: dict[str, Any]) -> np.ndarray |
 
 
 def _thumbnail_factor(placements: list[TilePlacement], config: dict[str, Any]) -> int:
-    configured = int(cfg_get(config, "report.downsample", 0) or 0)
-    if configured > 0:
-        return configured
     height, width = mosaic_shape(placements)
     return downsample_for_target(
         height,
@@ -210,9 +221,7 @@ def _process_tile(
         if is_combi_tile(tile.path.name)
         else lighting_source_name(tile.path)
     )
-    candidates = apply_ml_filter(
-        candidates, config, image=corrected, source_tile=source_name
-    )
+    candidates = apply_ml_filter(candidates, config)
     if score_before_structure:
         candidates = apply_structure_filters(candidates, config)
     particles = measure_candidates(
@@ -275,19 +284,13 @@ def _combine_particle_tables(
         else:
             frames.append(measure_and_dedupe(particles, config))
     fraction = float(cfg_get(config, "measurement.nsew_size_match_fraction", 0.4))
-    for particles in lighting.values():
+    groups = list(lighting.values())
+    if directional:
+        groups.append(directional)
+    for particles in groups:
         frames.append(
             measure_and_dedupe(
                 particles,
-                config,
-                size_match_fraction=fraction,
-                directional=True,
-            )
-        )
-    if directional:
-        frames.append(
-            measure_and_dedupe(
-                directional,
                 config,
                 size_match_fraction=fraction,
                 directional=True,
@@ -314,6 +317,7 @@ def run_pipeline(
     should_stop: StopCheck | None = None,
 ) -> tuple[pd.DataFrame, LazyMosaic]:
     
+    apply_beta_ml(config)
     folder = cfg_get(config, "input_dir", "")
     if not folder:
         raise ValueError("config.input_dir is required.")
@@ -353,12 +357,7 @@ def run_pipeline(
 
     workers = _worker_count(config, total)
     row_origin, col_origin = grid_index_origin(paths, pattern)
-    placements_plan = [
-        placement
-        for path in paths
-        if (placement := placement_from_path(path, pattern, overlap, row_origin, col_origin))
-        is not None
-    ]
+    placements_plan = _placements_for_paths(paths, pattern, overlap, row_origin, col_origin)
     thumb_factor = _thumbnail_factor(placements_plan, config) if placements_plan else 0
     fft_mask = _prepare_fft_mask(paths, config)
     _set_worker_state(fft_mask, thumb_factor)
@@ -453,8 +452,8 @@ def _write_run_outputs(
         write_last_run_pdf,
     )
 
-    out = resolve_output_dir(cfg_get(config, "output_dir"))
-    csv_path, _json_path, xlsx_path = default_output_paths(config)
+    out = reserve_fresh_output_dir(config)
+    csv_path, xlsx_path = default_output_paths(config)
     write_csv(table, csv_path)
     write_xlsx(table, xlsx_path, config)
     write_run_settings(config, out / "last_pipeline.json", csv_path=csv_path)
@@ -503,7 +502,6 @@ def _write_overlay_png(rgb: np.ndarray, path: Path) -> None:
         raise RuntimeError(f"Failed to write mosaic image to {path}")
 
 
-def default_output_paths(config: dict[str, Any]) -> tuple[Path, Path, Path]:
-    
+def default_output_paths(config: dict[str, Any]) -> tuple[Path, Path]:
     out = resolve_output_dir(cfg_get(config, "output_dir"))
-    return out / "particles.csv", out / "particles.json", out / "particles.xlsx"
+    return out / "particles.csv", out / "particles.xlsx"

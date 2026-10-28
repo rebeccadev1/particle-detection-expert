@@ -49,12 +49,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--pixel-size-nm", type=float, default=None)
     parser.add_argument(
-        "--light-from",
-        default=None,
-        help="N/S/E/W or degrees clockwise from image top. "
-        "Default: taken from an N/S/E/W tile name.",
-    )
-    parser.add_argument(
         "--light-height",
         type=float,
         default=LIGHT_HEIGHT_MM,
@@ -64,7 +58,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--ring-edge",
         type=float,
         default=RING_EDGE_MM,
-        help="Distance to the light (mm) at the image edge on the light side.",
+        help="Distance to the light (mm) at the image edge on that side of the ring.",
     )
     parser.add_argument(
         "--ring-centre",
@@ -78,12 +72,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=3.0,
         help="Search window: shadow up to this many diameters long.",
-    )
-    parser.add_argument(
-        "--preprocess",
-        choices=("light", "config"),
-        default="light",
-        help="light = float + 1 px blur; config = full config corrections.",
     )
     parser.add_argument("--out", default=DEFAULT_OUT, help="Folder under Outputs/.")
     return parser.parse_args(argv)
@@ -105,13 +93,11 @@ def main(argv: list[str] | None = None) -> int:
         run=args.run,
         input_dir=args.input_dir,
         tile=args.tile,
-        light_from=args.light_from,
         light_height_mm=args.light_height,
         ring_edge_mm=args.ring_edge,
         ring_centre_mm=args.ring_centre,
         k_mad=args.k,
         max_length_factor=args.max_length_factor,
-        preprocess=args.preprocess,
         out=args.out,
     )
     for message in result.messages:

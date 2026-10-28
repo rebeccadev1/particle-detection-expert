@@ -83,8 +83,12 @@ def test_nsew_config_file_has_sidebar_keys() -> None:
 
 def test_app_sidebar_has_nsew_toggle() -> None:
     text = (PACKAGE_ROOT / "app.py").read_text(encoding="utf-8")
-    assert "Settings profile" in text
+    assert "Mode" in text
     assert "Uniform" in text
+    assert "Wafer" in text
+    assert "Patterned" in text
+    assert "Empty" in text
+    assert "ui_wafer" in text
     assert "ui_settings_nsew" in text
     assert "apply_nsew_settings" in text
     assert '["Loading", "Preprocessing", "Detection", "Output"]' in text
@@ -92,9 +96,11 @@ def test_app_sidebar_has_nsew_toggle() -> None:
     assert '["Label", "Inspect", "Database"]' in text
     assert '["Shadow", "Redirector"]' in text
     assert "Training" not in text
+    assert "Blob min sigma" not in text
+    assert "Blob max sigma" not in text
+    assert "blob_sigmas_for_size" in text
     assert "Last run" in text
     assert "render_labeled_tiles_tab(" in text
-    assert "Summary of last run" not in text
     assert "_nsew_config(base)" in text
     assert "_apply_standard_settings" in text.split("def _on_reset_standard")[1].split("def ")[0]
     assert 'if st.session_state.get("ui_settings_nsew"):' in text

@@ -7,7 +7,6 @@ import pandas as pd
 
 from src.verification.audit_misses import (
     audit_marks,
-    format_trace_caption,
     promote_unmatched_to_inspect,
     trace_click,
     unmatched_particle_marks,
@@ -43,15 +42,6 @@ def _tile_setup(tmp_path: Path) -> tuple[Path, dict, pd.DataFrame]:
         }
     )
     return path, config, detections
-
-
-def test_format_trace_caption_includes_gate_and_residual() -> None:
-    text = format_trace_caption(
-        {"reason": "confidence", "residual": 0.44, "edge_distance_px": 12.5}
-    )
-    assert text.startswith("Gate: confidence")
-    assert "0.440" in text
-    assert "12.5" in text
 
 
 def test_unmatched_particle_marks_skips_nearby_detections(tmp_path: Path) -> None:
