@@ -56,6 +56,7 @@ from src.verification.inspect import (
     expand_submap_lighting_names,
     prefer_stored_grid_names,
     label_color_for_key,
+    inspect_misses_on_hits,
     label_on_run_tiles,
     with_grid_folder,
     crop_metric_cells,
@@ -114,6 +115,13 @@ except ImportError:
     streamlit_image_coordinates = None
 
 NM_PER_UM = 1000.0
+
+
+def _size_um_text(size_nm: float) -> str:
+    um = float(size_nm) / NM_PER_UM
+    if abs(um - round(um)) < 1e-6:
+        return f"{um:.0f}"
+    return f"{um:.1f}"
 GALLERY_PAGE_SIZE = 24
 LABEL_IMAGE_WIDTH = 420
 GALLERY_IMAGE_WIDTH = 180
@@ -328,7 +336,7 @@ def render_label_tab(
     source_label = _source_caption(last_csv)
     st.caption(
         f"{remaining} remaining · labeled {labeled_n} "
-        f"(particles {counts['particle']} · not sure {counts['not_sure']} · "
+        f"(particles {counts['particle']} · "
         f"not particles {counts['not_particle']}) · source {source_label}"
     )
     if st.session_state.pop("label_source_notice", False):
@@ -421,14 +429,11 @@ def render_label_tab(
     image_col.image(crop.rgb, caption=caption, width=LABEL_IMAGE_WIDTH)
     st.caption(f"This queue: 1 of {remaining} still unlabeled.")
 
-    cols = st.columns(3)
+    cols = st.columns(2)
     is_particle = cols[0].button(
         "Particle", shortcut="Right", type="primary", width="stretch", key="label_right"
     )
-    not_sure = cols[1].button(
-        "Not sure", shortcut="Down", width="stretch", key="label_down"
-    )
-    not_particle = cols[2].button(
+    not_particle = cols[1].button(
         "Not a particle", shortcut="Left", width="stretch", key="label_left"
     )
     undo = st.button(
@@ -442,10 +447,6 @@ def render_label_tab(
     marked = with_grid_folder(current, run_dir)
     if is_particle:
         store.apply_label(marked, "particle", crop.rgb)
-        st.session_state.pop("label_front_key", None)
-        st.rerun()
-    if not_sure:
-        store.apply_label(marked, "not_sure", crop.rgb)
         st.session_state.pop("label_front_key", None)
         st.rerun()
     if not_particle:
@@ -651,7 +652,6 @@ def _render_all_hits(
     rest_label = _all_hits_rest_label(str(mark_as))
     marked_phrase = "a particle" if mark_as == "particle" else "not a particle"
     rest_phrase = "not a particle" if mark_as == "particle" else "a particle"
-    button_label = "Particle" if mark_as == "particle" else "Not a particle"
     pressed = queue["key"].astype(str).isin(marked_keys)
     rest_queue = queue.loc[~pressed]
     marked_rows = queue.loc[pressed]
@@ -681,9 +681,7 @@ def _render_all_hits(
     st.caption(
         f"{len(queue)} hits · {int(pressed.sum())} marked {marked_phrase} · "
         f"page {page} of {n_pages}. "
-        "Each Groundup picture is the combi or the uniform image with the highest prominence. "
-        "An NSEW hit is shown on the combi. "
-        f"Press {button_label} on the ones you want. Click it again to clear that mark. "
+        "Click it again to clear that mark. "
         f"All done saves the marked ones as {marked_phrase} and every other hit "
         f"as {rest_phrase}, including hits on other pages."
     )
@@ -1106,6 +1104,13 @@ def render_tile_inspect_tab(
     pattern = str(cfg_get(run_config, "filename_pattern", DEFAULT_FILENAME_PATTERN))
     source = last_csv if last_csv is not None else "sidebar"
     st.caption(f"Map {folder} · detections {source}")
+    _show_marked_mosaic_note()
+    dropped = st.session_state.pop("inspect_dropped_misses", None)
+    if isinstance(dropped, int) and dropped > 0:
+        noun = "mark" if dropped == 1 else "marks"
+        st.success(
+            f"Removed {dropped} missed {noun} that already had a detector hit."
+        )
     inspect_mosaic = mosaic
     if str(cfg_get(config, "input_dir", "") or "") != folder:
         inspect_mosaic = None
@@ -1160,8 +1165,11 @@ def render_tile_inspect_tab(
     else:
         label_frame = labels_df if pointer is not None else scene_labels
         detections = _collapse_review_hits(detections, label_frame, config)
+    min_keep_nm = undetected_size_floor_nm(detections, run_config)
     if pointer is not None:
-        tile_hits = pointer_set_hits(detections, labels_df, pointer.set_id)
+        tile_hits = pointer_set_hits(
+            detections, labels_df, pointer.set_id, min_size_nm=min_keep_nm
+        )
         label_map = label_map_with_aliases(labels_df)
     else:
         tile_hits = detections_on_review_picture(detections, tile_name)
@@ -1176,6 +1184,7 @@ def render_tile_inspect_tab(
                 or names
             ),
             run_dir=str(cfg_get(run_config, "input_dir", "") or "") or None,
+            min_size_nm=min_keep_nm,
         )
         if not misses.empty:
             tile_hits = pd.concat([tile_hits, misses], ignore_index=True)
@@ -1187,13 +1196,21 @@ def render_tile_inspect_tab(
         key="inspect_all_done",
         help=(
             f"Write {MARKED_MOSAIC_NAME} in the output folder. "
-            "Green, red, and blue are Label marks. Orange is still unlabeled. "
+            "Drops a clicked miss when its center sits on a detector circle. "
+            "Green and red are Label marks. Orange is still unlabeled. "
             "Dark green is a particle clicked here."
         ),
     ):
-        _show_marked_mosaic_note(
-            _save_marked_mosaic(run_config, detections, labels_df)
-        )
+        pixel_size = float(cfg_get(run_config, "pixel_size_nm", 960.0))
+        covered = inspect_misses_on_hits(scene_labels, detections, pixel_size)
+        removed = store.drop_keys(covered) if covered else 0
+        if removed:
+            labels_df = store.load()
+            st.session_state["inspect_dropped_misses"] = removed
+        note = _save_marked_mosaic(run_config, detections, labels_df)
+        if note is not None:
+            st.session_state["marked_mosaic_note"] = note
+        st.rerun()
 
     cache = st.session_state.setdefault("label_tile_cache", TileImageCache())
     origin_cache = st.session_state.setdefault("label_origin_cache", {})
@@ -1271,15 +1288,15 @@ def render_tile_inspect_tab(
         INSPECT_DISPLAY_WIDTH,
         int(view.rgb.shape[1]) if view.rgb.size else INSPECT_DISPLAY_WIDTH,
     )
+    click = None
+    side_col = None
     if view.rgb.size == 0:
         st.error("No pixels to show for this view. Try Whole tile, then a cell again.")
-        click = None
     else:
         st.caption(caption + " · click an unmarked speck")
-        st.image(view.rgb, width=display_w)
-        click = None
-        if streamlit_image_coordinates is not None:
-            with st.expander("Click to mark a miss", expanded=False):
+        field_col, side_col = st.columns([3, 2], vertical_alignment="top")
+        with field_col:
+            if streamlit_image_coordinates is not None:
                 click = streamlit_image_coordinates(
                     view.rgb,
                     key="inspect_click_overlay",
@@ -1288,6 +1305,8 @@ def render_tile_inspect_tab(
                     jpeg_quality=85,
                     cursor="crosshair",
                 )
+            else:
+                st.image(view.rgb, width=display_w)
     seen = st.session_state.get("inspect_click_sig")
     if isinstance(seen, tuple) and isinstance(click, dict):
         same_press = False
@@ -1321,7 +1340,7 @@ def render_tile_inspect_tab(
         st.rerun()
 
     pending = st.session_state.get("inspect_pending")
-    if pending and pending.get("tile") == tile_name:
+    if pending and pending.get("tile") == tile_name and side_col is not None:
         measured_nm = float(pending_diameter_nm)
         preview = preview_click_crop(
             image,
@@ -1333,18 +1352,26 @@ def render_tile_inspect_tab(
         )
         if measured_nm <= 0:
             size_caption = "No footprint on the photo, so it is not kept."
-        elif measured_nm < 20_000.0:
-            size_caption = f"{measured_nm / NM_PER_UM:.1f} µm, under 20 µm."
+        elif min_keep_nm > 0 and measured_nm < min_keep_nm:
+            size_caption = (
+                f"{measured_nm / NM_PER_UM:.1f} µm, under {_size_um_text(min_keep_nm)} µm."
+            )
         else:
             size_caption = f"{measured_nm / NM_PER_UM:.1f} µm."
-        st.image(preview, caption=size_caption, width=520)
-        mark_cols = st.columns(2)
-        if mark_cols[0].button(
-            "Mark missed particle",
-            type="primary",
-            width="stretch",
-            key="inspect_mark",
-        ):
+        with side_col:
+            st.image(preview, caption=size_caption, width="stretch")
+            mark_clicked = st.button(
+                "Mark missed particle",
+                type="primary",
+                width="stretch",
+                key="inspect_mark",
+            )
+            cancel_clicked = st.button(
+                "Cancel click",
+                width="stretch",
+                key="inspect_cancel",
+            )
+        if mark_clicked:
             x_global, y_global = local_px_to_global_nm(
                 float(pending["x_local"]),
                 float(pending["y_local"]),
@@ -1353,8 +1380,10 @@ def render_tile_inspect_tab(
             )
             if measured_nm <= 0:
                 st.warning("No footprint on the photo, so it is not kept.")
-            elif measured_nm < 20_000.0:
-                st.warning("That size is under 20 µm, so it is not kept.")
+            elif min_keep_nm > 0 and measured_nm < min_keep_nm:
+                st.warning(
+                    f"That size is under {_size_um_text(min_keep_nm)} µm, so it is not kept."
+                )
             else:
                 record = with_grid_folder(
                     missed_particle_record(tile_name, x_global, y_global, measured_nm),
@@ -1371,7 +1400,7 @@ def render_tile_inspect_tab(
                 store.apply_label(record, "particle", saved)
                 _drop_inspect_mark()
                 st.rerun()
-        if mark_cols[1].button("Cancel click", width="stretch", key="inspect_cancel"):
+        if cancel_clicked:
             _drop_inspect_mark()
             st.rerun()
 
@@ -1471,7 +1500,6 @@ def _sum_tile_counts(table: pd.DataFrame | None) -> dict[str, float]:
         "n_inspect",
         "n_undetected",
         "n_undetected_below",
-        "n_not_sure",
     )
     totals = {key: 0.0 for key in keys}
     if table is not None and not table.empty:
@@ -1697,6 +1725,11 @@ def render_labeled_tiles_tab(
         value = pipeline_config.get(key)
         if value not in (None, ""):
             run_config[key] = value
+    saved_min = cfg_get(pipeline_config, "detection.min_size_nm", None)
+    if saved_min not in (None, ""):
+        detection = dict(run_config.get("detection") or {})
+        detection["min_size_nm"] = float(saved_min)
+        run_config["detection"] = detection
     detections: pd.DataFrame | None = None
     if last_csv is not None and last_csv.is_file():
         try:
@@ -1839,6 +1872,7 @@ def render_labeled_tiles_tab(
         tile_name,
         folder_tiles=label_tiles,
         run_dir=run_dir,
+        min_size_nm=size_floor_nm,
     )
     if misses.empty:
         tile_hits = detected_hits

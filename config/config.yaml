@@ -1,8 +1,6 @@
 input_dir: ""
 output_dir: ""
 filename_pattern: '\((?P<row>\d+),(?P<col>\d+)\)\.(?:tiff?|bmp|png|jpe?g)'
-run: ""
-magnification: ""
 overlap_fraction: 0.1
 pixel_size_nm: 3610.0
 

@@ -404,6 +404,14 @@ def load_last_pipeline(
                 value = payload.get(key)
                 if value not in (None, ""):
                     run_config[key] = value
+            saved_detection = payload.get("detection")
+            if isinstance(saved_detection, dict) and saved_detection.get("min_size_nm") not in (
+                None,
+                "",
+            ):
+                detection = dict(run_config.get("detection") or {})
+                detection["min_size_nm"] = float(saved_detection["min_size_nm"])
+                run_config["detection"] = detection
             if csv_path is not None and csv_path.is_file():
                 return csv_path, run_config
     csv_path = pipeline_particles_csv(run_config)

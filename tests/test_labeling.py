@@ -564,6 +564,36 @@ def test_store_round_trip_and_undo(tmp_path: Path) -> None:
     assert store.by_label("particle").empty
 
 
+def test_store_drop_keys_removes_only_the_named_marks(tmp_path: Path) -> None:
+    store = LabelStore(tmp_path / "labels")
+    rgb = np.zeros((8, 8, 3), dtype=np.uint8)
+    keep = {
+        "id": 1,
+        "source_tile": "R3_1_1_5X.tif",
+        "x_global": 10.0,
+        "y_global": 20.0,
+        "size": 20_000.0,
+        "confidence": 0.5,
+        "source_csv": "particles.csv",
+    }
+    drop = {
+        "id": 2,
+        "source_tile": "R3_1_1_5X.tif",
+        "x_global": 30.0,
+        "y_global": 40.0,
+        "size": 20_000.0,
+        "confidence": 0.0,
+        "source_csv": "tile_inspect",
+    }
+    kept = store.apply_label(keep, "particle", rgb)
+    dropped = store.apply_label(drop, "particle", rgb)
+    assert store.drop_keys([detection_key(drop)]) == 1
+    assert kept.is_file()
+    assert not dropped.is_file()
+    assert detection_key(keep) in store.labeled_keys()
+    assert detection_key(drop) not in store.labeled_keys()
+
+
 def test_resolve_crop_path_finds_a_moved_labels_folder(tmp_path: Path) -> None:
     store = LabelStore(tmp_path / "labels")
     rgb = np.zeros((8, 8, 3), dtype=np.uint8)
@@ -708,13 +738,22 @@ def test_load_last_pipeline_uses_pointer_not_recall_csv(tmp_path: Path) -> None:
         }
     ).to_csv(csv_path, index=False)
     write_last_pipeline(
-        {"input_dir": "My tiles", "output_dir": str(tmp_path / "out"), "pixel_size_nm": 960.0},
+        {
+            "input_dir": "My tiles",
+            "output_dir": str(tmp_path / "out"),
+            "pixel_size_nm": 960.0,
+            "detection": {"min_size_nm": 10_000.0, "max_size_nm": 100_000.0},
+        },
         csv_path,
         pointer_dir=tmp_path,
     )
-    found, run_config = load_last_pipeline({"input_dir": "other"}, pointer_dir=tmp_path)
+    caller = {"input_dir": "other", "detection": {"min_size_nm": 20_000.0, "method": "fft"}}
+    found, run_config = load_last_pipeline(caller, pointer_dir=tmp_path)
     assert found == csv_path.resolve()
     assert run_config["input_dir"] == "My tiles"
+    assert run_config["detection"]["min_size_nm"] == 10_000.0
+    assert run_config["detection"]["method"] == "fft"
+    assert caller["detection"]["min_size_nm"] == 20_000.0
     saved = json.loads((tmp_path / "out" / "last_pipeline.json").read_text(encoding="utf-8"))
     assert saved["input_dir"] == "My tiles"
     assert saved["pixel_size_nm"] == 960.0

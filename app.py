@@ -1192,7 +1192,7 @@ def _mosaic_labels_on() -> bool:
         value=True,
         key="mosaic_show_labels",
         help="Circles on detected particles. Green is a particle you marked, "
-        "red is not a particle, blue is not sure, and orange is not marked yet.",
+        "red is not a particle, and orange is not marked yet.",
     )
 
 

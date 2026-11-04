@@ -145,7 +145,6 @@ Hits smaller than **10 µm** are left out of the queue. Two modes:
 |--------|-----|----------|
 | Particle | Right | particle |
 | Not a particle | Left | not a particle |
-| Not sure | Down | not sure |
 
 Undo steps back.
 
@@ -162,7 +161,6 @@ Walks the tiles of the loaded run. Zoom and pan the full image. Circles already 
 | Orange | Detected, not labeled yet |
 | Green | Labeled particle |
 | Red | Labeled not a particle |
-| Blue | Labeled not sure |
 | Dark green | A particle you click here because detection missed it |
 
 **All done** writes `mosaic_marked.png` into the output folder.

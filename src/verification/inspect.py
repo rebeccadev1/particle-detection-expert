@@ -60,7 +60,6 @@ from src.analyse.stitching.stitcher import LazyMosaic
 LABEL_CIRCLE_COLORS: dict[str, tuple[int, int, int]] = {
     "particle": (40, 180, 70),
     "not_particle": (255, 40, 40),
-    "not_sure": (60, 140, 220),
 }
 MISSED_PARTICLE_COLOR = (12, 78, 18)
 UNLABELED_CIRCLE_COLOR = CIRCLE_COLOR
@@ -224,6 +223,7 @@ def pointer_miss_rows(
     tile_name: str,
     folder_tiles: Sequence[str] | None = None,
     run_dir: str | None = None,
+    min_size_nm: float = 0.0,
 ) -> pd.DataFrame:
     
     if labels is None or labels.empty or "source_tile" not in labels.columns:
@@ -288,9 +288,92 @@ def pointer_miss_rows(
         marks = marks.loc[~marks["key"].astype(str).isin(found)]
     if marks.empty:
         return pd.DataFrame()
+    marks = _rows_at_min_size(marks, min_size_nm)
+    if marks.empty:
+        return pd.DataFrame()
     marks = marks.copy()
     marks["missed"] = True
     return marks.reset_index(drop=True)
+
+
+def inspect_misses_on_hits(
+    labels: pd.DataFrame | None,
+    detections: pd.DataFrame | None,
+    pixel_size_nm: float,
+) -> list[str]:
+    """Inspect marks whose center sits inside a detector circle."""
+    if (
+        labels is None
+        or labels.empty
+        or detections is None
+        or detections.empty
+        or "label" not in labels.columns
+        or "source_csv" not in labels.columns
+        or "key" not in labels.columns
+        or "x_global" not in labels.columns
+        or "y_global" not in labels.columns
+        or "x_global" not in detections.columns
+        or "y_global" not in detections.columns
+    ):
+        return []
+    misses = labels.loc[
+        (labels["label"].astype(str) == "particle")
+        & (labels["source_csv"].astype(str) == MISS_SOURCE)
+    ]
+    if misses.empty:
+        return []
+    hits = tagged_if_needed(detections)
+    if hits is None or hits.empty or "key" not in hits.columns:
+        return []
+    found = expand_labeled_keys(hits["key"].astype(str))
+    pixel = float(pixel_size_nm) if float(pixel_size_nm) > 0 else 1.0
+    circles: list[tuple[float, float, float, str]] = []
+    for record in hits.to_dict(orient="records"):
+        try:
+            x_hit = float(record["x_global"])
+            y_hit = float(record["y_global"])
+            size = float(record.get("size") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(x_hit) or not np.isfinite(y_hit):
+            continue
+        if not np.isfinite(size) or size < 0:
+            size = 0.0
+        radius_nm = float(marker_radius(size, pixel)) * pixel
+        circles.append((x_hit, y_hit, radius_nm, str(record.get("source_tile", ""))))
+    if not circles:
+        return []
+    covered: list[str] = []
+    seen: set[str] = set()
+    for record in misses.to_dict(orient="records"):
+        key = str(record.get("key") or "")
+        if not key or key in seen or key in found:
+            continue
+        try:
+            x_miss = float(record["x_global"])
+            y_miss = float(record["y_global"])
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(x_miss) or not np.isfinite(y_miss):
+            continue
+        miss_set = submap_id(str(record.get("source_tile", "")))
+        for x_hit, y_hit, radius_nm, hit_tile in circles:
+            hit_set = submap_id(hit_tile)
+            if miss_set and hit_set and miss_set != hit_set:
+                continue
+            if (x_miss - x_hit) ** 2 + (y_miss - y_hit) ** 2 <= radius_nm ** 2:
+                covered.append(key)
+                seen.add(key)
+                break
+    return covered
+
+
+def _rows_at_min_size(frame: pd.DataFrame, min_size_nm: float) -> pd.DataFrame:
+    floor = float(min_size_nm or 0.0)
+    if floor <= 0 or frame.empty or "size" not in frame.columns:
+        return frame
+    sizes = pd.to_numeric(frame["size"], errors="coerce")
+    return frame.loc[sizes >= floor].reset_index(drop=True)
 
 
 _STAGED_2OF4 = re.compile(r"^(v\d+)_2of4$", re.IGNORECASE)
@@ -353,6 +436,7 @@ def pointer_set_hits(
     detections: pd.DataFrame | None,
     labels: pd.DataFrame | None,
     set_id: str,
+    min_size_nm: float = 0.0,
 ) -> pd.DataFrame:
     
     hits = pd.DataFrame()
@@ -380,7 +464,9 @@ def pointer_set_hits(
             known.update(aliases)
     if not keep:
         return hits.reset_index(drop=True)
-    added = pd.DataFrame(keep)
+    added = _rows_at_min_size(pd.DataFrame(keep), min_size_nm)
+    if added.empty:
+        return hits.reset_index(drop=True)
     added["missed"] = True
     if hits.empty:
         return added.reset_index(drop=True)
@@ -705,7 +791,7 @@ def last_run_class_counts(
     label_map = label_map_with_aliases(scoped)
     particles = _particle_label_rows(scoped)
 
-    n_true = n_false = n_not_sure = n_unlabeled = n_inspect = 0
+    n_true = n_false = n_unlabeled = n_inspect = 0
     det_keys: set[str] = set()
     if n_detected and "key" in tagged.columns:
         for key in tagged["key"].astype(str):
@@ -715,9 +801,7 @@ def last_run_class_counts(
                 n_true += 1
             else:
                 n_false += 1
-                if name == "not_sure":
-                    n_not_sure += 1
-                elif name != "not_particle":
+                if name != "not_particle":
                     n_unlabeled += 1
     n_undetected = 0
     n_undetected_below = 0
@@ -744,7 +828,6 @@ def last_run_class_counts(
         "n_inspect": n_inspect,
         "n_undetected": n_undetected,
         "n_undetected_below": n_undetected_below,
-        "n_not_sure": n_not_sure,
         "n_true_total": n_true_total,
         "precision": precision,
         "recall": recall,
@@ -870,7 +953,6 @@ def subfolder_score_rows(
         "n_inspect",
         "n_undetected",
         "n_undetected_below",
-        "n_not_sure",
     )
     for key in order:
         records = grouped[key]
@@ -1011,15 +1093,15 @@ def undetected_size_floor_nm(
     config: Mapping[str, Any] | None = None,
 ) -> float:
     
-    floor = 0.0
     if config is not None:
         floor = float(cfg_get(dict(config), "detection.min_size_nm", 0.0) or 0.0)
+        if floor > 0:
+            return floor
     if detections is not None and not detections.empty and "size" in detections.columns:
         run_min = float(pd.to_numeric(detections["size"], errors="coerce").min())
         if np.isfinite(run_min) and run_min > 0:
-            run_floor = float(np.floor(run_min / 1000.0) * 1000.0)
-            floor = max(floor, run_floor)
-    return floor
+            return float(np.floor(run_min / 1000.0) * 1000.0)
+    return 0.0
 
 
 def tile_names_for_hits(hits: pd.DataFrame | None) -> list[str]:

@@ -12,6 +12,7 @@ from src.verification.inspect import (
     cell_bounds,
     MISSED_PARTICLE_COLOR,
     MISS_SOURCE,
+    inspect_misses_on_hits,
     pointer_miss_rows,
     circles_from_rows,
     detections_on_this_file,
@@ -827,10 +828,83 @@ def test_related_scene_tile_names_keeps_groundup_v3_suffix(tmp_path: Path) -> No
     assert "N.bmp" not in relative
 
 
-def test_undetected_size_floor_uses_this_run_minimum() -> None:
+def test_undetected_size_floor_uses_detection_min_size() -> None:
     detections = pd.DataFrame({"size": [20000.0, 31000.0]})
     floor = undetected_size_floor_nm(detections, {"detection": {"min_size_nm": 10000.0}})
-    assert floor == 20000.0
+    assert floor == 10000.0
+
+
+def test_inspect_misses_on_hits_drops_a_click_inside_a_detector_circle() -> None:
+    tile = "v1/combi_2of4.png"
+    detections = pd.DataFrame(
+        [
+            {
+                "source_tile": tile,
+                "x_global": 100_000.0,
+                "y_global": 100_000.0,
+                "size": 20_000.0,
+                "key": "v1_NSEW_100000_100000",
+            }
+        ]
+    )
+    labels = pd.DataFrame(
+        [
+            {
+                "source_tile": tile,
+                "x_global": 115_000.0,
+                "y_global": 100_000.0,
+                "size": 20_000.0,
+                "key": "v1_NSEW_115000_100000",
+                "label": "particle",
+                "source_csv": MISS_SOURCE,
+            },
+            {
+                "source_tile": tile,
+                "x_global": 140_000.0,
+                "y_global": 100_000.0,
+                "size": 20_000.0,
+                "key": "v1_NSEW_140000_100000",
+                "label": "particle",
+                "source_csv": MISS_SOURCE,
+            },
+            {
+                "source_tile": tile,
+                "x_global": 100_000.0,
+                "y_global": 100_000.0,
+                "size": 20_000.0,
+                "key": "v1_NSEW_100000_100000",
+                "label": "particle",
+                "source_csv": MISS_SOURCE,
+            },
+            {
+                "source_tile": "v2/combi_2of4.png",
+                "x_global": 100_000.0,
+                "y_global": 100_000.0,
+                "size": 20_000.0,
+                "key": "v2_NSEW_100000_100000",
+                "label": "particle",
+                "source_csv": MISS_SOURCE,
+            },
+        ]
+    )
+    covered = inspect_misses_on_hits(labels, detections, 1000.0)
+    assert covered == ["v1_NSEW_115000_100000"]
+
+
+def test_pointer_miss_rows_keeps_labels_at_or_above_min_size() -> None:
+    labels = pd.DataFrame(
+        {
+            "key": ["small", "edge", "big"],
+            "label": ["particle", "particle", "particle"],
+            "source_csv": ["tile_inspect", "tile_inspect", "tile_inspect"],
+            "source_tile": ["a.tif", "a.tif", "a.tif"],
+            "size": [9999.0, 10000.0, 15000.0],
+            "x_global": [1.0, 2.0, 3.0],
+            "y_global": [1.0, 2.0, 3.0],
+        }
+    )
+    kept = pointer_miss_rows(labels, None, "a.tif", min_size_nm=10000.0)
+    assert list(kept["key"].astype(str)) == ["edge", "big"]
 
 
 def test_circles_from_rows_uses_label_color() -> None:

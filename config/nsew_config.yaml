@@ -52,8 +52,8 @@ report:
       model_path: src/analyse/models/particle_clf_v4_residual.joblib
       threshold: 0.51
     - beta: 1.0
-      model_path: src/analyse/models/particle_clf_v4_residual.joblib
-      threshold: 0.34
+      model_path: src/analyse/models/particle_clf_v8.joblib
+      threshold: 0.31
     - beta: 1.5
       model_path: src/analyse/models/particle_clf_v4_residual.joblib
       threshold: 0.34

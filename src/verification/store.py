@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -14,7 +14,7 @@ from src.overall.io.naming import (
 )
 from src.analyse.report.report_generator import encode_overlay_jpeg
 
-LABEL_VALUES = ("particle", "not_sure", "not_particle")
+LABEL_VALUES = ("particle", "not_particle")
 ALL_LABELS_NAME = "all_labels.csv"
 _SPLIT_LABEL_FILES = (
     "labels_uniform.csv",
@@ -147,6 +147,23 @@ class LabelStore:
         df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
         self._write(df)
         return dests
+
+    def drop_keys(self, keys: Iterable[str]) -> int:
+        wanted = {str(key) for key in keys if str(key)}
+        if not wanted:
+            return 0
+        df = self.load()
+        if df.empty or "key" not in df.columns:
+            return 0
+        mask = df["key"].astype(str).isin(wanted)
+        if not mask.any():
+            return 0
+        for crop_path in df.loc[mask, "crop_path"].tolist():
+            path = resolve_crop_path(self.root, crop_path)
+            if path is not None and path.is_file():
+                path.unlink()
+        self._write(df.loc[~mask].reset_index(drop=True))
+        return int(mask.sum())
 
     def unlabel(self, key: str) -> dict[str, Any] | None:
         
